@@ -292,10 +292,51 @@ pub fn format_panic_report_for_audit_test(
     write_panic_report(buf, component, thread_name, location, payload_str)
 }
 
+/// Resolves the production crash directory from explicit environment values.
+///
+/// On Windows, prefers `%LOCALAPPDATA%\neural-amp-modeler-rs\crashes`, then
+/// `%USERPROFILE%\.cache\neural-amp-modeler-rs`, then `HOME`. On POSIX, uses
+/// `$HOME/.cache/neural-amp-modeler-rs`.
+#[cfg(any(test, not(feature = "testing")))]
+fn production_crash_directory_for(
+    is_windows: bool,
+    local_app_data: Option<&std::ffi::OsStr>,
+    user_profile: Option<&std::ffi::OsStr>,
+    home: Option<&std::ffi::OsStr>,
+) -> Option<PathBuf> {
+    fn non_empty(opt: Option<&std::ffi::OsStr>) -> Option<&std::ffi::OsStr> {
+        opt.filter(|v| !v.is_empty())
+    }
+    if is_windows {
+        if let Some(dir) = non_empty(local_app_data) {
+            return Some(
+                PathBuf::from(dir)
+                    .join("neural-amp-modeler-rs")
+                    .join("crashes"),
+            );
+        }
+        if let Some(dir) = non_empty(user_profile) {
+            return Some(
+                PathBuf::from(dir)
+                    .join(".cache")
+                    .join("neural-amp-modeler-rs"),
+            );
+        }
+    }
+    non_empty(home).map(|h| {
+        PathBuf::from(h)
+            .join(".cache")
+            .join("neural-amp-modeler-rs")
+    })
+}
+
 /// Returns the path to the directory used for crash reports:
 /// 1. `NAM_CRASH_DIR` environment variable, if set and non-empty.
 /// 2. Under `cfg(test)` or feature `testing`: `CARGO_TARGET_TMPDIR` or `target/test_crashes`.
-/// 3. In production: `$HOME/.cache/neural-amp-modeler-rs`, if `HOME` environment variable is set.
+/// 3. In production:
+///    - On Windows: `%LOCALAPPDATA%\neural-amp-modeler-rs\crashes`, then
+///      `%USERPROFILE%\.cache\neural-amp-modeler-rs`, then `$HOME/.cache/neural-amp-modeler-rs`.
+///    - On POSIX: `$HOME/.cache/neural-amp-modeler-rs`.
 /// 4. `None` if neither is set.
 pub fn crash_directory() -> Option<PathBuf> {
     if let Some(dir) = std::env::var_os("NAM_CRASH_DIR").filter(|d| !d.is_empty()) {
@@ -311,7 +352,12 @@ pub fn crash_directory() -> Option<PathBuf> {
         Some(PathBuf::from("target/test_crashes"))
     }
     #[cfg(not(any(test, feature = "testing")))]
-    std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache/neural-amp-modeler-rs"))
+    production_crash_directory_for(
+        cfg!(windows),
+        std::env::var_os("LOCALAPPDATA").as_deref(),
+        std::env::var_os("USERPROFILE").as_deref(),
+        std::env::var_os("HOME").as_deref(),
+    )
 }
 
 /// Installs a panic hook that writes a zero-alloc crash report to

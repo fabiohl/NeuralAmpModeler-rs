@@ -56,6 +56,15 @@ else
   PHASE_NAME=clippy-aarch64
   run_step clippy-aarch64 cargo clippy --locked --lib --target aarch64-unknown-linux-gnu -- -D warnings
 fi
+installed_targets="$(rustup target list --installed)"
+for spec in clippy-win-x64:x86_64-pc-windows-msvc clippy-win-arm64:aarch64-pc-windows-msvc; do
+  p="${spec%%:*}"; t="${spec#*:}"; PHASE_NAME="$p"
+  if printf '%s\n' "$installed_targets" | grep -qx "$t"; then
+    run_step "$p" cargo clippy --locked --lib --target "$t" -- -D warnings
+  else
+    gap "$p:target-not-installed"
+  fi
+done
 
 phase_doc() { RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps --all-features; }
 run_step doc phase_doc

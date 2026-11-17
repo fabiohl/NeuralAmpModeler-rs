@@ -1216,4 +1216,19 @@ mod huge_alloc_tests {
         assert_eq!(v_a64.len(), 2);
         assert_eq!(v_a64.as_ptr() as usize % 64, 0);
     }
+
+    #[test]
+    fn test_huge_page_vec_status_matches_constructor_and_alloc_info_signature() {
+        use crate::math::common::huge_alloc::AllocInfo;
+
+        let info = AllocInfo::MmapAnon { size_bytes: 4096 };
+        match info {
+            AllocInfo::MmapAnon { size_bytes } => assert_eq!(size_bytes, 4096),
+            _ => unreachable!(),
+        }
+
+        let large_cap = 2 * 1024 * 1024 / std::mem::size_of::<f32>();
+        let (vec, status) = HugePageVec::<f32>::with_capacity(large_cap).unwrap();
+        assert_eq!(vec.huge_page_status(), status);
+    }
 }

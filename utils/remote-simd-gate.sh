@@ -50,7 +50,7 @@ if [ "$CHECK_ONLY" -eq 1 ]; then finish; exit 0; fi
 
 PHASE_NAME=parity; phase parity
 log_parity="$LOG_DIR/remote-simd-parity.log"; rc_parity=0
-cargo test --release --features avx512 --test parity -- isa_parity --include-ignored --test-threads=1 > "$log_parity" 2>&1 || rc_parity=$?
+cargo test --release --features avx512 --test parity -- isa_parity --include-ignored --test-threads=1 --nocapture > "$log_parity" 2>&1 || rc_parity=$?
 n_exercised=$(grep -c -E "^AVX512_MATRIX: EXERCISED" "$log_parity" || true)
 if [ "$rc_parity" -eq 0 ] && ran_tests "$log_parity" && [ "$n_exercised" -gt 0 ]; then
   emit "PHASE: parity PASS log=$log_parity"

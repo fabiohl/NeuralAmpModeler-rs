@@ -85,3 +85,31 @@ fn test_hardware_class_roundtrip_names() {
         assert_eq!(HardwareClass::from_str_name(name), c);
     }
 }
+
+#[test]
+fn test_hardware_class_classification_windows_is_unknown() {
+    assert_eq!(
+        classify_hardware_class(
+            "AMD Ryzen 7 5700U with Radeon Graphics",
+            ISA_X86_64_V3,
+            "x86_64-pc-windows-msvc",
+        ),
+        HardwareClass::Unknown
+    );
+    assert_eq!(
+        classify_hardware_class(
+            "12th Gen Intel(R) Core(TM) i7-12700H",
+            ISA_AVX512,
+            "x86_64-pc-windows-msvc",
+        ),
+        HardwareClass::Unknown
+    );
+    assert_eq!(
+        classify_hardware_class(
+            "Snapdragon(R) X Elite",
+            ISA_AARCH64_NEON,
+            "aarch64-pc-windows-msvc",
+        ),
+        HardwareClass::Unknown
+    );
+}

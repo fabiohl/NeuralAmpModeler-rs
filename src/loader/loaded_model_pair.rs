@@ -238,7 +238,9 @@ impl LoadedModelPair {
                 .unwrap_or(0),
             model_sample_rate: self.sample_rate,
             weights_layout: self.weights_layout.clone(),
-            path_basename: path.to_string_lossy().into_owned(),
+            path_basename: crate::common::diagnostics::format::sanitize_model_basename(
+                &path.to_string_lossy(),
+            ),
         }
     }
 
@@ -261,5 +263,41 @@ impl std::fmt::Debug for LoadedModelPair {
             .field("metadata", &self.metadata)
             .field("weights_layout", &self.weights_layout)
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn model_info_retains_only_sanitized_basename() {
+        let pair = LoadedModelPair {
+            model_l: None,
+            model_r: None,
+            input_mult_adj: 1.0,
+            output_mult_adj: 1.0,
+            sample_rate: 48000,
+            architecture: "WaveNet".to_string(),
+            topology: "Standard".to_string(),
+            metadata: None,
+            weights_layout: "Interleaved4WaveNet".to_string(),
+        };
+
+        assert_eq!(
+            pair.model_info(Path::new("/home/alice/secret/amps/lead.nam"))
+                .path_basename,
+            "lead.nam"
+        );
+        assert_eq!(
+            pair.model_info(Path::new(r"C:\Users\Alice\Documents\Amps\crunch.nam"))
+                .path_basename,
+            "crunch.nam"
+        );
+        assert_eq!(
+            pair.model_info(Path::new(r"\\fileserver\profiles\Alice\clean.namb"))
+                .path_basename,
+            "clean.namb"
+        );
     }
 }

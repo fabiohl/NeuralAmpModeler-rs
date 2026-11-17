@@ -156,11 +156,22 @@ fn test_accept_zero_layers() {
 
 // ── IR Loader Negative Tests ──
 
+fn malformed_temp_wav_path(name: &str) -> std::path::PathBuf {
+    static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    std::env::temp_dir().join(format!(
+        "nam_rs_malformed_{}_{}_{}",
+        std::process::id(),
+        seq,
+        name
+    ))
+}
+
 /// WAV file with sample count exceeding MAX_IR_LENGTH (192000).
 /// Generates a PCM16 mono WAV with 200000 samples programmatically.
 #[test]
 fn test_reject_ir_too_many_samples() {
-    let path = std::path::Path::new("/tmp/nam_rs_test_oversized_ir.wav");
+    let path = malformed_temp_wav_path("oversized_ir.wav");
 
     let num_samples: u32 = 200_000;
     let data_size = num_samples * 2;
@@ -187,12 +198,12 @@ fn test_reject_ir_too_many_samples() {
     let silence = vec![0u8; (num_samples * 2) as usize];
     buf.extend_from_slice(&silence);
 
-    std::fs::write(path, &buf).ok();
+    std::fs::write(&path, &buf).expect("write oversized IR test WAV");
 
     let t0 = Instant::now();
-    let result = crate::dsp::cabsim::loader::CabSimIr::load(path, 0, false);
+    let result = crate::dsp::cabsim::loader::CabSimIr::load(&path, 0, false);
     let elapsed = t0.elapsed();
-    std::fs::remove_file(path).ok();
+    std::fs::remove_file(&path).ok();
 
     assert!(result.is_err(), "200k-sample IR must be rejected");
     assert!(
@@ -205,7 +216,7 @@ fn test_reject_ir_too_many_samples() {
 /// WAV with exactly MAX_IR_LENGTH samples — must succeed.
 #[test]
 fn test_accept_ir_at_limit() {
-    let path = std::path::Path::new("/tmp/nam_rs_test_ir_at_limit.wav");
+    let path = malformed_temp_wav_path("ir_at_limit.wav");
 
     let num_samples: u32 = 192_000;
     let data_size = num_samples * 2;
@@ -232,10 +243,10 @@ fn test_accept_ir_at_limit() {
     let silence = vec![0u8; (num_samples * 2) as usize];
     buf.extend_from_slice(&silence);
 
-    std::fs::write(path, &buf).ok();
+    std::fs::write(&path, &buf).expect("write limit IR test WAV");
 
-    let result = crate::dsp::cabsim::loader::CabSimIr::load(path, 0, false);
-    std::fs::remove_file(path).ok();
+    let result = crate::dsp::cabsim::loader::CabSimIr::load(&path, 0, false);
+    std::fs::remove_file(&path).ok();
 
     assert!(
         result.is_ok(),

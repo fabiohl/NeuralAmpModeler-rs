@@ -16,7 +16,7 @@
 //! Callers must use the returned `AllocInfo` to choose the correct deallocation path.
 
 use std::alloc::{Layout, alloc, dealloc};
-use std::ptr::{self, NonNull};
+use std::ptr::NonNull;
 
 use crate::common::diagnostics::NamErrorCode;
 
@@ -55,6 +55,7 @@ pub const HUGE_PAGE_THRESHOLD: usize = 1 << 20; // 1 MiB
 
 /// Base page size of the running kernel: 4 KiB on x86_64, 16 KiB on Apple
 /// Silicon, 4/16/64 KiB on aarch64 Linux depending on the kernel build.
+#[cfg(unix)]
 fn system_page_size() -> usize {
     // SAFETY: `sysconf` is a side-effect-free POSIX configuration query.
     let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
@@ -69,6 +70,7 @@ pub const HUGE_PAGE_2M: usize = 2 * 1024 * 1024;
 /// Rounds `size` up to the next multiple of `alignment`.
 ///
 /// Returns `None` if `alignment` is zero or if rounding up causes arithmetic overflow.
+#[cfg(any(unix, test))]
 pub(crate) const fn align_up(size: usize, alignment: usize) -> Option<usize> {
     let mask = match alignment.checked_sub(1) {
         Some(m) => m,
@@ -115,55 +117,59 @@ pub(crate) fn allocate_huge_pages(
         return Ok((ptr, AllocInfo::Heap, HugePageStatus::Heap));
     }
 
-    let huge_2m_size = align_up(size_bytes, HUGE_PAGE_2M).ok_or(NamErrorCode::OutOfMemory)?;
+    #[cfg(unix)]
+    {
+        let huge_2m_size = align_up(size_bytes, HUGE_PAGE_2M).ok_or(NamErrorCode::OutOfMemory)?;
 
-    // Strategy 1: explicit 2 MB huge pages via MAP_HUGETLB.
-    // SAFETY: try_mmap_huge with validated size, no aliasing violations.
-    let ptr = unsafe { try_mmap_huge(ptr::null_mut(), huge_2m_size, -1, 0, true) };
+        // Strategy 1: explicit 2 MB huge pages via MAP_HUGETLB.
+        // SAFETY: try_mmap_huge with validated size, no aliasing violations.
+        let ptr = unsafe { try_mmap_huge(std::ptr::null_mut(), huge_2m_size, -1, 0, true) };
 
-    if ptr != libc::MAP_FAILED {
-        return Ok((
-            ptr as *mut u8,
-            AllocInfo::HugeTlb2M {
-                size_bytes: huge_2m_size,
-            },
-            HugePageStatus::Explicit2MB,
-        ));
+        if ptr != libc::MAP_FAILED {
+            return Ok((
+                ptr as *mut u8,
+                AllocInfo::HugeTlb2M {
+                    size_bytes: huge_2m_size,
+                },
+                HugePageStatus::Explicit2MB,
+            ));
+        }
+
+        // Strategy 2: anonymous mmap + madvise(MADV_HUGEPAGE) + MADV_COLLAPSE for synchronous THP.
+        let thp_size = align_up(size_bytes, system_page_size()).ok_or(NamErrorCode::OutOfMemory)?;
+        // SAFETY: try_mmap_huge with validated size.
+        let ptr = unsafe { try_mmap_huge(std::ptr::null_mut(), thp_size, -1, 0, false) };
+
+        if ptr != libc::MAP_FAILED {
+            // Hint the kernel to promote these pages to huge pages.
+            // SAFETY: ptr and thp_size are valid from the successful mmap above.
+            #[cfg(target_os = "linux")]
+            let _madvise_rc = unsafe { libc::madvise(ptr, thp_size, libc::MADV_HUGEPAGE) };
+            // Synchronous collapse (Linux 6.1+). Mandatory: no kernel-version fallback checks.
+            // SAFETY: ptr and thp_size are valid from the successful mmap above.
+            #[cfg(target_os = "linux")]
+            let collapse_rc = unsafe { libc::madvise(ptr, thp_size, libc::MADV_COLLAPSE) };
+            // No transparent huge pages outside Linux.
+            #[cfg(not(target_os = "linux"))]
+            let collapse_rc = -1;
+            let status = if collapse_rc == 0 {
+                HugePageStatus::Transparent
+            } else {
+                HugePageStatus::Heap
+            };
+
+            return Ok((
+                ptr as *mut u8,
+                AllocInfo::MmapAnon {
+                    size_bytes: thp_size,
+                },
+                status,
+            ));
+        }
     }
 
-    // Strategy 2: anonymous mmap + madvise(MADV_HUGEPAGE) + MADV_COLLAPSE for synchronous THP.
-    let thp_size = align_up(size_bytes, system_page_size()).ok_or(NamErrorCode::OutOfMemory)?;
-    // SAFETY: try_mmap_huge with validated size.
-    let ptr = unsafe { try_mmap_huge(ptr::null_mut(), thp_size, -1, 0, false) };
-
-    if ptr != libc::MAP_FAILED {
-        // Hint the kernel to promote these pages to huge pages.
-        // SAFETY: ptr and thp_size are valid from the successful mmap above.
-        #[cfg(target_os = "linux")]
-        let _madvise_rc = unsafe { libc::madvise(ptr, thp_size, libc::MADV_HUGEPAGE) };
-        // Synchronous collapse (Linux 6.1+). Mandatory: no kernel-version fallback checks.
-        // SAFETY: ptr and thp_size are valid from the successful mmap above.
-        #[cfg(target_os = "linux")]
-        let collapse_rc = unsafe { libc::madvise(ptr, thp_size, libc::MADV_COLLAPSE) };
-        // No transparent huge pages outside Linux.
-        #[cfg(not(target_os = "linux"))]
-        let collapse_rc = -1;
-        let status = if collapse_rc == 0 {
-            HugePageStatus::Transparent
-        } else {
-            HugePageStatus::Heap
-        };
-
-        return Ok((
-            ptr as *mut u8,
-            AllocInfo::MmapAnon {
-                size_bytes: thp_size,
-            },
-            status,
-        ));
-    }
-
-    // Strategy 3: fallback to standard allocator.
+    // Strategy 3: fallback to standard allocator (and direct path on non-Unix, e.g. Windows,
+    // avoiding SeLockMemoryPrivilege requirements for MEM_LARGE_PAGES).
     let layout = Layout::from_size_align(size_bytes, 64).map_err(|_| NamErrorCode::OutOfMemory)?;
     // SAFETY: standard alloc with valid layout.
     let ptr = unsafe { alloc(layout) };
@@ -199,8 +205,13 @@ pub unsafe fn deallocate_huge(ptr: *mut u8, info: AllocInfo, size_bytes: usize) 
         | AllocInfo::HugeTlb2M {
             size_bytes: mmap_size,
         } => {
+            #[cfg(unix)]
             // SAFETY: ptr and mmap_size match the original mmap.
-            unsafe { libc::munmap(ptr as *mut libc::c_void, mmap_size) };
+            unsafe {
+                libc::munmap(ptr as *mut libc::c_void, mmap_size)
+            };
+            #[cfg(not(unix))]
+            let _ = (ptr, mmap_size);
         }
     }
 }
@@ -210,6 +221,7 @@ pub unsafe fn deallocate_huge(ptr: *mut u8, info: AllocInfo, size_bytes: usize) 
 ///
 /// # Safety
 /// Writes through the libc thread-local errno pointer, which is always valid.
+#[cfg(unix)]
 pub(crate) unsafe fn set_errno(code: libc::c_int) {
     // SAFETY: the libc errno accessor returns a valid pointer to this thread's errno.
     unsafe {
@@ -220,6 +232,10 @@ pub(crate) unsafe fn set_errno(code: libc::c_int) {
         #[cfg(target_vendor = "apple")]
         {
             *libc::__error() = code;
+        }
+        #[cfg(not(any(target_os = "linux", target_vendor = "apple")))]
+        {
+            let _ = code;
         }
     }
 }
@@ -377,7 +393,7 @@ unsafe fn create_backing_fd_with_seq(
     Ok(fd)
 }
 
-#[cfg(not(any(target_os = "linux", target_vendor = "apple")))]
+#[cfg(all(unix, not(any(target_os = "linux", target_vendor = "apple"))))]
 pub(crate) unsafe fn create_backing_fd(
     _size: usize,
     _use_huge: bool,
@@ -397,6 +413,7 @@ pub(crate) unsafe fn create_backing_fd(
 /// Uses `PROT_READ | PROT_WRITE` protection.
 ///
 /// Returns `MAP_FAILED` on failure (caller checks against `libc::MAP_FAILED`).
+#[cfg(unix)]
 pub(crate) unsafe fn try_mmap_huge(
     addr: *mut libc::c_void,
     len: usize,
@@ -462,6 +479,7 @@ pub struct HugePageVec<T: Copy> {
     len: usize,
     cap: usize,
     alloc_info: AllocInfo,
+    huge_page_status: HugePageStatus,
 }
 
 impl<T: Copy> HugePageVec<T> {
@@ -523,6 +541,7 @@ impl<T: Copy> HugePageVec<T> {
                     len: 0,
                     cap: 0,
                     alloc_info: AllocInfo::Heap,
+                    huge_page_status: HugePageStatus::Heap,
                 },
                 HugePageStatus::Heap,
             ));
@@ -570,6 +589,7 @@ impl<T: Copy> HugePageVec<T> {
                 len: 0,
                 cap: capacity,
                 alloc_info,
+                huge_page_status: status,
             },
             status,
         ))
@@ -593,11 +613,7 @@ impl<T: Copy> HugePageVec<T> {
 
     /// Returns the huge-page allocation status.
     pub fn huge_page_status(&self) -> HugePageStatus {
-        match self.alloc_info {
-            AllocInfo::Heap => HugePageStatus::Heap,
-            AllocInfo::MmapAnon { .. } => HugePageStatus::Transparent,
-            AllocInfo::HugeTlb2M { .. } => HugePageStatus::Explicit2MB,
-        }
+        self.huge_page_status
     }
 }
 

@@ -322,14 +322,36 @@ impl HasRuntimeSnapshot for crate::common::spsc::RtStatusFlags {
         let scheduler_val = self.rt_policy.load(Ordering::Relaxed);
         let scheduler = if scheduler_val == -1 {
             "UNKNOWN".to_string()
-        } else if scheduler_val == libc::SCHED_FIFO {
-            "FIFO".to_string()
-        } else if scheduler_val == libc::SCHED_RR {
-            "RR".to_string()
-        } else if scheduler_val == 6 {
-            "DEADLINE".to_string()
         } else {
-            "OTHER".to_string()
+            #[cfg(target_os = "linux")]
+            {
+                if scheduler_val == libc::SCHED_FIFO {
+                    "FIFO".to_string()
+                } else if scheduler_val == libc::SCHED_RR {
+                    "RR".to_string()
+                } else if scheduler_val == 6 {
+                    "DEADLINE".to_string()
+                } else {
+                    "OTHER".to_string()
+                }
+            }
+            #[cfg(target_os = "macos")]
+            {
+                if scheduler_val == libc::THREAD_TIME_CONSTRAINT_POLICY {
+                    "TIME_CONSTRAINT".to_string()
+                } else if scheduler_val == libc::SCHED_FIFO {
+                    "FIFO".to_string()
+                } else if scheduler_val == libc::SCHED_RR {
+                    "RR".to_string()
+                } else {
+                    "OTHER".to_string()
+                }
+            }
+            #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+            {
+                let _ = scheduler_val;
+                "UNSUPPORTED".to_string()
+            }
         };
 
         let cpu = self.rt_cpu.load(Ordering::Relaxed);

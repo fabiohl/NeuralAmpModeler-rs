@@ -83,3 +83,49 @@ fn test_diagnostic_bundle_renders_model_memory_bytes() {
         "Rendered output must contain friendly memory footprint: {rendered}"
     );
 }
+
+#[test]
+fn test_diagnostic_bundle_honest_scheduler_and_windows_pii_redaction() {
+    use crate::common::diagnostics::{AudioMetadata, ModelInfo, RuntimeSnapshot};
+    use crate::common::spsc::RtStatusFlags;
+
+    let rt_flags = RtStatusFlags::new();
+    // Simulate a non-default policy value so non-Linux/macOS reports UNSUPPORTED
+    // while default (-1) reports UNKNOWN; neither fabricates FIFO/TIME_CONSTRAINT.
+    rt_flags
+        .rt_policy
+        .store(1, std::sync::atomic::Ordering::Relaxed);
+    let mut snapshot = RuntimeSnapshot::capture(&rt_flags, &AudioMetadata::default());
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    assert_eq!(snapshot.rt.scheduler, "UNSUPPORTED");
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    assert_ne!(snapshot.rt.scheduler, "UNSUPPORTED");
+
+    snapshot.model = Some(ModelInfo {
+        arch_label: "WaveNet".to_string(),
+        path_basename: r"\\?\C:\Users\Alice\Models\Amp.nam".to_string(),
+        ..Default::default()
+    });
+    let mut bundle = DiagnosticBundle::capture();
+    bundle.runtime = snapshot;
+    let bundle = bundle.with_model_memory_bytes(512 * 1024);
+    let rendered = bundle.render();
+
+    assert!(
+        rendered.contains("model=Amp.nam"),
+        "Basename must be preserved without directory PII: {rendered}"
+    );
+    assert!(
+        !rendered.contains("Users\\Alice"),
+        "Windows user directory must not leak in redacted bundle: {rendered}"
+    );
+    assert!(
+        rendered.contains("model.memory_bytes=524288"),
+        "Memory footprint must be present: {rendered}"
+    );
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    assert!(
+        rendered.contains("rt.scheduler=UNSUPPORTED"),
+        "Non-Linux/macOS must honestly report UNSUPPORTED scheduler: {rendered}"
+    );
+}

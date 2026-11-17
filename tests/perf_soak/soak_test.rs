@@ -15,7 +15,6 @@ use neural_amp_modeler_rs::common::spsc::{
 };
 use neural_amp_modeler_rs::dsp::adaptive::{AdaptiveCompute, AdaptiveState};
 use neural_amp_modeler_rs::dsp::gate::*;
-use neural_amp_modeler_rs::dsp::mirror_buf::*;
 use neural_amp_modeler_rs::dsp::resampler::*;
 use neural_amp_modeler_rs::loader::dispatcher::build_model;
 use neural_amp_modeler_rs::loader::nam_json::parse_nam_json;
@@ -589,6 +588,8 @@ fn test_resampler_drift_soak_scenario(in_sr: u32, out_sr: u32, label: &str) {
 #[ignore = "long: teste de soak"]
 #[cfg(any(target_os = "linux", target_vendor = "apple"))]
 fn test_mirror_buf_long_run() {
+    use neural_amp_modeler_rs::dsp::mirror_buf::MirroredBuffer;
+
     let mut buf = MirroredBuffer::<f32>::new(1024 * 1024).expect("Failed to create MirroredBuffer"); // 1M elements
     let size = buf.size();
     let num_cycles = 100_000_000;

@@ -40,8 +40,10 @@ include = [
 ]
 
 [workspace]
-# QA binaries live in tools/qa (publish = false) so the published manifest carries only product bins.
-members = ["tools/qa"]
+# QA binaries live in tools/qa (publish = false) and the safe-baseline ISA/OS
+# preflight lives in tools/preflight (publish = false) so the published manifest
+# carries only product bins and preflight can compile without AVX2/x86-64-v3.
+members = ["tools/qa", "tools/preflight"]
 resolver = "3"
 
 [lib]
@@ -51,10 +53,6 @@ crate-type = ["rlib"]
 [dependencies]
 # Typed errors for the NAMB/loader surface.
 thiserror = "2.0"
-# POSIX/Mach calls: mirror/huge-page allocation, TSC clock, scheduler
-# introspection, and the opt-in `rt-hardening` module (Linux affinity/scheduler
-# and macOS QoS/time-constraint/memory-locking primitives).
-libc = "0.2.191"
 # Lock-free SPSC ring buffer (params, models, resamplers RT↔Main).
 rtrb = "0.4.1"
 # .nam (JSON) model deserialization.
@@ -79,6 +77,12 @@ proptest = "1.12.0"
 # Serialize test execution for global-state side effects.
 serial_test = { version = "4", features = ["async"] }
 
+# POSIX/Mach calls: mirror/huge-page allocation, TSC clock, scheduler
+# introspection, and the opt-in `rt-hardening` module (Linux affinity/scheduler
+# and macOS QoS/time-constraint/memory-locking primitives).
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.191"
+
 # Loom model-checking for concurrency protocols.
 #
 # Declared as a target-gated *normal* dependency (not a dev-dependency) so the
@@ -88,6 +92,20 @@ serial_test = { version = "4", features = ["async"] }
 # entry is inert and `loom` is not even pulled into the dependency graph.
 [target.'cfg(loom)'.dependencies]
 loom = "0.7"
+
+# Windows Win32 virtual memory and system info bindings for MirroredBuffer.
+# Uses `raw-dylib` via `windows-link` for placeholder APIs (`VirtualAlloc2`,
+# `MapViewOfFile3`); inert on Linux and macOS builds.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_Kernel",
+    "Win32_System_Memory",
+    "Win32_System_Performance",
+    "Win32_System_SystemInformation",
+] }
 
 [[bench]]
 name = "inference_bench"
@@ -286,7 +304,9 @@ split-debuginfo = "unpacked"
 all-features = true
 targets = [
     "x86_64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
     "aarch64-apple-darwin",
     "aarch64-unknown-linux-gnu",
+    "aarch64-pc-windows-msvc",
 ]
 rustdoc-args = ["--cfg", "docsrs"]

@@ -1194,27 +1194,7 @@ fn format_duration_ms(ms: u64) -> String {
 }
 
 fn current_utc_iso() -> String {
-    let mut now: libc::time_t = 0;
-    // SAFETY: now is a valid stack-allocated time_t pointer.
-    unsafe { libc::time(&mut now) };
-    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-    // SAFETY: now and tm are valid pointers; gmtime_r writes the UTC breakdown.
-    unsafe { libc::gmtime_r(&now, &mut tm) };
-    let mut buf = [0u8; 64];
-    // SAFETY: buf is a 64-byte stack buffer and the format string is a valid C-string literal.
-    let len = unsafe {
-        libc::strftime(
-            buf.as_mut_ptr() as *mut libc::c_char,
-            buf.len(),
-            c"%Y-%m-%dT%H:%M:%SZ".as_ptr(),
-            &tm,
-        )
-    };
-    if len > 0 {
-        String::from_utf8_lossy(&buf[..len]).to_string()
-    } else {
-        "1970-01-01T00:00:00Z".to_string()
-    }
+    neural_amp_modeler_rs::common::diagnostics::format::timestamp()
 }
 
 fn prebuild_benchmark(suite_name: &str) -> io::Result<Option<PathBuf>> {
@@ -1272,7 +1252,17 @@ fn prebuild_benchmark(suite_name: &str) -> io::Result<Option<PathBuf>> {
                     let path = entry.path();
                     let file_name = path.file_name().and_then(|s| s.to_str());
                     let is_match = file_name
-                        .map(|name| name.starts_with(&prefix) && !name.contains('.'))
+                        .map(|name| {
+                            let stem = if cfg!(windows) {
+                                match name.strip_suffix(".exe") {
+                                    Some(s) => s,
+                                    None => return false,
+                                }
+                            } else {
+                                name
+                            };
+                            stem.starts_with(&prefix) && !stem.contains('.')
+                        })
                         .unwrap_or(false);
 
                     if is_match && let Ok(meta) = entry.metadata() {

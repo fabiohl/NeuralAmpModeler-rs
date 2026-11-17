@@ -5,7 +5,9 @@
 //! with optional error context for support triage.
 
 use super::error_codes::NamErrorCode;
-use super::format::{format_model_path, redact_path, redact_text, timestamp};
+use super::format::{
+    format_model_path, is_portable_absolute_path, redact_path, redact_text, timestamp,
+};
 use super::logger::NamLogger;
 use super::snapshot::{
     ACTIVE_MODEL_MEMORY_BYTES, ACTIVE_MODEL_NAME, ACTIVE_SAMPLE_RATE, RuntimeSnapshot,
@@ -180,13 +182,10 @@ impl DiagnosticBundle {
                 .params
                 .iter()
                 .map(|(k, v)| {
-                    let v_redacted = {
-                        let path = std::path::Path::new(v);
-                        if path.is_absolute() {
-                            redact_path(path, self.full)
-                        } else {
-                            v.clone()
-                        }
+                    let v_redacted = if is_portable_absolute_path(v) {
+                        redact_path(std::path::Path::new(v), self.full)
+                    } else {
+                        v.clone()
                     };
                     format!("{k}={v_redacted}")
                 })
@@ -236,16 +235,7 @@ impl DiagnosticBundle {
         }
 
         if let Some(ref model) = self.runtime.model {
-            let path_val = if self.full {
-                model.path_basename.clone()
-            } else {
-                let path = std::path::Path::new(&model.path_basename);
-                if let Some(file_name) = path.file_name() {
-                    file_name.to_string_lossy().into_owned()
-                } else {
-                    model.path_basename.clone()
-                }
-            };
+            let path_val = format_model_path(&model.path_basename, self.full);
             block.push_str(&format!(
                 "model.arch={}\n\
                  model.topology={}\n\

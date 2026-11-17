@@ -14,7 +14,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added [Unreleased]
+
+- **Experimental Verifiable Windows 11 support (`x86_64-pc-windows-msvc` and `aarch64-pc-windows-msvc`):**
+  - Win32 `MirroredBuffer<T>` backend (`src/dsp/mirror_buf/windows.rs`) using `VirtualAlloc2` + `MapViewOfFile3` placeholders, 6-stage `S0`–`S5` transactional rollback, immediate `CloseHandle`, and dual `UnmapViewOfFile` on `Drop`, preserving `size_of::<MirroredBuffer<T>>() == 16`.
+  - ARM64 timer probe (`src/common/tsc.rs`) protected by a Vectored Exception Handler (`AddVectoredExceptionHandler`) with automatic fallback to `QueryPerformanceCounter`.
+  - Portable PII/Windows/UNC path redaction and crash directory resolution (`src/common/diagnostics/format.rs`, `src/common/panic_hook.rs`, `src/loader/loaded_model_pair.rs`).
+  - Internal `nam-preflight` diagnostic crate (`tools/preflight`), `.gitattributes` (`eol=lf`), and native CI jobs (`windows-2025`, `windows-11-arm`) integrated into `cross-platform-parity` (`0 ULP` bitwise parity across all 7 canonical models).
+
 ### Fixed [Unreleased]
+
+- **AVX-512 `CH=8` `film.active_mask() == 0` fast-path (`src/models/a2/conv1d_ch8/simd.rs`):** Removed the early return in `layer_forward_ch8_block_simdmath` that skipped the dilated convolution loop, restoring `x86_64-linux` vs. `x86_64-avx512` parity on `wavenet_a2_full` (`SNR = 129.14 dB`, `ESR = 1.22e-13`).
+
+- **Portable temporary paths in loader/CabSim tests (`src/dsp/cabsim/loader_test.rs`, `src/loader/loader_malformed_test.rs`):** Replaced hardcoded POSIX `/tmp/*.wav` paths with `std::env::temp_dir()` and RAII cleanup guards.
 
 - **`--all-targets --all-features` on aarch64:** AVX-512 tests and benchmarks now gate on the `nam_avx512` cfg emitted by `build.rs` instead of the raw `avx512` feature, so `cargo check --all-targets --all-features` succeeds on non-`x86_64` targets. The obsolete `compile_error!` that rejected `avx512` on non-`x86_64` was removed; the `build.rs` gate still keeps the AVX-512 modules out of those builds.
 

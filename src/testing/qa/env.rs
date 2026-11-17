@@ -101,6 +101,12 @@ pub fn classify_hardware_class(
     let model_lower = cpu_model.to_lowercase();
     let triple_lower = host_triple.to_lowercase();
 
+    // Latency contracts in docs/quality-contract.json are calibrated for Linux bare-metal;
+    // keep Windows hosts fail-closed as Unknown until calibrated native baselines exist.
+    if triple_lower.contains("windows") {
+        return HardwareClass::Unknown;
+    }
+
     if triple_lower.contains("apple") || triple_lower.contains("darwin") {
         return HardwareClass::AArch64AppleSilicon;
     }

@@ -765,3 +765,174 @@ fn test_ch8_film_active_mask_matches_options() {
     }
     assert!(head.iter().any(|v| v.is_finite()));
 }
+
+/// Regression test for `layer_forward_ch8_block_simdmath` (`mask == 0` and
+/// `mask != 0`) verifying that the dilated conv runs before the no-FiLM
+/// post-conv tail and matches `layer_forward_ch8_block` numerically.
+#[test]
+fn test_ch8_simdmath_matches_block_no_film_and_with_film() {
+    for (is_first, is_last) in [(true, false), (false, false), (false, true)] {
+        let kernel = 6;
+        let dilation = 101;
+        let (w, b) = make_random_weights(kernel, 7);
+        let conv = A2Conv1dCh8::new(&w, 8, 8, kernel, dilation, &b)
+            .expect("construction should succeed for test-sized buffers");
+        let mixin_w_vec = AlignedVec::from_vec(vec![0.13f32; 8])
+            .expect("allocation should succeed for test-sized buffers");
+        let l1x1_w_vec = AlignedVec::from_vec(vec![0.31f32; 64])
+            .expect("allocation should succeed for test-sized buffers");
+        let l1x1_b_vec = AlignedVec::from_vec(vec![0.02f32; 8])
+            .expect("allocation should succeed for test-sized buffers");
+        let num_frames = 16;
+        let max_lookback = (kernel - 1) * dilation;
+        let history = make_history(max_lookback + num_frames + 8, 21);
+        let frame_start = max_lookback + 4;
+        let cond = make_cond(num_frames);
+
+        let mut head_simdmath = vec![0.5f32; (num_frames + 1) * 8];
+        let mut head_ref = head_simdmath.clone();
+        let mut lin_simdmath = vec![0.25f32; num_frames * 8];
+        let mut lin_ref = lin_simdmath.clone();
+        let mut fb_simdmath = FilmBlock::empty();
+        let mut fb_ref = FilmBlock::empty();
+
+        // SAFETY: buffers match the documented contract for both CH=8 block kernels;
+        // `Avx2Math` matches the baseline ISA on x86-64-v3 and aarch64.
+        unsafe {
+            layer_forward_ch8_block_simdmath::<crate::math::common::Avx2Math>(
+                &conv,
+                &mixin_w_vec,
+                &l1x1_w_vec,
+                &l1x1_b_vec,
+                &mut fb_simdmath,
+                false,
+                &history,
+                frame_start,
+                num_frames,
+                &cond,
+                &mut head_simdmath,
+                0,
+                &mut lin_simdmath,
+                is_first,
+                is_last,
+            );
+            layer_forward_ch8_block(
+                &conv,
+                &mixin_w_vec,
+                &l1x1_w_vec,
+                &l1x1_b_vec,
+                &mut fb_ref,
+                false,
+                &history,
+                frame_start,
+                num_frames,
+                &cond,
+                &mut head_ref,
+                0,
+                &mut lin_ref,
+                is_first,
+                is_last,
+            );
+        }
+
+        for i in 0..num_frames * 8 {
+            let h_diff = (head_simdmath[i] - head_ref[i]).abs();
+            assert!(
+                h_diff < 1e-5,
+                "no-film head[{i}] simdmath={} ref={} diff={h_diff} (first={is_first} last={is_last})",
+                head_simdmath[i],
+                head_ref[i],
+            );
+            let l_diff = (lin_simdmath[i] - lin_ref[i]).abs();
+            assert!(
+                l_diff < 1e-5,
+                "no-film layer_in[{i}] simdmath={} ref={} diff={l_diff} (first={is_first} last={is_last})",
+                lin_simdmath[i],
+                lin_ref[i],
+            );
+        }
+
+        // Also cover active FiLM (`mask != 0`) through `layer_forward_ch8_block_simdmath`.
+        let mut film_a = make_film_identity_8(1);
+        let mut film_b = make_film_identity_8(1);
+        let mut head_film_simdmath = vec![0.5f32; (num_frames + 1) * 8];
+        let mut head_film_ref = head_film_simdmath.clone();
+        let mut lin_film_simdmath = vec![0.25f32; num_frames * 8];
+        let mut lin_film_ref = lin_film_simdmath.clone();
+        let mut fb_film_simdmath = FilmBlock {
+            conv_pre_film: None,
+            conv_post_film: None,
+            input_mixin_pre_film: None,
+            input_mixin_post_film: None,
+            activation_pre_film: None,
+            activation_post_film: Some(&mut film_a),
+            layer1x1_post_film: None,
+            head1x1_post_film: None,
+        };
+        let mut fb_film_ref = FilmBlock {
+            conv_pre_film: None,
+            conv_post_film: None,
+            input_mixin_pre_film: None,
+            input_mixin_post_film: None,
+            activation_pre_film: None,
+            activation_post_film: Some(&mut film_b),
+            layer1x1_post_film: None,
+            head1x1_post_film: None,
+        };
+
+        // SAFETY: same validated buffer contract as above with active FiLM state.
+        unsafe {
+            layer_forward_ch8_block_simdmath::<crate::math::common::Avx2Math>(
+                &conv,
+                &mixin_w_vec,
+                &l1x1_w_vec,
+                &l1x1_b_vec,
+                &mut fb_film_simdmath,
+                false,
+                &history,
+                frame_start,
+                num_frames,
+                &cond,
+                &mut head_film_simdmath,
+                0,
+                &mut lin_film_simdmath,
+                is_first,
+                is_last,
+            );
+            layer_forward_ch8_block(
+                &conv,
+                &mixin_w_vec,
+                &l1x1_w_vec,
+                &l1x1_b_vec,
+                &mut fb_film_ref,
+                false,
+                &history,
+                frame_start,
+                num_frames,
+                &cond,
+                &mut head_film_ref,
+                0,
+                &mut lin_film_ref,
+                is_first,
+                is_last,
+            );
+        }
+
+        for i in 0..num_frames * 8 {
+            let h_diff = (head_film_simdmath[i] - head_film_ref[i]).abs();
+            assert!(
+                h_diff < 1e-5,
+                "with-film head[{i}] simdmath={} ref={} diff={h_diff} (first={is_first} last={is_last})",
+                head_film_simdmath[i],
+                head_film_ref[i],
+            );
+            let l_diff = (lin_film_simdmath[i] - lin_film_ref[i]).abs();
+            assert!(
+                l_diff < 1e-5,
+                "with-film layer_in[{i}] simdmath={} ref={} diff={l_diff} (first={is_first} last={is_last})",
+                lin_film_simdmath[i],
+                lin_film_ref[i],
+            );
+        }
+    }
+}

@@ -137,9 +137,16 @@ fn test_rt_status_flags_provider_populated() {
     rt_status.active_rate.store(44100, Ordering::Relaxed);
     rt_status.last_n_samples.store(512, Ordering::Relaxed);
     rt_status.confirmed_priority.store(85, Ordering::Relaxed);
+    #[cfg(target_os = "linux")]
     rt_status
         .rt_policy
         .store(libc::SCHED_FIFO, Ordering::Relaxed);
+    #[cfg(target_os = "macos")]
+    rt_status
+        .rt_policy
+        .store(libc::THREAD_TIME_CONSTRAINT_POLICY, Ordering::Relaxed);
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    rt_status.rt_policy.store(1, Ordering::Relaxed);
     rt_status.rt_cpu.store(2, Ordering::Relaxed);
     rt_status.xruns.store(3, Ordering::Relaxed);
     rt_status.drains.store(7, Ordering::Relaxed);
@@ -151,7 +158,12 @@ fn test_rt_status_flags_provider_populated() {
     assert_eq!(snapshot.audio.sample_rate, 44100);
     assert_eq!(snapshot.audio.buffer_size, 512);
     assert_eq!(snapshot.rt.thread_priority, 85);
+    #[cfg(target_os = "linux")]
     assert_eq!(snapshot.rt.scheduler, "FIFO");
+    #[cfg(target_os = "macos")]
+    assert_eq!(snapshot.rt.scheduler, "TIME_CONSTRAINT");
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    assert_eq!(snapshot.rt.scheduler, "UNSUPPORTED");
     assert_eq!(snapshot.rt.cpu_pinned, Some(2));
     assert_eq!(snapshot.telemetry.xruns, 3);
     assert_eq!(snapshot.telemetry.drains, 7);

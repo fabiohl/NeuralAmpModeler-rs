@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+# Enforce LF line endings for text files (including .nam, .json, .sha256, .sh)
+# so SHA-256 fixture manifests and Git Bash scripts remain identical on Windows.
+* text=auto eol=lf
+*.bin binary
+*.wav binary
+*.f32 binary
+*.namb binary

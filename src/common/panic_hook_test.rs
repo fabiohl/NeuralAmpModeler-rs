@@ -175,3 +175,74 @@ fn test_crash_directory_contract_avoids_user_cache() {
         "crash directory in test harness must resolve to CARGO_TARGET_TMPDIR or target/test_crashes, got: {dir_str}"
     );
 }
+
+#[test]
+fn test_production_crash_directory_windows_and_posix_fallbacks() {
+    use std::ffi::OsStr;
+
+    // Windows prefers LOCALAPPDATA over USERPROFILE and HOME.
+    let win_local = production_crash_directory_for(
+        true,
+        Some(OsStr::new(r"C:\Users\Alice\AppData\Local")),
+        Some(OsStr::new(r"C:\Users\Alice")),
+        Some(OsStr::new("/home/alice")),
+    );
+    assert_eq!(
+        win_local,
+        Some(
+            PathBuf::from(r"C:\Users\Alice\AppData\Local")
+                .join("neural-amp-modeler-rs")
+                .join("crashes")
+        )
+    );
+
+    // Windows falls back to USERPROFILE when LOCALAPPDATA is unset or empty.
+    let win_profile = production_crash_directory_for(
+        true,
+        Some(OsStr::new("")),
+        Some(OsStr::new(r"C:\Users\Alice")),
+        None,
+    );
+    assert_eq!(
+        win_profile,
+        Some(
+            PathBuf::from(r"C:\Users\Alice")
+                .join(".cache")
+                .join("neural-amp-modeler-rs")
+        )
+    );
+
+    // Windows falls back to HOME if neither LOCALAPPDATA nor USERPROFILE is set.
+    let win_home =
+        production_crash_directory_for(true, None, None, Some(OsStr::new("/c/Users/Alice")));
+    assert_eq!(
+        win_home,
+        Some(
+            PathBuf::from("/c/Users/Alice")
+                .join(".cache")
+                .join("neural-amp-modeler-rs")
+        )
+    );
+
+    // POSIX ignores Windows-only variables and resolves HOME.
+    let posix = production_crash_directory_for(
+        false,
+        Some(OsStr::new(r"C:\Ignored")),
+        Some(OsStr::new(r"C:\Ignored")),
+        Some(OsStr::new("/home/alice")),
+    );
+    assert_eq!(
+        posix,
+        Some(
+            PathBuf::from("/home/alice")
+                .join(".cache")
+                .join("neural-amp-modeler-rs")
+        )
+    );
+
+    assert_eq!(production_crash_directory_for(true, None, None, None), None);
+    assert_eq!(
+        production_crash_directory_for(false, None, None, None),
+        None
+    );
+}

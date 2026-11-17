@@ -113,7 +113,6 @@ fn rdtsc_nanos_advances_after_test_calibration() {
 
 /// aarch64: a plausible CNTFRQ_EL0 is used as-is without measuring; a zero
 /// or implausible value falls back to the measurement.
-#[cfg(target_arch = "aarch64")]
 #[test]
 fn generic_timer_uses_register_unless_implausible() {
     let not_called = || -> Option<(u64, u64)> { panic!("must not measure") };
@@ -137,6 +136,34 @@ fn generic_timer_uses_register_unless_implausible() {
     // Implausible register and no usable measurement.
     assert_eq!(choose_generic_timer_mult(0, || None), None);
     assert_eq!(choose_generic_timer_mult(0, || Some((0, 0))), None);
+}
+
+/// Windows ARM64: when the EL0 counter probe reports inaccessible, neither the
+/// register nor the measurement closure is invoked and calibration falls back
+/// cleanly (`None`, keeping `Instant`/QPC active).
+#[test]
+fn win_arm64_timer_probe_falls_back_when_inaccessible() {
+    let panic_hz = || -> u64 { panic!("CNTFRQ_EL0 must not be read when probe failed") };
+    let panic_measure =
+        || -> Option<(u64, u64)> { panic!("measure_generic_timer must not run when probe failed") };
+    assert_eq!(
+        calibrate_aarch64_with_probe(false, panic_hz, panic_measure),
+        None
+    );
+
+    // When EL0 is accessible with plausible CNTFRQ_EL0, uses Register.
+    let expected = mult_for_rate(24_000_000, 1_000_000_000).expect("valid rate");
+    assert_eq!(
+        calibrate_aarch64_with_probe(true, || 24_000_000, panic_measure),
+        Some((expected, GenericTimerSource::Register, 24_000_000))
+    );
+
+    // When EL0 is accessible but CNTFRQ_EL0 is 0, falls back to measurement.
+    let measured = mult_for_rate(500_000, 20_000_000).expect("valid window");
+    assert_eq!(
+        calibrate_aarch64_with_probe(true, || 0, || Some((500_000, 20_000_000))),
+        Some((measured, GenericTimerSource::Measured, 0))
+    );
 }
 
 /// aarch64: the bracketed measurement agrees with CNTFRQ_EL0 on real

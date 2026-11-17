@@ -535,3 +535,215 @@ fn test_diagnostic_emit_does_not_pollute_log_buffer_recursively() {
         );
     }
 }
+
+#[test]
+fn test_windows_path_and_text_redaction_on_any_os() {
+    use crate::common::diagnostics::format::{
+        is_portable_absolute_path, redact_path_from_env, redact_text_from_env,
+        sanitize_model_basename,
+    };
+
+    let local_app_data = r"C:\Users\Alice\AppData\Local";
+    let user_profile = r"C:\Users\Alice";
+
+    // LOCALAPPDATA takes priority over USERPROFILE (case-insensitive on Windows paths).
+    let crash_path = r"c:\users\alice\appdata\local\neural-amp-modeler-rs\crashes\crash-1.txt";
+    assert_eq!(
+        redact_path_from_env(
+            crash_path,
+            false,
+            None,
+            Some(local_app_data),
+            Some(user_profile),
+            None
+        ),
+        "<LOCALAPPDATA>/neural-amp-modeler-rs/crashes/crash-1.txt"
+    );
+
+    // USERPROFILE redaction works for both backslash and forward-slash drive paths.
+    assert_eq!(
+        redact_path_from_env(
+            r"C:\Users\Alice\Documents\Amps\tone.nam",
+            false,
+            None,
+            Some(local_app_data),
+            Some(user_profile),
+            None
+        ),
+        "<USERPROFILE>/Documents/Amps/tone.nam"
+    );
+    assert_eq!(
+        redact_path_from_env(
+            "C:/Users/Alice/Documents/Amps/tone.nam",
+            false,
+            None,
+            Some(local_app_data),
+            Some(user_profile),
+            None
+        ),
+        "<USERPROFILE>/Documents/Amps/tone.nam"
+    );
+
+    // UNC roaming profile paths are redacted too.
+    assert_eq!(
+        redact_path_from_env(
+            r"\\fileserver\profiles\Alice\models\amp.nam",
+            false,
+            None,
+            None,
+            Some(r"\\fileserver\profiles\Alice"),
+            None
+        ),
+        "<USERPROFILE>/models/amp.nam"
+    );
+
+    // Free-form log trace containing drive-letter, forward-slash drive, and UNC paths.
+    let trace = r"Failed loading C:\Users\Alice\models\a.nam, D:/audio/b.wav and \\fileserver\profiles\Alice\c.nam (cache C:\Users\Alice\AppData\Local\cache.bin)";
+    let redacted = redact_text_from_env(
+        trace,
+        false,
+        None,
+        Some(local_app_data),
+        Some(user_profile),
+        None,
+    );
+    assert!(
+        redacted.contains("<USERPROFILE>/models/a.nam"),
+        "{redacted}"
+    );
+    assert!(redacted.contains("D:/audio/b.wav"), "{redacted}");
+    assert!(redacted.contains("<LOCALAPPDATA>/cache.bin"), "{redacted}");
+    assert!(!redacted.contains("Alice\\models"), "{redacted}");
+    assert!(!redacted.contains("Alice\\AppData"), "{redacted}");
+
+    let unc_redacted = redact_text_from_env(
+        r"UNC=\\fileserver\profiles\Alice\c.nam",
+        false,
+        None,
+        None,
+        Some(r"\\fileserver\profiles\Alice"),
+        None,
+    );
+    assert_eq!(unc_redacted, "UNC=<USERPROFILE>/c.nam");
+    // Strict idempotency across multiple passes.
+    assert_eq!(
+        redact_text_from_env(
+            &redacted,
+            false,
+            None,
+            Some(local_app_data),
+            Some(user_profile),
+            None
+        ),
+        redacted
+    );
+
+    // Absolute-path detection and basename sanitization across POSIX + Windows.
+    assert!(is_portable_absolute_path("/home/alice/a.nam"));
+    assert!(is_portable_absolute_path(r"C:\Users\Alice\a.nam"));
+    assert!(is_portable_absolute_path("D:/models/a.nam"));
+    assert!(is_portable_absolute_path(r"\\server\share\a.nam"));
+    assert!(!is_portable_absolute_path("relative/a.nam"));
+
+    assert_eq!(
+        sanitize_model_basename(r"C:\Users\Alice\models\lead.nam"),
+        "lead.nam"
+    );
+    assert_eq!(
+        sanitize_model_basename(r"\\server\share\models\lead.nam"),
+        "lead.nam"
+    );
+    assert_eq!(sanitize_model_basename("/home/alice/lead.nam"), "lead.nam");
+    assert_eq!(sanitize_model_basename(r"C:\"), "");
+    assert_eq!(sanitize_model_basename(r"\\?\C:\"), "");
+
+    // Extended Windows paths (\\?\C:\...), UNC with spaces/Unicode, and mixed drive letter cases.
+    assert!(is_portable_absolute_path(
+        r"\\?\C:\Users\Alice\Models\Amp.nam"
+    ));
+    assert!(is_portable_absolute_path(
+        r"\\?\UNC\server\share\Sub Dir\Amp.namb"
+    ));
+    assert!(is_portable_absolute_path(r"c:\users\alice\Amp.nam"));
+    assert!(is_portable_absolute_path("d:/models/Café/Amp.nam"));
+
+    assert_eq!(
+        sanitize_model_basename(r"\\?\C:\Users\Alice\Models\Amp.nam"),
+        "Amp.nam"
+    );
+    assert_eq!(
+        sanitize_model_basename(r"\\server\share\Sub Dir\Amp.namb"),
+        "Amp.namb"
+    );
+    assert_eq!(
+        sanitize_model_basename(r"c:\users\alice\Models\José Amp (v2).nam"),
+        "José Amp (v2).nam"
+    );
+    assert_eq!(
+        sanitize_model_basename("D:/Audio/Café/Tone.nam"),
+        "Tone.nam"
+    );
+
+    assert_eq!(
+        redact_path_from_env(
+            r"\\?\C:\Users\Alice\Models\Amp.nam",
+            false,
+            None,
+            Some(local_app_data),
+            Some(user_profile),
+            None
+        ),
+        "<USERPROFILE>/Models/Amp.nam"
+    );
+    assert_eq!(
+        redact_path_from_env(
+            r"\\?\UNC\fileserver\profiles\Alice\Sub Dir\Amp.namb",
+            false,
+            None,
+            None,
+            Some(r"\\fileserver\profiles\Alice"),
+            None
+        ),
+        "<USERPROFILE>/Sub Dir/Amp.namb"
+    );
+    assert_eq!(
+        redact_path_from_env(
+            "d:/Users/Alice/Models/José Amp.nam",
+            false,
+            None,
+            None,
+            Some(r"D:\Users\Alice"),
+            None
+        ),
+        "<USERPROFILE>/Models/José Amp.nam"
+    );
+
+    let ext_and_spaced_trace = r"Load \\?\C:\Users\Alice Smith\Models\José.nam and \\?\UNC\fileserver\profiles\Alice Smith\Sub Dir\Amp.namb failed";
+    let ext_redacted = redact_text_from_env(
+        ext_and_spaced_trace,
+        false,
+        None,
+        None,
+        Some(r"C:\Users\Alice Smith"),
+        None,
+    );
+    assert!(
+        ext_redacted.contains("<USERPROFILE>/Models/José.nam"),
+        "{ext_redacted}"
+    );
+    assert!(
+        !ext_redacted.contains("Alice Smith\\Models"),
+        "{ext_redacted}"
+    );
+    assert_eq!(
+        redact_text_from_env(
+            &ext_redacted,
+            false,
+            None,
+            None,
+            Some(r"C:\Users\Alice Smith"),
+            None
+        ),
+        ext_redacted
+    );
+}

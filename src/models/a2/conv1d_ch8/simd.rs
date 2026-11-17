@@ -632,32 +632,6 @@ pub unsafe fn layer_forward_ch8_block_simdmath<M: SimdMath>(
 
     let bias = &conv.bias;
 
-    // Hoisted fast path: no FiLM in this layer — reuse the straight-line
-    // no-Film tail for mixin/activation/head/l1x1. The conv step above used
-    // `M::dot_product_8x_f32`; here only the post-conv tail is shared, which
-    // is bit-exact (mask == 0 ⇒ no FiLM arithmetic, `use_blending` moot).
-    if film.active_mask() == 0 {
-        // SAFETY: `z_buf[..num_frames*ch]` holds the conv outputs computed
-        // above; remaining slices satisfy the `no_film` tail contract
-        // (same capacities as the caller-verified inputs).
-        unsafe {
-            layer_forward_ch8_postconv_no_film(
-                &z_buf[..num_frames * ch],
-                mixin_w,
-                l1x1_w,
-                l1x1_b,
-                num_frames,
-                input_cond,
-                head_accum,
-                head_col,
-                layer_in,
-                is_first,
-                is_last,
-            );
-        }
-        return;
-    }
-
     for f in 0..num_frames {
         let frame_idx = (frame_start + f) as isize;
         let mut acc = [
@@ -684,6 +658,32 @@ pub unsafe fn layer_forward_ch8_block_simdmath<M: SimdMath>(
 
         let off = f * ch;
         z_buf[off..off + ch].copy_from_slice(&acc);
+    }
+
+    // Hoisted fast path: no FiLM in this layer — reuse the straight-line
+    // no-Film tail for mixin/activation/head/l1x1. The conv step above used
+    // `M::dot_product_8x_f32`; here only the post-conv tail is shared, which
+    // is bit-exact (mask == 0 ⇒ no FiLM arithmetic, `use_blending` moot).
+    if film.active_mask() == 0 {
+        // SAFETY: `z_buf[..num_frames*ch]` holds the conv outputs computed
+        // above; remaining slices satisfy the `no_film` tail contract
+        // (same capacities as the caller-verified inputs).
+        unsafe {
+            layer_forward_ch8_postconv_no_film(
+                &z_buf[..num_frames * ch],
+                mixin_w,
+                l1x1_w,
+                l1x1_b,
+                num_frames,
+                input_cond,
+                head_accum,
+                head_col,
+                layer_in,
+                is_first,
+                is_last,
+            );
+        }
+        return;
     }
 
     // 1b. FiLM: conv_post_film (post-conv, pre-mixin).

@@ -37,17 +37,28 @@
 //! 3. **SIMD Performance**: Enables vector instructions (AVX/SSE) to process data across the buffer boundary without logic interruptions.
 //! 4. **Branch-Free**: Removes modulo (`%`) operations and `if` conditions, optimizing processor branch prediction.
 //!
-//! ## Huge Page Support
-//! Attempts 2 MB huge pages (MAP_HUGETLB / MFD_HUGETLB) for the mirror buffer to reduce
-//! TLB pressure in the DSP hot-path. Falls back to regular pages + `madvise(MADV_HUGEPAGE)` + `MADV_COLLAPSE` (synchronous THP).
-//! Status is tracked via `MIRROR_BUF_HUGEPAGE_STATE` global to avoid inflating the
-//! struct layout (which would affect hot-path cache performance).
-use libc::{c_void, munmap};
+//! ## Platform Backends & Huge Page Support
+//! * **POSIX (`posix.rs`):** Uses `memfd_create` (Linux) or unlinked POSIX shared memory
+//!   (`shm_open` on macOS) with double `mmap`. On Linux, attempts 2 MB huge pages
+//!   (`MAP_HUGETLB` / `MFD_HUGETLB`) for the mirror buffer to reduce TLB pressure in the
+//!   DSP hot-path, falling back to regular pages + `madvise(MADV_HUGEPAGE)` +
+//!   `MADV_COLLAPSE` (synchronous THP). Status is tracked via `MIRROR_BUF_HUGEPAGE_STATE`
+//!   to avoid inflating the struct layout (which would affect hot-path cache performance).
+//! * **Windows 11 (`windows.rs`):** Uses modern NT virtual memory placeholders
+//!   (`VirtualAlloc2` with `MEM_RESERVE_PLACEHOLDER`, split via `VirtualFree` with
+//!   `MEM_PRESERVE_PLACEHOLDER` at 64 KiB allocation granularity, pagefile-backed
+//!   `CreateFileMappingW`, dual `MapViewOfFile3` with `MEM_REPLACE_PLACEHOLDER`,
+//!   immediate `CloseHandle`, and dual `UnmapViewOfFile` on `Drop`), preserving
+//!   `size_of::<MirroredBuffer<T>>() == 16`.
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::AtomicU8;
 
 mod alloc;
+#[cfg(unix)]
+mod posix;
+#[cfg(any(windows, test))]
+mod windows;
 
 thread_local! {
     /// Thread-local injection hook for unit tests to simulate allocation failures.
@@ -280,15 +291,25 @@ impl<T: MirrorSafe> Drop for MirroredBuffer<T> {
     fn drop(&mut self) {
         let element_size = std::mem::size_of::<T>();
         let size_bytes = self.size_elements * element_size;
-        // SAFETY: self.ptr was obtained via double-mapping an anonymous file descriptor
-        // (memfd with MAP_SHARED) spanning size_bytes * 2 (two contiguous mirrored halves).
-        // munmap receives the original base address and the full virtual extent (size_bytes * 2),
-        // cleanly unmapping both virtual mirrors. Drop consumes self by value, ensuring
-        // this is the exclusive and final use of the pointer. Individual elements are not
-        // dropped, which is sound because T: MirrorSafe bounds T to Copy types with no Drop glue.
+        #[cfg(unix)]
+        // SAFETY: self.ptr was obtained via posix::alloc_mirrored / try_alloc_huge_mirrored
+        // spanning size_bytes * 2 (two contiguous mirrored halves). Drop consumes self by
+        // value, ensuring this is the exclusive and final use of the pointer. Individual
+        // elements are not dropped, which is sound because T: MirrorSafe bounds T to Copy
+        // types with no Drop glue.
         unsafe {
-            munmap(self.ptr as *mut c_void, size_bytes * 2);
+            posix::unmap_posix_views(self.ptr as *mut u8, size_bytes);
         }
+        #[cfg(all(not(miri), windows))]
+        // SAFETY: self.ptr is the base of two contiguous Win32 section views spanning
+        // size_bytes each ([0..size_bytes) and [size_bytes..2*size_bytes)). Both views
+        // are unmapped individually; Drop consumes self by value and T: MirrorSafe
+        // guarantees Copy elements with no Drop glue.
+        unsafe {
+            windows::unmap_win32_views(self.ptr as *mut u8, size_bytes);
+        }
+        #[cfg(not(any(unix, all(not(miri), windows))))]
+        let _ = size_bytes;
     }
 }
 
@@ -335,6 +356,9 @@ unsafe impl<T: MirrorSafe + Send> Send for MirroredBuffer<T> {}
 // mapping prevents data races from external writers.
 unsafe impl<T: MirrorSafe + Sync> Sync for MirroredBuffer<T> {}
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(all(
+    test,
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+))]
 #[path = "mirror_buf_test.rs"]
 mod mirror_buf_test;

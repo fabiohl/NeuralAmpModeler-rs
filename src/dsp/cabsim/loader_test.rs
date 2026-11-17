@@ -3,6 +3,38 @@
 
 use super::*;
 
+struct TempTestFile(std::path::PathBuf);
+
+impl TempTestFile {
+    fn new(name: &str) -> Self {
+        static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "nam_rs_cab_{}_{}_{}",
+            std::process::id(),
+            seq,
+            name
+        ));
+        Self(path)
+    }
+
+    fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl Drop for TempTestFile {
+    fn drop(&mut self) {
+        std::fs::remove_file(&self.0).ok();
+    }
+}
+
+fn temp_wav_path(name: &str) -> (TempTestFile, std::path::PathBuf) {
+    let guard = TempTestFile::new(name);
+    let path = guard.path().to_path_buf();
+    (guard, path)
+}
+
 /// Helper function to create a programmatically generated mock Cab IR WAV file for testing.
 fn create_temp_cab_ir_wav(name: &str) -> std::path::PathBuf {
     let mut path = std::env::temp_dir();
@@ -76,50 +108,46 @@ fn test_load_nonexistent_file() {
 /// Loading an empty file must return an error.
 #[test]
 fn test_load_empty_file() {
-    let path = std::path::Path::new("/tmp/nam_rs_test_empty.wav");
-    std::fs::write(path, []).ok();
-    let result = CabSimIr::load(path, 0, false);
+    let (_dir, path) = temp_wav_path("nam_rs_test_empty.wav");
+    std::fs::write(&path, []).expect("failed to write empty file");
+    let result = CabSimIr::load(&path, 0, false);
     assert!(result.is_err(), "empty file must error");
-    std::fs::remove_file(path).ok();
 }
 
 /// Loading a file too small to be a valid WAV header must error.
 #[test]
 fn test_load_too_small() {
-    let path = std::path::Path::new("/tmp/nam_rs_test_small.wav");
-    std::fs::write(path, [0u8; 30]).ok();
-    let result = CabSimIr::load(path, 0, false);
+    let (_dir, path) = temp_wav_path("nam_rs_test_small.wav");
+    std::fs::write(&path, [0u8; 30]).expect("failed to write small file");
+    let result = CabSimIr::load(&path, 0, false);
     assert!(result.is_err(), "file too small must error");
-    std::fs::remove_file(path).ok();
 }
 
 /// PCM16 mono WAV round-trip via the testing wav writer.
 #[test]
 fn test_load_pcm16_wav() {
     let samples: Vec<f32> = (0..1024).map(|i| (i as f32 * 0.001).sin()).collect();
-    let path = std::path::Path::new("/tmp/nam_rs_test_pcm16.wav");
+    let (_dir, path) = temp_wav_path("nam_rs_test_pcm16.wav");
 
     // Write PCM16 using the format
-    write_pcm16_wav(path, &samples, 48_000).expect("failed to write PCM16 WAV");
+    write_pcm16_wav(&path, &samples, 48_000).expect("failed to write PCM16 WAV");
 
-    let ir = CabSimIr::load(path, 0, false).expect("failed to load PCM16 WAV");
+    let ir = CabSimIr::load(&path, 0, false).expect("failed to load PCM16 WAV");
     assert_eq!(ir.sample_rate, 48_000);
     assert!(!ir.samples.is_empty());
-    std::fs::remove_file(path).ok();
 }
 
 /// Float32 mono WAV via the testing wav writer.
 #[test]
 fn test_load_float32_wav() {
     let samples: Vec<f32> = (0..1024).map(|i| (i as f32 * 0.002).sin()).collect();
-    let path = std::path::Path::new("/tmp/nam_rs_test_f32.wav");
+    let (_dir, path) = temp_wav_path("nam_rs_test_f32.wav");
 
-    crate::testing::wav::write_wav_f32(path, &samples, 48_000).expect("failed to write f32 WAV");
+    crate::testing::wav::write_wav_f32(&path, &samples, 48_000).expect("failed to write f32 WAV");
 
-    let ir = CabSimIr::load(path, 0, false).expect("failed to load f32 WAV");
+    let ir = CabSimIr::load(&path, 0, false).expect("failed to load f32 WAV");
     assert_eq!(ir.sample_rate, 48_000);
     assert!(!ir.samples.is_empty());
-    std::fs::remove_file(path).ok();
 }
 
 /// Normalization is a no-op when peak is already 1.0.
@@ -165,9 +193,9 @@ fn make_wav_header(sample_rate: u32) -> Vec<u8> {
 fn test_reject_ir_extreme_sample_rate() {
     // 1 Hz — below MIN_IR_SAMPLE_RATE
     let buf = make_wav_header(1);
-    let path = std::path::Path::new("/tmp/nam_rs_test_rate_1.wav");
-    std::fs::write(path, &buf).unwrap();
-    match CabSimIr::load(path, 0, false) {
+    let (_dir_min, path_min) = temp_wav_path("nam_rs_test_rate_1.wav");
+    std::fs::write(&path_min, &buf).unwrap();
+    match CabSimIr::load(&path_min, 0, false) {
         Err(err) => {
             assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
             assert!(
@@ -178,13 +206,12 @@ fn test_reject_ir_extreme_sample_rate() {
         }
         Ok(_) => panic!("should reject 1 Hz sample rate"),
     }
-    std::fs::remove_file(path).ok();
 
     // u32::MAX — above MAX_IR_SAMPLE_RATE
     let buf = make_wav_header(u32::MAX);
-    let path = std::path::Path::new("/tmp/nam_rs_test_rate_max.wav");
-    std::fs::write(path, &buf).unwrap();
-    match CabSimIr::load(path, 0, false) {
+    let (_dir_max, path_max) = temp_wav_path("nam_rs_test_rate_max.wav");
+    std::fs::write(&path_max, &buf).unwrap();
+    match CabSimIr::load(&path_max, 0, false) {
         Err(err) => {
             assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
             assert!(
@@ -195,7 +222,6 @@ fn test_reject_ir_extreme_sample_rate() {
         }
         Ok(_) => panic!("should reject u32::MAX sample rate"),
     }
-    std::fs::remove_file(path).ok();
 }
 
 /// Writes a raw float32 mono WAV with arbitrary samples for denormal testing.
@@ -234,10 +260,10 @@ fn test_flush_denormal_ir_samples() {
     let denormal = f32::from_bits(0x0000_0001); // smallest positive subnormal
     let neg_denormal = f32::from_bits(0x8000_0001); // smallest negative subnormal
     let samples = vec![0.5f32, denormal, -0.3f32, neg_denormal, denormal];
-    let path = std::path::Path::new("/tmp/nam_rs_test_denormal.wav");
-    write_f32_wav_raw(path, &samples, 48_000).unwrap();
+    let (_dir, path) = temp_wav_path("nam_rs_test_denormal.wav");
+    write_f32_wav_raw(&path, &samples, 48_000).unwrap();
 
-    let ir = CabSimIr::load(path, 0, false)
+    let ir = CabSimIr::load(&path, 0, false)
         .expect("loading WAV with denormals should succeed (flushed, not rejected)");
     assert_eq!(ir.samples[0], 0.5);
     assert_eq!(
@@ -253,7 +279,6 @@ fn test_flush_denormal_ir_samples() {
         ir.samples[4], 0.0,
         "second positive subnormal should be flushed to 0.0"
     );
-    std::fs::remove_file(path).ok();
 }
 
 /// Writes a minimal PCM16 mono WAV file for testing.
@@ -367,12 +392,12 @@ fn write_extensible_wav(
 #[test]
 fn test_load_extensible_pcm24_wav() {
     let samples: Vec<f32> = (0..512).map(|i| (i as f32 * 0.005).sin()).collect();
-    let path = std::path::Path::new("/tmp/nam_rs_test_ext_pcm24.wav");
+    let (_dir, path) = temp_wav_path("nam_rs_test_ext_pcm24.wav");
 
-    write_extensible_wav(path, &samples, 48_000, true, 24)
+    write_extensible_wav(&path, &samples, 48_000, true, 24)
         .expect("failed to write extensible PCM24 WAV");
 
-    let ir = CabSimIr::load(path, 0, false).expect("failed to load extensible PCM24 WAV");
+    let ir = CabSimIr::load(&path, 0, false).expect("failed to load extensible PCM24 WAV");
     assert_eq!(ir.sample_rate, 48_000);
     assert_eq!(ir.samples.len(), 512);
 
@@ -384,28 +409,24 @@ fn test_load_extensible_pcm24_wav() {
             read
         );
     }
-
-    std::fs::remove_file(path).ok();
 }
 
 /// Tests loading a 32-bit Float WAVE_FORMAT_EXTENSIBLE IR (format 65534).
 #[test]
 fn test_load_extensible_float32_wav() {
     let samples: Vec<f32> = (0..512).map(|i| (i as f32 * 0.005).cos()).collect();
-    let path = std::path::Path::new("/tmp/nam_rs_test_ext_float32.wav");
+    let (_dir, path) = temp_wav_path("nam_rs_test_ext_float32.wav");
 
-    write_extensible_wav(path, &samples, 48_000, false, 32)
+    write_extensible_wav(&path, &samples, 48_000, false, 32)
         .expect("failed to write extensible Float32 WAV");
 
-    let ir = CabSimIr::load(path, 0, false).expect("failed to load extensible Float32 WAV");
+    let ir = CabSimIr::load(&path, 0, false).expect("failed to load extensible Float32 WAV");
     assert_eq!(ir.sample_rate, 48_000);
     assert_eq!(ir.samples.len(), 512);
 
     for (orig, read) in samples.iter().zip(ir.samples.iter()) {
         assert!((orig - read).abs() < 1e-6);
     }
-
-    std::fs::remove_file(path).ok();
 }
 
 /// IR resampling preserves sample count proportional to rate ratio.

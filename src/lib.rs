@@ -51,7 +51,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! NeuralAmpModeler-rs = "2.0"
+//! NeuralAmpModeler-rs = "2.1"
 //! ```
 //!
 //! On `x86_64`, the crate requires the `x86-64-v3` feature set at compile time.
@@ -67,7 +67,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! NeuralAmpModeler-rs = { version = "2.0", features = ["testing"] }
+//! NeuralAmpModeler-rs = { version = "2.1", features = ["testing"] }
 //! ```
 //!
 //! ```no_run
@@ -112,7 +112,7 @@
 //! | `heap-audit`         | Disabled    | Real-time allocation tracking via a counting allocator to enforce zero-heap invariants.                                                                   |
 //! | `testing`            | Disabled    | Off-RT test utilities, signal generators, synthetic fixtures, and perceptual fidelity oracles.                                                            |
 //! | `fft-radix4-planner` | Disabled    | Radix-4 DIT FFT execution planning routines and benchmarks.                                                                                               |
-//! | `rt-hardening`       | Disabled    | Opt-in real-time host hardening (Linux: THP, `mlockall`, `SCHED_FIFO`, affinity; macOS: QoS, time constraint, `mlock_region`, Audio Workgroups; DAZ/FTZ). |
+//! | `rt-hardening`       | Disabled    | Opt-in real-time host hardening (Linux: THP, `mlockall`, `SCHED_FIFO`, affinity; macOS: QoS, time constraint, `mlock_region`, Audio Workgroups; DAZ/FTZ; compile-time no-op on Windows). |
 //! | `avx512`             | Disabled    | Experimental AVX-512 kernels and dispatch for research and cross-ISA validation.                                                                          |
 //!
 //! ## Module map
@@ -130,11 +130,15 @@
 //!
 //! ## Platform support
 //!
-//! The crate targets **`x86_64` with the `x86-64-v3` baseline** (AVX2, FMA,
-//! BMI2, and the rest of the v3 feature set) and **`aarch64` with native NEON**
-//! (macOS Apple Silicon and aarch64 Linux). Unsupported architectures are
-//! rejected at compile time via `compile_error!`. When building documentation
-//! locally without the full feature set, prefer `cargo doc --lib`.
+//! Ubuntu Linux `x86_64` (`x86-64-v3`) is the primary reference platform, with
+//! production support on `x86_64-unknown-linux-gnu`, `aarch64-apple-darwin`,
+//! and `aarch64-unknown-linux-gnu`. Windows 11 (`x86_64-pc-windows-msvc` with
+//! `x86-64-v3` and `aarch64-pc-windows-msvc` with native `NEON` and ARMv8.1
+//! LSE atomics) has **Experimental Verifiable** support (`rt-hardening` is a
+//! Linux/macOS-only feature and compiles as a no-op on Windows). Unsupported
+//! architectures are rejected at compile time via `compile_error!`. When
+//! building documentation locally without the full feature set, prefer
+//! `cargo doc --lib`.
 //!
 //! ## Further documentation
 //!

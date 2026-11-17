@@ -2,9 +2,80 @@
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
 use super::*;
-use libc::sysconf;
 use serial_test::serial;
 use std::sync::atomic::Ordering;
+
+#[cfg(target_os = "linux")]
+thread_local! {
+    static TEST_GRANULARITY_OVERRIDE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static TEST_ALLOC_RECORD: std::cell::RefCell<Option<Vec<(usize, usize)>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(target_os = "linux")]
+struct GranularityOverrideGuard {
+    prev: usize,
+}
+
+#[cfg(target_os = "linux")]
+impl GranularityOverrideGuard {
+    fn new(granularity: usize) -> Self {
+        let prev = TEST_GRANULARITY_OVERRIDE.with(|c| {
+            let old = c.get();
+            c.set(granularity);
+            old
+        });
+        Self { prev }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for GranularityOverrideGuard {
+    fn drop(&mut self) {
+        TEST_GRANULARITY_OVERRIDE.with(|c| c.set(self.prev));
+    }
+}
+
+#[cfg(target_os = "linux")]
+struct AllocRecordGuard;
+
+#[cfg(target_os = "linux")]
+impl AllocRecordGuard {
+    fn start() -> Self {
+        TEST_ALLOC_RECORD.with(|r| *r.borrow_mut() = Some(Vec::new()));
+        Self
+    }
+
+    fn take_records(&self) -> Vec<(usize, usize)> {
+        TEST_ALLOC_RECORD.with(|r| {
+            r.borrow_mut()
+                .as_mut()
+                .map(std::mem::take)
+                .unwrap_or_default()
+        })
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for AllocRecordGuard {
+    fn drop(&mut self) {
+        TEST_ALLOC_RECORD.with(|r| *r.borrow_mut() = None);
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub(super) fn granularity_override() -> usize {
+    TEST_GRANULARITY_OVERRIDE.with(|c| c.get())
+}
+
+#[cfg(target_os = "linux")]
+pub(super) fn record_test_alloc(requested_bytes: usize, size_bytes: usize) {
+    TEST_ALLOC_RECORD.with(|r| {
+        if let Some(vec) = r.borrow_mut().as_mut() {
+            vec.push((requested_bytes, size_bytes));
+        }
+    });
+}
 
 #[test]
 #[cfg_attr(
@@ -12,11 +83,10 @@ use std::sync::atomic::Ordering;
     ignore = "MirroredBuffer allocation requires memfd_create/mmap (FFI), which Miri cannot interpret; the alias/provenance of the double mapping is validated by the native test suite"
 )]
 fn test_mirror_buf_page_alignment() -> Result<(), Box<dyn std::error::Error>> {
-    // SAFETY: Low-level virtual memory manipulation (mmap/ftruncate) with checked parameters.
-    let page_size = unsafe { sysconf(libc::_SC_PAGESIZE) } as usize;
+    let page_size = alloc::allocation_granularity()?;
     let element_size = std::mem::size_of::<f32>();
 
-    // Request 1 element, should round to 1 page
+    // Request 1 element, should round to 1 allocation granularity unit
     let buf = MirroredBuffer::<f32>::new(1)?;
     let expected_elements = page_size / element_size;
 
@@ -218,4 +288,473 @@ fn test_mirror_buf_overflow_handling() {
     assert!(result.is_err());
     let err = result.err().unwrap();
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+}
+
+#[cfg(target_pointer_width = "64")]
+#[test]
+fn test_mirror_buf_struct_layout_16_bytes() {
+    assert_eq!(std::mem::size_of::<MirroredBuffer<f32>>(), 16);
+    assert_eq!(std::mem::size_of::<MirroredBuffer<u8>>(), 16);
+    assert_eq!(std::mem::align_of::<MirroredBuffer<f32>>(), 8);
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "MirroredBuffer allocation requires OS virtual memory FFI, which Miri cannot interpret"
+)]
+fn test_mirror_buf_bidirectional_aliasing_and_seam_slice() -> Result<(), Box<dyn std::error::Error>>
+{
+    let mut buf = MirroredBuffer::<f32>::new(1024)?;
+    let n = buf.size();
+    let k = 32usize;
+    assert!(n > k * 2);
+
+    // 1. Write to 1st half -> immediately visible in 2nd half.
+    buf[0] = 1.25;
+    buf[n - 1] = -3.5;
+    assert_eq!(buf[n].to_bits(), 1.25_f32.to_bits());
+    assert_eq!(buf[2 * n - 1].to_bits(), (-3.5_f32).to_bits());
+
+    // 2. Write to 2nd half -> immediately visible in 1st half.
+    buf[n + 7] = 42.5;
+    buf[2 * n - 3] = -99.75;
+    assert_eq!(buf[7].to_bits(), 42.5_f32.to_bits());
+    assert_eq!(buf[n - 3].to_bits(), (-99.75_f32).to_bits());
+
+    // 3. Populate both sides of the N..2N seam and read one contiguous slice &buf[n - k .. n + k].
+    for i in 0..k {
+        buf[n - k + i] = (1000 + i) as f32;
+        buf[i] = (2000 + i) as f32;
+    }
+    {
+        let slice: &[f32] = &buf;
+        let seam = &slice[n - k..n + k];
+        assert_eq!(seam.len(), 2 * k);
+        for i in 0..k {
+            assert_eq!(seam[i].to_bits(), ((1000 + i) as f32).to_bits());
+            assert_eq!(seam[k + i].to_bits(), ((2000 + i) as f32).to_bits());
+        }
+    }
+
+    // 4. Single contiguous &mut [T] write crossing the N seam wraps cleanly into [0..k].
+    {
+        let seam_mut: &mut [f32] = &mut buf[n - k..n + k];
+        for (idx, slot) in seam_mut.iter_mut().enumerate() {
+            *slot = (idx as f32) + 0.5;
+        }
+    }
+    for i in 0..k {
+        assert_eq!(buf[n - k + i].to_bits(), ((i as f32) + 0.5).to_bits());
+        assert_eq!(buf[i].to_bits(), (((k + i) as f32) + 0.5).to_bits());
+    }
+
+    Ok(())
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "MirroredBuffer allocation requires OS virtual memory FFI, which Miri cannot interpret"
+)]
+fn test_mirror_buf_repeated_create_write_drop_stress() -> Result<(), Box<dyn std::error::Error>> {
+    for iter in 0..300usize {
+        let mut buf = if iter.is_multiple_of(10) {
+            MirroredBuffer::<f32>::new_aligned(3648 * 12, 12)?
+        } else {
+            MirroredBuffer::<f32>::new(1)?
+        };
+        let n = buf.size();
+        let sentinel_a = (iter as f32) + 0.25;
+        let sentinel_b = -((iter as f32) + 0.75);
+
+        buf[0] = sentinel_a;
+        buf[n - 1] = sentinel_b;
+        assert_eq!(buf[n].to_bits(), sentinel_a.to_bits());
+        assert_eq!(buf[2 * n - 1].to_bits(), sentinel_b.to_bits());
+
+        let seam_mut = &mut buf[n - 4..n + 4];
+        for (j, slot) in seam_mut.iter_mut().enumerate() {
+            *slot = (iter * 8 + j) as f32;
+        }
+        assert_eq!(buf[0].to_bits(), ((iter * 8 + 4) as f32).to_bits());
+        assert_eq!(buf[n - 1].to_bits(), ((iter * 8 + 3) as f32).to_bits());
+    }
+    Ok(())
+}
+
+#[test]
+fn test_win32_tx_fault_injection_s0_to_s4() {
+    use windows::{Win32Stage, Win32VmOps, create_win32_mirrored_with};
+
+    struct MockWin32VmOps {
+        fail_at: Option<Win32Stage>,
+        next_handle: usize,
+        active_placeholders: Vec<(usize, usize)>,
+        active_sections: Vec<(usize, usize)>,
+        active_views: Vec<(usize, usize)>,
+        error_clobber_count: usize,
+    }
+
+    impl MockWin32VmOps {
+        fn new(fail_at: Option<Win32Stage>) -> Self {
+            Self {
+                fail_at,
+                next_handle: 100,
+                active_placeholders: Vec::new(),
+                active_sections: Vec::new(),
+                active_views: Vec::new(),
+                error_clobber_count: 0,
+            }
+        }
+
+        fn stage_error(stage: Win32Stage) -> std::io::Error {
+            let code = match stage {
+                Win32Stage::S0ReservePlaceholder => 1000,
+                Win32Stage::S1SplitPlaceholder => 1001,
+                Win32Stage::S2CreateMapping => 1002,
+                Win32Stage::S3MapFirstView => 1003,
+                Win32Stage::S4MapSecondView => 1004,
+            };
+            std::io::Error::from_raw_os_error(code)
+        }
+
+        fn assert_no_leaks(&self) {
+            assert!(
+                self.active_placeholders.is_empty(),
+                "leaked placeholders: {:?}",
+                self.active_placeholders
+            );
+            assert!(
+                self.active_sections.is_empty(),
+                "leaked section handles: {:?}",
+                self.active_sections
+            );
+            assert!(
+                self.active_views.is_empty(),
+                "leaked mapped views: {:?}",
+                self.active_views
+            );
+        }
+    }
+
+    impl Win32VmOps for MockWin32VmOps {
+        fn alloc_placeholder_2n(&mut self, total_size: usize) -> std::io::Result<*mut u8> {
+            if self.fail_at == Some(Win32Stage::S0ReservePlaceholder) {
+                return Err(Self::stage_error(Win32Stage::S0ReservePlaceholder));
+            }
+            let base = 0x1000_0000usize;
+            self.active_placeholders.push((base, total_size));
+            Ok(base as *mut u8)
+        }
+
+        fn split_placeholder(&mut self, base: *mut u8, half_size: usize) -> std::io::Result<()> {
+            if self.fail_at == Some(Win32Stage::S1SplitPlaceholder) {
+                return Err(Self::stage_error(Win32Stage::S1SplitPlaceholder));
+            }
+            let base_addr = base as usize;
+            let pos = self
+                .active_placeholders
+                .iter()
+                .position(|&(addr, sz)| addr == base_addr && sz == half_size * 2)
+                .expect("S1 requires an active 2N placeholder");
+            self.active_placeholders.remove(pos);
+            self.active_placeholders.push((base_addr, half_size));
+            self.active_placeholders
+                .push((base_addr + half_size, half_size));
+            Ok(())
+        }
+
+        fn free_placeholder(&mut self, addr: *mut u8) {
+            self.error_clobber_count += 1;
+            let addr_u = addr as usize;
+            let pos = self
+                .active_placeholders
+                .iter()
+                .position(|&(p, _)| p == addr_u)
+                .expect("free_placeholder called on unknown/already-freed placeholder");
+            self.active_placeholders.remove(pos);
+        }
+
+        fn create_section(&mut self, size_bytes: usize) -> std::io::Result<usize> {
+            if self.fail_at == Some(Win32Stage::S2CreateMapping) {
+                return Err(Self::stage_error(Win32Stage::S2CreateMapping));
+            }
+            let h = self.next_handle;
+            self.next_handle += 1;
+            self.active_sections.push((h, size_bytes));
+            Ok(h)
+        }
+
+        fn close_section(&mut self, handle: usize) {
+            self.error_clobber_count += 1;
+            let pos = self
+                .active_sections
+                .iter()
+                .position(|&(h, _)| h == handle)
+                .expect("close_section called on unknown/already-closed handle");
+            self.active_sections.remove(pos);
+        }
+
+        fn map_view(
+            &mut self,
+            handle: usize,
+            base: *mut u8,
+            size_bytes: usize,
+        ) -> std::io::Result<*mut u8> {
+            let is_first = self.active_views.is_empty();
+            if is_first && self.fail_at == Some(Win32Stage::S3MapFirstView) {
+                return Err(Self::stage_error(Win32Stage::S3MapFirstView));
+            }
+            if !is_first && self.fail_at == Some(Win32Stage::S4MapSecondView) {
+                return Err(Self::stage_error(Win32Stage::S4MapSecondView));
+            }
+            assert!(
+                self.active_sections
+                    .iter()
+                    .any(|&(h, sz)| h == handle && sz == size_bytes),
+                "map_view called with invalid section handle/size"
+            );
+            let base_addr = base as usize;
+            let pos = self
+                .active_placeholders
+                .iter()
+                .position(|&(addr, sz)| addr == base_addr && sz == size_bytes)
+                .expect("map_view requires matching placeholder");
+            self.active_placeholders.remove(pos);
+            self.active_views.push((base_addr, size_bytes));
+            Ok(base)
+        }
+
+        fn unmap_view(&mut self, base: *mut u8) {
+            self.error_clobber_count += 1;
+            let base_addr = base as usize;
+            let pos = self
+                .active_views
+                .iter()
+                .position(|&(addr, _)| addr == base_addr)
+                .expect("unmap_view called on unknown/already-unmapped view");
+            self.active_views.remove(pos);
+        }
+    }
+
+    let stages = [
+        (Win32Stage::S0ReservePlaceholder, 1000),
+        (Win32Stage::S1SplitPlaceholder, 1001),
+        (Win32Stage::S2CreateMapping, 1002),
+        (Win32Stage::S3MapFirstView, 1003),
+        (Win32Stage::S4MapSecondView, 1004),
+    ];
+
+    for (stage, expected_code) in stages {
+        let mut ops = MockWin32VmOps::new(Some(stage));
+        let err = create_win32_mirrored_with(&mut ops, 65_536)
+            .expect_err("injected fault must fail allocation");
+        assert_eq!(
+            err.raw_os_error(),
+            Some(expected_code),
+            "original OS error code must survive rollback at stage {stage:?}"
+        );
+        ops.assert_no_leaks();
+    }
+
+    // S5 success path + Drop unmap simulation.
+    let mut ops = MockWin32VmOps::new(None);
+    let base = create_win32_mirrored_with(&mut ops, 65_536).expect("S5 success path");
+    assert!(ops.active_placeholders.is_empty());
+    assert!(
+        ops.active_sections.is_empty(),
+        "section handle must be closed immediately in S5"
+    );
+    assert_eq!(ops.active_views.len(), 2);
+    ops.unmap_view(base);
+    ops.unmap_view(base.wrapping_add(65_536));
+    ops.assert_no_leaks();
+}
+
+#[cfg(all(not(miri), windows))]
+#[test]
+#[serial]
+fn test_win32_native_fault_injection_s0_to_s4() -> Result<(), Box<dyn std::error::Error>> {
+    use windows::{Win32Stage, set_win32_fault_stage};
+
+    struct StageResetGuard;
+    impl Drop for StageResetGuard {
+        fn drop(&mut self) {
+            set_win32_fault_stage(None);
+        }
+    }
+
+    let _reset = StageResetGuard;
+    let stages = [
+        (Win32Stage::S0ReservePlaceholder, 8),
+        (Win32Stage::S1SplitPlaceholder, 87),
+        (Win32Stage::S2CreateMapping, 1455),
+        (Win32Stage::S3MapFirstView, 487),
+        (Win32Stage::S4MapSecondView, 14),
+    ];
+
+    for (stage, expected_code) in stages {
+        set_win32_fault_stage(Some(stage));
+        for _ in 0..32 {
+            let err = MirroredBuffer::<f32>::new(1024)
+                .expect_err("native Win32 stage injection must fail");
+            assert_eq!(
+                err.raw_os_error(),
+                Some(expected_code),
+                "stage {stage:?} must propagate original OS error"
+            );
+        }
+    }
+
+    set_win32_fault_stage(None);
+    let mut buf = MirroredBuffer::<f32>::new(1024)?;
+    let n = buf.size();
+    buf[0] = 7.5;
+    assert_eq!(buf[n].to_bits(), 7.5_f32.to_bits());
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[serial]
+fn test_mirror_buf_64kib_footprint_and_model_invariance() -> Result<(), Box<dyn std::error::Error>>
+{
+    use crate::loader::dispatcher::build_model;
+    use crate::loader::nam_json::parse_nam_json;
+    use crate::models::NamModel;
+    use std::path::Path;
+
+    const WIN32_GRANULARITY: usize = 65_536;
+    const NUM_FRAMES: usize = 24_576; // 384 blocks x 64 frames; wraps 64 KiB and 192 KiB rings.
+    const BLOCK_FRAMES: usize = 64;
+
+    let fixtures = [
+        (
+            "WaveNet A1 Standard",
+            "tests/fixtures/models/wavenet_a1_standard.nam",
+        ),
+        (
+            "WaveNet A1 Lite CH=12",
+            "tests/fixtures/models/BossWN-lite.nam",
+        ),
+        (
+            "WaveNet A2 Lite",
+            "tests/fixtures/models/wavenet_a2_lite.nam",
+        ),
+        (
+            "WaveNet A2 Dyn CH=3",
+            "tests/fixtures/models/a2_dynamic_blended_ch3.nam",
+        ),
+        ("Linear Direct", "tests/fixtures/models/linear_test.nam"),
+        (
+            "Linear Multichannel 1x2",
+            "tests/fixtures/models/linear_1x2.nam",
+        ),
+    ];
+
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+
+    for (label, rel_path) in fixtures {
+        let json = std::fs::read_to_string(manifest_dir.join(rel_path))?;
+        let data = parse_nam_json(&json)?;
+
+        let (mut model_4k, rings_4k) = {
+            let rec = AllocRecordGuard::start();
+            let model = build_model(&data)?;
+            let rings = rec.take_records();
+            (model, rings)
+        };
+
+        let (mut model_64k, rings_64k) = {
+            let _gran = GranularityOverrideGuard::new(WIN32_GRANULARITY);
+            let rec = AllocRecordGuard::start();
+            let model = build_model(&data)?;
+            let rings = rec.take_records();
+            (model, rings)
+        };
+
+        assert!(
+            !rings_4k.is_empty(),
+            "{label} must allocate MirroredBuffer rings"
+        );
+        assert_eq!(
+            rings_4k.len(),
+            rings_64k.len(),
+            "{label} ring count mismatch"
+        );
+
+        if label == "WaveNet A1 Lite CH=12" {
+            // CH=12 (48B stride) and CH=6 (24B stride) both have lcm(65536, stride) = 196_608 (192 KiB).
+            for &(_req, size_bytes) in &rings_64k {
+                assert_eq!(
+                    size_bytes % (192 * 1024),
+                    0,
+                    "BossWN-lite ring {size_bytes} must be multiple of 192 KiB under 64 KiB granularity"
+                );
+            }
+        }
+
+        let phys_4k: usize = rings_4k.iter().map(|&(_, s)| s).sum();
+        let virt_4k: usize = phys_4k * 2;
+        let phys_64k: usize = rings_64k.iter().map(|&(_, s)| s).sum();
+        let virt_64k: usize = phys_64k * 2;
+
+        eprintln!(
+            "[mirror_buf 64KiB footprint] {label}: rings={}, 4KiB=(phys={}B, virt={}B), 64KiB=(phys={}B, virt={}B), delta_phys=+{}B ({:.2}x), per_ring_4k={:?}, per_ring_64k={:?}",
+            rings_4k.len(),
+            phys_4k,
+            virt_4k,
+            phys_64k,
+            virt_64k,
+            phys_64k.saturating_sub(phys_4k),
+            phys_64k as f64 / phys_4k.max(1) as f64,
+            rings_4k,
+            rings_64k,
+        );
+
+        let in_ch = model_4k.in_channels();
+        let out_ch = model_4k.channels();
+        assert_eq!(in_ch, model_64k.in_channels());
+        assert_eq!(out_ch, model_64k.channels());
+
+        model_4k.prewarm(2048);
+        model_64k.prewarm(2048);
+
+        let mut input = vec![0.0_f32; NUM_FRAMES * in_ch];
+        for f in 0..NUM_FRAMES {
+            let t = (f as f32) / 48_000.0;
+            let sample = 0.45 * (std::f32::consts::TAU * 110.0 * t).sin()
+                + 0.25 * (std::f32::consts::TAU * 440.0 * t).sin()
+                + if f % 512 == 0 { 0.3 } else { 0.0 };
+            for c in 0..in_ch {
+                input[f * in_ch + c] = sample * (1.0 - 0.1 * (c as f32));
+            }
+        }
+
+        let mut out_4k = vec![0.0_f32; NUM_FRAMES * out_ch];
+        let mut out_64k = vec![0.0_f32; NUM_FRAMES * out_ch];
+
+        for frame_start in (0..NUM_FRAMES).step_by(BLOCK_FRAMES) {
+            let in_slice = &input[frame_start * in_ch..(frame_start + BLOCK_FRAMES) * in_ch];
+            let out_slice_4k =
+                &mut out_4k[frame_start * out_ch..(frame_start + BLOCK_FRAMES) * out_ch];
+            let out_slice_64k =
+                &mut out_64k[frame_start * out_ch..(frame_start + BLOCK_FRAMES) * out_ch];
+            model_4k.process(in_slice, out_slice_4k);
+            model_64k.process(in_slice, out_slice_64k);
+        }
+
+        for (idx, (&a, &b)) in out_4k.iter().zip(out_64k.iter()).enumerate() {
+            assert_eq!(
+                a.to_bits(),
+                b.to_bits(),
+                "{label}: 0-ULP mismatch at sample {idx}: 4KiB={a} ({:#010x}) vs 64KiB={b} ({:#010x})",
+                a.to_bits(),
+                b.to_bits()
+            );
+        }
+    }
+
+    Ok(())
 }

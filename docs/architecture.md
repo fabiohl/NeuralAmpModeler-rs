@@ -15,7 +15,7 @@ Ubuntu Linux on `x86_64` with the `x86-64-v3` baseline is the primary developmen
 
 Prefer current, officially supported platform versions and modern stable capabilities. Platform maturity is established separately for each operating system, architecture, feature and validation scope. When evidence is insufficient, a platform or capability may be identified as experimental with its specific gaps and limitations disclosed; experimental status is not a waiver for known failures or for the reference-platform gates. Community reports and contributions can help close gaps, but do not substitute for recorded evidence. Cross-compilation alone does not establish native execution, audio integration, real-time behavior, or performance.
 
-This policy does not announce Windows support or change the maturity of any existing platform. See the supported-platform list in the [README](../README.md#supported-platforms) and the evidence and quality procedures in [testing.md](testing.md).
+Under this policy, officially supported Windows 11 targets (`x86_64-pc-windows-msvc` with `x86-64-v3` and `aarch64-pc-windows-msvc` with `NEON` and ARMv8.1 LSE atomics) are classified as **Experimental Verifiable**, while Ubuntu Linux `x86-64-v3` remains the primary reference platform. See the supported-platform list in the [README](../README.md#supported-platforms) and the evidence and quality procedures in [testing.md](testing.md).
 
 ## Public-Library Boundary
 
@@ -112,7 +112,7 @@ NeuralAmpModeler-rs adheres to a deterministic, performance-first SIMD microarch
 
 - **Single-Precision Consistency:** All weights, intermediate activations, and delay rings operate in `f32` to guarantee parity with NAMCore.
 - **Kahan Summation:** Employed in scalar reference dot products (`src/math/common/scalar_ref/dot.rs`) to bound accumulation drift to $\mathcal{O}(\epsilon)$ instead of $\mathcal{O}(N \cdot \epsilon)$.
-- **Hardware Flush-to-Zero:** Each pipeline callback reasserts FTZ+DAZ on the audio thread via [`set_daz_ftz`](../src/math/common/ops.rs): MXCSR bits 15/6 on x86_64, FPCR.FZ (bit 24, which flushes both denormal inputs and outputs) on aarch64.
+- **Hardware Flush-to-Zero:** Each pipeline callback reasserts FTZ+DAZ on the audio thread via [`set_daz_ftz`](../src/math/common/ops.rs): MXCSR bits 15/6 on x86_64, FPCR.FZ (bit 24, which flushes both denormal inputs and outputs) on aarch64. On Win64 (`x86_64-pc-windows-msvc`), `XMM6`–`XMM15` are callee-saved in the Microsoft x64 ABI; keeping internal kernels `#[inline(always)]` ensures those registers are preserved at most once at the `process()` boundary rather than per layer.
 - **Deterministic Anti-Denormal Dither:** To prevent catastrophic CPU stalling from subnormal floats during silence, a calibrated `−220 dBFS` DC offset is injected at the input stage ([`apply_input_stage`](../src/dsp/pipeline/stages/input.rs)) and subtracted identically at the output stage ([`apply_output_stage`](../src/dsp/pipeline/stages/output.rs)). See [docs/audio_fidelity_map.md](audio_fidelity_map.md) §6.
 
 ---
@@ -173,17 +173,18 @@ For multi-array WaveNet architectures, the head accumulator of the second layer 
 
 ### 1.6 Virtual Memory Mirroring: `MirroredBuffer`
 
-To eliminate circular index wrapping and modulo branching in dilated convolution delay lines, the engine implements virtual memory mirroring ([`src/dsp/mirror_buf/alloc.rs`](../src/dsp/mirror_buf/alloc.rs)):
+To eliminate circular index wrapping and modulo branching in dilated convolution delay lines, the engine implements virtual memory mirroring across [`src/dsp/mirror_buf/alloc.rs`](../src/dsp/mirror_buf/alloc.rs), [`src/dsp/mirror_buf/posix.rs`](../src/dsp/mirror_buf/posix.rs), and [`src/dsp/mirror_buf/windows.rs`](../src/dsp/mirror_buf/windows.rs):
 
-- **Mechanism:** Allocates a physical memory region via `memfd_create` (Linux) or an unlinked POSIX shared-memory object (`shm_open` + `shm_unlink`, macOS) and maps it twice consecutively into contiguous virtual memory using `mmap(MAP_SHARED)`. This allows read lookbacks across the buffer boundary to be executed via simple pointer arithmetic without branch penalties.
+- **POSIX Mechanism (`posix.rs`):** Allocates a physical memory region via `memfd_create` (Linux) or an unlinked POSIX shared-memory object (`shm_open` + `shm_unlink`, macOS) and maps it twice consecutively into contiguous virtual memory using `mmap(MAP_SHARED)`. This allows read lookbacks across the buffer boundary to be executed via simple pointer arithmetic without branch penalties.
+- **Windows 11 Mechanism (`windows.rs`):** Reserves a contiguous virtual placeholder region of size `2 * ring_bytes` via `VirtualAlloc2(MEM_RESERVE | MEM_RESERVE_PLACEHOLDER)`, splits it into two adjacent placeholders via `VirtualFree(MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER)`, allocates a pagefile-backed section via `CreateFileMappingW`, and maps both halves consecutively via `MapViewOfFile3(MEM_REPLACE_PLACEHOLDER)`. `CloseHandle` is called immediately after both views are mapped (keeping `size_of::<MirroredBuffer<T>>() == 16`), a 6-stage transactional rollback machine (`S0`–`S5`) guarantees leak-free error recovery, and `Drop` releases both views via dual `UnmapViewOfFile`.
 - **Linux Allocation Hierarchy:**
   1. 2 MB HugeTLB pages (`MAP_HUGETLB` / `MFD_HUGETLB`) to minimize TLB misses.
   2. Transparent Huge Pages (THP via `MADV_HUGEPAGE` / `MADV_COLLAPSE`).
   3. Standard pages (the kernel page size from `sysconf(_SC_PAGESIZE)`).
-- **Page Size:** Ring sizes are rounded up to whole pages, and the ring length equals the mapping size (the mirror wraps at the mapping boundary), so the whole rounded ring is touched as the write position cycles. Rings are therefore larger on 16 KiB (Apple Silicon) and 64 KiB (some aarch64 Linux kernels) page systems; on 64 KiB kernels a 23-layer A2 model's rings can exceed a core's L2 cache.
-- **Descriptor Lifecycle:** `libc::close(fd)` is called immediately after mappings succeed. On Linux, `MAP_SHARED` maintains page residency independently of the file descriptor; mappings are freed cleanly during `Drop` via `munmap`.
+- **Page Size & Allocation Granularity:** Ring sizes are rounded up to whole OS mapping units (`sysconf(_SC_PAGESIZE)` on POSIX; `dwAllocationGranularity = 64 KiB` on Windows, $\operatorname{lcm}(65536, \text{elem\_stride})$, e.g., 192 KiB per ring for `CH=12`), and the ring length equals the mapping size (the mirror wraps at the mapping boundary), so the whole rounded ring is touched as the write position cycles. Cross-platform parity tests verify `0 ULP` numerical invariance between 4 KiB and 64 KiB/192 KiB rings.
+- **Descriptor Lifecycle:** `libc::close(fd)` (POSIX) or `CloseHandle` (Windows) is called immediately after mappings succeed; mappings are freed cleanly during `Drop` via `munmap` or dual `UnmapViewOfFile`.
 - **Soundness & `MirrorSafe`:** Storage is zero-filled by the kernel and elements physically alias across virtual halves. To ensure absolute soundness, [`MirroredBuffer<T>`](../src/dsp/mirror_buf.rs) requires `T: MirrorSafe` via a sealed trait implemented only for types where all-bits-zero is sound, `Copy` is implemented (preventing drop leaks or double-drops), and addresses do not dictate identity (e.g. `f32`, `f64`, integer primitives). Non-zero-valid types (like `NonZeroU32`) are statically rejected at compile time.
-- **Portability:** Linux and Apple Silicon macOS (`aarch64-apple-darwin`) are supported; Intel macOS (`x86_64-apple-darwin`) is not validated. Other platforms compile a fallback stub returning `Unsupported`. Huge pages are Linux-only.
+- **Portability:** Linux (`x86_64`, `aarch64`), macOS Apple Silicon (`aarch64-apple-darwin`), and Windows 11 (`x86_64-pc-windows-msvc`, `aarch64-pc-windows-msvc`, Experimental Verifiable) are supported; Intel macOS (`x86_64-apple-darwin`) is not validated. Other platforms compile a fallback stub returning `Unsupported`. Huge pages are Linux-only; on Windows, `HugePageVec` routes to Strategy 3 (64-byte aligned heap allocation without requiring `SeLockMemoryPrivilege`).
 
 ---
 
@@ -244,7 +245,7 @@ The audio thread operates under strict real-time guarantees:
 - **Zero Allocations & Zero Deallocations:** No heap allocation (`Vec`, `Box`, `String`) or object drops inside `process()`.
 - **Zero Blocking I/O & Locks:** Mutexes, condition variables, file access, and logging (`log::*`) are prohibited on the hot path. State anomalies are communicated via atomic bitmasks ([`RtStatusFlags`](../src/common/spsc/status.rs)).
 - **Panic-Free Operation:** Bounds checks are statically structured or asserted off-RT.
-- **Low-Overhead Telemetry:** Direct read of the CPU cycle counter ([`common::tsc`](../src/common/tsc.rs): RDTSC on x86_64, the generic timer `CNTVCT_EL0` calibrated from `CNTFRQ_EL0` on aarch64) replaces `Instant::now()` (vDSO syscall) for low-cost profiling without kernel jitter.
+- **Low-Overhead Telemetry:** Direct read of the CPU cycle counter ([`common::tsc`](../src/common/tsc.rs): RDTSC on x86_64, the generic timer `CNTVCT_EL0` calibrated from `CNTFRQ_EL0` on aarch64) replaces `Instant::now()` (vDSO syscall) for low-cost profiling without kernel jitter. On `aarch64-pc-windows-msvc`, `CNTFRQ_EL0`/`CNTVCT_EL0` access is validated via a Vectored Exception Handler (`AddVectoredExceptionHandler`) probe during calibration, with automatic fallback to `QueryPerformanceCounter` (`QPC`) if user-mode EL0 timer reads trap.
 - **Cache-Line Isolation:** SPSC communication structures are aligned to 128 bytes (`#[repr(align(128))]`) to prevent multi-core false sharing between audio and control threads.
 
 ### Host Hardening (Linux and macOS RT)
@@ -252,8 +253,10 @@ The audio thread operates under strict real-time guarantees:
 When real-time host hardening is enabled (via the `rt-hardening` feature), the
 engine exposes a host-agnostic bring-up API under
 [`src/rt_hardening/`](../src/rt_hardening/) — never enabled by default and never
-naming a specific host or sibling project. The module is split by OS; no
-affinity or `SCHED_FIFO` symbol is exposed on macOS.
+naming a specific host or sibling project. The module is split by OS and compiled
+only on Linux and macOS (`#[cfg(all(feature = "rt-hardening", any(target_os = "linux", target_os = "macos")))]`);
+on Windows, `rt-hardening` is a compile-time no-op (`GAP`: no `mlock`, `SCHED_FIFO`, or MMCSS).
+No affinity or `SCHED_FIFO` symbol is exposed on macOS.
 
 #### Linux
 
@@ -680,7 +683,9 @@ Typed error codes are defined in [`src/common/diagnostics/error_codes.rs`](../sr
 
 ### Crash Diagnostics & Cache Retention
 
-In the event of an unhandled panic, the engine's panic hook ([`src/common/panic_hook.rs`](../src/common/panic_hook.rs)) generates a zero-allocation diagnostic dump using a stack-allocated buffer (`[u8; 16384]`) and writes it to `~/.cache/neural-amp-modeler-rs/crash-<timestamp>-<component>.txt`.
+In the event of an unhandled panic, the engine's panic hook ([`src/common/panic_hook.rs`](../src/common/panic_hook.rs)) generates a zero-allocation diagnostic dump using a stack-allocated buffer (`[u8; 16384]`) and writes it to `~/.cache/neural-amp-modeler-rs/crash-<timestamp>-<component>.txt` on POSIX, or `%LOCALAPPDATA%\neural-amp-modeler-rs\crashes\crash-<timestamp>-<component>.txt` (falling back to `%USERPROFILE%\.cache\neural-amp-modeler-rs`) on Windows.
+
+- **PII & Path Redaction:** `ModelInfo::path_basename` uses `sanitize_model_basename` ([`src/common/diagnostics/format.rs`](../src/common/diagnostics/format.rs)) to strip directory prefixes across both `/` and `\` separators, and diagnostic formatting automatically redacts `USERPROFILE`, `LOCALAPPDATA`, drive-letter paths (`C:\...`), extended-length prefixes (`\\?\...`), and UNC shares (`\\server\share\...`).
 
 - **FIFO Retention (`MAX_CRASH_FILES = 10`):** The hook prunes the oldest files when total crash logs exceed 10.
 - **Programmatic Pruning:** Hosts can invoke `DiagnosticBundle::purge_old_reports(max_age_secs)` during startup to remove stale crash files.

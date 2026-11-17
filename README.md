@@ -72,8 +72,8 @@ The crate is host-agnostic, standalone, and general-purpose: its public API does
 | **CPU Architecture**           | `x86_64` with AVX2/FMA (`x86-64-v3` baseline), or `aarch64` (NEON) | SIMD vectorized DSP kernels                                |
 | **Linux kernel**               | 6.3 or newer (`MFD_NOEXEC_SEAL`)                                   | `memfd_create` for delay-line buffers. Kernel 6.1 returns `EINVAL`. |
 | **Rust Toolchain**             | $\ge 1.99.0$ (Edition 2024)                                        | Public MSRV promise                                        |
-| **Linker (consumers)**         | A C toolchain for the target (e.g. `gcc`/`clang`)                  | Linking the crate; no CMake needed                         |
-| **Build Tools (contributors)** | `build-essential`, `pkg-config`, `cmake`, `bash` $\ge$ 4           | C++ parity oracles, fixtures and the `./utils/` QA scripts |
+| **Linker (consumers)**         | A C/MSVC toolchain for the target (`gcc`/`clang`, or MSVC `link.exe` + Windows 11 SDK/CRT) | Linking the crate; no CMake needed                         |
+| **Build Tools (contributors)** | `build-essential`, `pkg-config`, `cmake`, `bash` $\ge$ 4 (Windows: Git for Windows `bash` $\ge$ 4, `LF` via `.gitattributes`) | C++ parity oracles, fixtures and the `./utils/` QA scripts |
 
 > **MSRV Policy:** `rust-version = "1.99.0"` in `Cargo.toml` is the guaranteed public MSRV promise. The project builds and validates on stable Rust.
 >
@@ -81,12 +81,19 @@ The crate is host-agnostic, standalone, and general-purpose: its public API does
 
 ### Supported Platforms
 
-Ubuntu Linux `x86_64` with `x86-64-v3` is the primary reference platform. Other platforms must not weaken its correctness, real-time, numerical, compatibility, or performance contracts. Platform-specific evidence gaps may require an explicit experimental designation; see the [platform priority and evidence policy](docs/architecture.md#platform-priority-and-evidence-policy). Windows support is not currently claimed.
+Ubuntu Linux `x86_64` with `x86-64-v3` is the primary reference platform. Other platforms must not weaken its correctness, real-time, numerical, compatibility, or performance contracts. Platform-specific evidence gaps require an explicit experimental designation; see the [platform priority and evidence policy](docs/architecture.md#platform-priority-and-evidence-policy).
 
-NeuralAmpModeler-rs officially supports:
+NeuralAmpModeler-rs officially supports (production):
 
 1. **`x86_64` (Linux)** with the **`x86-64-v3`** instruction set baseline (`avx`, `avx2`, `bmi1`, `bmi2`, `f16c`, `fma`, `lzcnt`, `movbe`).
 2. **`aarch64` (macOS Apple Silicon, Linux)** with native **NEON** vectorization.
+
+NeuralAmpModeler-rs also provides **Experimental Verifiable** support for **Windows 11 on versions officially supported by Microsoft**:
+
+1. **`x86_64-pc-windows-msvc`** with the mandatory **`x86-64-v3`** baseline (`avx`, `avx2`, `bmi1`, `bmi2`, `f16c`, `fma`, `lzcnt`, `movbe`).
+2. **`aarch64-pc-windows-msvc`** (native) with mandatory **`NEON`** and Windows 11 ARM64 **ARMv8.1 LSE atomics** (`PF_ARM_V81_ATOMIC_INSTRUCTIONS_AVAILABLE`).
+
+**Out of scope:** Windows 10 and earlier, Windows 11 versions/editions outside Microsoft's official support lifecycle (e.g. 24H2 Home/Pro ended 2026-10-14), 32-bit targets, `x86_64` CPUs without `x86-64-v3`, `arm64ec-pc-windows-msvc`, and `x86_64-apple-darwin` (Intel Macs).
 
 On Linux, delay-line buffers are created with `memfd_create` and `MFD_NOEXEC_SEAL` in `src/math/common/huge_alloc.rs`. That flag exists from kernel 6.3. Kernel 6.1 rejects it with `EINVAL`, and model load fails with `Invalid argument (os error 22)`. Debian 12 ships kernel 6.1.
 
@@ -122,18 +129,22 @@ brew install cmake
 
 *(Note: To execute the `./utils/` QA scripts on macOS, install bash 4+: `brew install bash`)*
 
+**Windows 11 (MSVC / Git Bash):**
+
+Crate consumers need only stable Rust ($\ge 1.99.0$) and the MSVC toolchain (`link.exe` + Windows 11 SDK/CRT; `raw-dylib` resolves `api-ms-win-core-memory-l1-1-6.dll` without manual `onecore.lib` configuration, though the MSVC linker and CRT remain required). Contributors running `./utils/*.sh` also need Git for Windows (`bash` $\ge 4$) and `LF` line endings (enforced by `.gitattributes`).
+
 ### SIMD Baseline per Architecture
 
 | Architecture | Baseline                                            | Platforms validated          |
 |:------------ |:--------------------------------------------------- |:---------------------------- |
-| `x86_64`     | `x86-64-v3` (AVX2, FMA, F16C, BMI1/2, LZCNT, MOVBE) | Linux                        |
-| `aarch64`    | NEON (part of every aarch64 target)                 | macOS (Apple Silicon), Linux |
+| `x86_64`     | `x86-64-v3` (AVX2, FMA, F16C, BMI1/2, LZCNT, MOVBE) | Linux (Production); Windows 11 (Experimental Verifiable)                      |
+| `aarch64`    | NEON (part of every aarch64 target)                 | macOS Apple Silicon, Linux (Production); Windows 11 (Experimental Verifiable) |
 
 Build-time assertions enforce the baseline for the target architecture. The optional `avx512` feature is x86_64-only.
 
 #### x86_64: `x86-64-v3`
 
-Because Cargo does not automatically propagate compiler target flags to downstream dependencies, applications depending on `NeuralAmpModeler-rs` must instruct `rustc` to target `x86-64-v3` when building for x86_64:
+Because Cargo does not automatically propagate `.cargo/config.toml` target flags (`-Ctarget-cpu=x86-64-v3`, `/OPT:REF,ICF` on MSVC, and `.cargo/hide-libm-shadow.map` on Linux ELF) to downstream `crates.io` dependencies, applications depending on `NeuralAmpModeler-rs` must instruct `rustc` to target `x86-64-v3` when building for x86_64:
 
 **Option A — In `.cargo/config.toml` (Recommended for downstream crates):**
 
@@ -157,6 +168,35 @@ No flags are needed: NEON is part of every aarch64 target (`aarch64-apple-darwin
 * **Cycle clock:** `common::tsc` reads the generic timer (`CNTVCT_EL0`), calibrated exactly from `CNTFRQ_EL0`.
 * **Page size:** delay rings are rounded to the kernel page size (16 KiB on macOS; 4/16/64 KiB on aarch64 Linux depending on the kernel).
 * **macOS:** the mirrored delay buffer is backed by unlinked POSIX shared memory (Linux uses `memfd`); huge pages are Linux-only, while `rt-hardening` on macOS provides interactive QoS, `THREAD_TIME_CONSTRAINT_POLICY`, per-buffer `mlock_region` and optional Audio Workgroups (see [`docs/rt-macos-adr.md`](docs/rt-macos-adr.md)). The QA scripts need bash ≥ 4 (`brew install bash`), e.g. `/opt/homebrew/bin/bash utils/tests-quick.sh`.
+* **Windows 11:** `MirroredBuffer` uses Win32 placeholders (`VirtualAlloc2` + `MapViewOfFile3`) rounded to the 64 KiB allocation granularity (`dwAllocationGranularity`); `common::tsc` probes `CNTFRQ_EL0`/`CNTVCT_EL0` under a Vectored Exception Handler (`VEH`) with automatic fallback to `QueryPerformanceCounter`; and `HugePageVec` routes to a 64-byte aligned heap fallback without requiring `SeLockMemoryPrivilege`.
+
+#### Windows 11 Experimental Status, Evidence & Known Gaps
+
+Windows 11 support is classified as **Experimental Verifiable**:
+
+* **Proven with evidence:**
+  * Cross-target and native compilation (`clippy -D warnings`) on `x86_64-pc-windows-msvc` and `aarch64-pc-windows-msvc`.
+  * Win32 virtual memory mirroring (`VirtualAlloc2` + `MapViewOfFile3` + 6-stage `S0`–`S5` transactional rollback + dual `UnmapViewOfFile`).
+  * Native `tests-quick.sh` suite: `2,255 passed, 0 failed` on physical Windows 11 Pro 26H2 (`Ryzen 9 3900X`), `2,254 passed` on CI `windows-2025`, and `2,265 passed` on CI `windows-11-arm` (`Cobalt 100`).
+  * Real-time heap audit (`rt_constraints` with `--features testing,heap-audit`): `12/12 passed`, zero hot-path allocations.
+  * Embedded numerical oracles (`42/42` `golden_vectors`, `21/21` `reference_oracle_f64`) and **bit-exact `0 ULP` parity (`bitwise_identical = true`, `ESR = 0.0`)** across all 7 canonical models via `nam_parity_vector compare` between Linux `x86_64`, Windows `x64`, Windows `ARM64`, Linux `ARM64`, and macOS `ARM64`.
+* **Explicit gaps (5):**
+  1. No MSVC-compiled C++ `namcore_render` oracle binary (`skip-capability:15` in `cpp_parity.rs`).
+  2. `rt-hardening` feature excluded on Windows (no `mlock`, `SCHED_FIFO`, or MMCSS).
+  3. No `tests-long.sh` certification or calibrated RT latency/jitter baseline on a Windows host (`HardwareClass::Unknown`).
+  4. `aarch64-pc-windows-msvc` validated on a hosted CI VM (`windows-11-arm`), without local physical ARM64 hardware.
+  5. No Windows audio host/plugin integration (WASAPI/ASIO), which is out of scope for the core engine.
+
+**Community reproduction on Windows 11 (Git Bash):**
+
+```bash
+cargo run --locked -p nam-preflight --bin nam_preflight
+./utils/tests-quick.sh
+cargo test --locked --test rt_constraints --features testing,heap-audit
+cargo run --locked --bin nam_parity_vector -- generate --out parity.json
+```
+
+`DiagnosticBundle` and diagnostic logs automatically redact `USERPROFILE`, `LOCALAPPDATA`, `C:\...` drive paths, and UNC paths before writing or exporting reports. See [`docs/testing.md`](docs/testing.md#310-windows-11-experimental-validation-explicit-gaps--community-audit-protocol) for the full audit protocol.
 
 #### Post-Install Verification (`simd_probe`)
 
@@ -300,7 +340,7 @@ NeuralAmpModeler-rs provides modular Cargo feature flags to tailor capabilities,
 | `heap-audit`         | Disabled    | Enables real-time allocation tracking via `CountingAllocator` to enforce zero-heap invariants.                                                                    | Diagnostics                 |
 | `testing`            | Disabled    | Exposes off-RT test utilities, audio signal generators, synthetic fixtures, and perceptual fidelity measurement oracles.                                          | Tooling / QA                |
 | `fft-radix4-planner` | Disabled    | Exposes Radix-4 DIT FFT execution planning routines (`FftPlannerRadix4`) and benchmarks.                                                                          | Tooling / Benchmarks        |
-| `rt-hardening`       | Disabled    | Opt-in real-time host hardening (Linux: THP, `mlockall`, `SCHED_FIFO`, affinity, PM-QoS; macOS: QoS, time constraint, `mlock_region`, Audio Workgroups; DAZ/FTZ). | Production (Linux/macOS RT) |
+| `rt-hardening`       | Disabled    | Opt-in real-time host hardening (Linux: THP, `mlockall`, `SCHED_FIFO`, affinity, PM-QoS; macOS: QoS, time constraint, `mlock_region`, Audio Workgroups; DAZ/FTZ; compile-time no-op on Windows via `cfg(any(target_os = "linux", target_os = "macos"))`). | Production (Linux/macOS RT) |
 | `avx512`             | Disabled    | Experimental AVX-512 kernels and instruction dispatch for research and cross-ISA validation.                                                                      | Research / Experimental     |
 
 > **Internal features:** `pinned` and `on-demand` exist only for this repository's long-test harness and developer diagnostics. They are not public API.

@@ -102,7 +102,8 @@ fn publish_calibration(mult: u64) {
 
 /// Reads the raw cycle counter, serialized against earlier instructions.
 ///
-/// x86_64: `LFENCE; RDTSC`. aarch64: `ISB; MRS CNTVCT_EL0`.
+/// x86_64: `LFENCE; RDTSC`. aarch64: `ISB; MRS CNTVCT_EL0` (on Windows ARM64,
+/// falls back to `QueryPerformanceCounter` if EL0 counter access trapped).
 #[inline(always)]
 fn read_counter() -> u64 {
     #[cfg(target_arch = "x86_64")]
@@ -114,24 +115,36 @@ fn read_counter() -> u64 {
             core::arch::x86_64::_rdtsc()
         }
     }
-    #[cfg(target_arch = "aarch64")]
+    #[cfg(all(target_arch = "aarch64", not(target_os = "windows")))]
     {
-        let cycles: u64;
-        // SAFETY: `isb` and `mrs cntvct_el0` only read a system register; no memory is
-        // accessed (`nomem`, `nostack`). EL0 access to CNTVCT_EL0 is granted by the kernel
-        // via CNTKCTL_EL1.EL0VCTEN, which Linux and macOS always set; if a kernel
-        // cleared it, the read would trap (SIGILL), which aborts the process but is not
-        // undefined behavior.
-        unsafe {
-            core::arch::asm!(
-                "isb",
-                "mrs {0}, cntvct_el0",
-                out(reg) cycles,
-                options(nomem, nostack, preserves_flags)
-            );
-        }
-        cycles
+        read_cntvct_el0()
     }
+    #[cfg(all(target_arch = "aarch64", target_os = "windows"))]
+    {
+        if ensure_win_arm64_generic_timer_accessible() {
+            read_cntvct_el0()
+        } else {
+            read_win_qpc_counter()
+        }
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+fn read_cntvct_el0() -> u64 {
+    let cycles: u64;
+    // SAFETY: `isb` and `mrs cntvct_el0` only read a system register; no memory is
+    // accessed (`nomem`, `nostack`). On Linux/macOS EL0 access is guaranteed by ABI;
+    // on Windows ARM64, callers gate this path behind `ensure_win_arm64_generic_timer_accessible`.
+    unsafe {
+        core::arch::asm!(
+            "isb",
+            "mrs {0}, cntvct_el0",
+            out(reg) cycles,
+            options(nomem, nostack, preserves_flags)
+        );
+    }
+    cycles
 }
 
 /// Returns the current time in nanoseconds from the serialized cycle counter
@@ -183,23 +196,220 @@ pub fn is_tsc_calibrated() -> bool {
 }
 
 /// Reads the generic-timer frequency in Hz (`CNTFRQ_EL0`).
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", not(target_os = "windows")))]
 fn generic_timer_frequency() -> u64 {
+    read_cntfrq_el0()
+}
+
+#[cfg(target_arch = "aarch64")]
+#[inline]
+fn read_cntfrq_el0() -> u64 {
     let freq: u64;
-    // SAFETY: CNTFRQ_EL0 is readable from EL0; no memory is accessed.
+    // SAFETY: CNTFRQ_EL0 is readable from EL0 on Linux/macOS and when gated by
+    // the Windows ARM64 trap probe; no memory is accessed.
     unsafe {
         core::arch::asm!("mrs {0}, cntfrq_el0", out(reg) freq, options(nomem, nostack, preserves_flags));
     }
     freq
 }
 
+#[cfg(all(target_arch = "aarch64", target_os = "windows"))]
+mod win_arm64_timer {
+    use core::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
+    use std::sync::Mutex;
+    use windows_sys::Win32::Foundation::EXCEPTION_ILLEGAL_INSTRUCTION;
+    use windows_sys::Win32::System::Diagnostics::Debug::{
+        AddVectoredExceptionHandler, EXCEPTION_CONTINUE_EXECUTION, EXCEPTION_CONTINUE_SEARCH,
+        EXCEPTION_POINTERS, RemoveVectoredExceptionHandler,
+    };
+    use windows_sys::Win32::System::Performance::QueryPerformanceCounter;
+
+    const EXCEPTION_PRIVILEGED_INSTRUCTION: i32 = 0xC000_0096_u32 as i32;
+
+    const STATE_UNTESTED: u8 = 0;
+    const STATE_ACCESSIBLE: u8 = 1;
+    const STATE_UNAVAILABLE: u8 = 2;
+
+    static TIMER_STATE: AtomicU8 = AtomicU8::new(STATE_UNTESTED);
+    static PROBE_LOCK: Mutex<()> = Mutex::new(());
+    static PROBE_FAULT_PC: AtomicUsize = AtomicUsize::new(0);
+    static PROBE_TRAPPED: AtomicBool = AtomicBool::new(false);
+
+    struct VehGuard(*mut core::ffi::c_void);
+
+    impl Drop for VehGuard {
+        fn drop(&mut self) {
+            if !self.0.is_null() {
+                // SAFETY: `self.0` is a handle returned by `AddVectoredExceptionHandler`
+                // and is removed once on drop before releasing `PROBE_LOCK`.
+                unsafe {
+                    RemoveVectoredExceptionHandler(self.0);
+                }
+            }
+            PROBE_FAULT_PC.store(0, Ordering::Release);
+        }
+    }
+
+    unsafe extern "system" fn probe_veh_handler(info: *mut EXCEPTION_POINTERS) -> i32 {
+        if info.is_null() {
+            return EXCEPTION_CONTINUE_SEARCH;
+        }
+        // SAFETY: `info` is provided by Windows SEH dispatch; we validate non-null
+        // record/context pointers before dereferencing and only intercept traps at
+        // the exact probing `mrs` instruction address stored in `PROBE_FAULT_PC`.
+        unsafe {
+            let record = (*info).ExceptionRecord;
+            let ctx = (*info).ContextRecord;
+            if record.is_null() || ctx.is_null() {
+                return EXCEPTION_CONTINUE_SEARCH;
+            }
+            let code = (*record).ExceptionCode;
+            if code != EXCEPTION_ILLEGAL_INSTRUCTION && code != EXCEPTION_PRIVILEGED_INSTRUCTION {
+                return EXCEPTION_CONTINUE_SEARCH;
+            }
+            let expected_pc = PROBE_FAULT_PC.load(Ordering::Acquire);
+            if expected_pc == 0 || (*ctx).Pc as usize != expected_pc {
+                return EXCEPTION_CONTINUE_SEARCH;
+            }
+            PROBE_TRAPPED.store(true, Ordering::Release);
+            // All AArch64 instructions are fixed 4 bytes; skip the faulting `mrs`.
+            (*ctx).Pc = (*ctx).Pc.wrapping_add(4);
+            EXCEPTION_CONTINUE_EXECUTION
+        }
+    }
+
+    #[inline(never)]
+    fn try_read_cntfrq_el0() -> Option<u64> {
+        let mut val: u64 = 0;
+        PROBE_TRAPPED.store(false, Ordering::Release);
+        let pc_slot = PROBE_FAULT_PC.as_ptr();
+        // SAFETY: `pc_slot` points to `PROBE_FAULT_PC` static atomic storage;
+        // `probe_veh_handler` intercepts any EL0 trap specifically on label `1:`
+        // and skips the 4-byte `mrs` instruction while setting `PROBE_TRAPPED`.
+        unsafe {
+            core::arch::asm!(
+                "adr {pc}, 1f",
+                "str {pc}, [{pc_slot}]",
+                "dmb ish",
+                "1:",
+                "mrs {val}, cntfrq_el0",
+                "str xzr, [{pc_slot}]",
+                pc = out(reg) _,
+                pc_slot = in(reg) pc_slot,
+                val = inout(reg) val,
+                options(nostack, preserves_flags),
+            );
+        }
+        if PROBE_TRAPPED.load(Ordering::Acquire) {
+            None
+        } else {
+            Some(val)
+        }
+    }
+
+    #[inline(never)]
+    fn try_read_cntvct_el0() -> Option<u64> {
+        let mut val: u64 = 0;
+        PROBE_TRAPPED.store(false, Ordering::Release);
+        let pc_slot = PROBE_FAULT_PC.as_ptr();
+        // SAFETY: `pc_slot` points to `PROBE_FAULT_PC` static atomic storage;
+        // `probe_veh_handler` intercepts any EL0 trap specifically on label `2:`
+        // and skips the 4-byte `mrs` instruction while setting `PROBE_TRAPPED`.
+        unsafe {
+            core::arch::asm!(
+                "isb",
+                "adr {pc}, 2f",
+                "str {pc}, [{pc_slot}]",
+                "dmb ish",
+                "2:",
+                "mrs {val}, cntvct_el0",
+                "str xzr, [{pc_slot}]",
+                pc = out(reg) _,
+                pc_slot = in(reg) pc_slot,
+                val = inout(reg) val,
+                options(nostack, preserves_flags),
+            );
+        }
+        if PROBE_TRAPPED.load(Ordering::Acquire) {
+            None
+        } else {
+            Some(val)
+        }
+    }
+
+    pub(super) fn ensure_accessible() -> bool {
+        match TIMER_STATE.load(Ordering::Acquire) {
+            STATE_ACCESSIBLE => return true,
+            STATE_UNAVAILABLE => return false,
+            _ => {}
+        }
+        let _guard = PROBE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        match TIMER_STATE.load(Ordering::Acquire) {
+            STATE_ACCESSIBLE => return true,
+            STATE_UNAVAILABLE => return false,
+            _ => {}
+        }
+
+        // SAFETY: Registers a first-chance vectored exception handler only for
+        // the duration of `_veh`, scoped to `PROBE_LOCK`.
+        let veh = unsafe { AddVectoredExceptionHandler(1, Some(probe_veh_handler)) };
+        let _veh = VehGuard(veh);
+
+        let accessible =
+            !veh.is_null() && try_read_cntfrq_el0().is_some() && try_read_cntvct_el0().is_some();
+
+        TIMER_STATE.store(
+            if accessible {
+                STATE_ACCESSIBLE
+            } else {
+                STATE_UNAVAILABLE
+            },
+            Ordering::Release,
+        );
+        accessible
+    }
+
+    #[inline]
+    pub(super) fn read_qpc_counter() -> u64 {
+        let mut count: i64 = 0;
+        // SAFETY: `count` is a valid stack-allocated `i64` out-parameter.
+        let ok = unsafe { QueryPerformanceCounter(&raw mut count) };
+        if ok != 0 && count >= 0 {
+            count as u64
+        } else {
+            0
+        }
+    }
+}
+
+#[cfg(all(target_arch = "aarch64", target_os = "windows"))]
+#[inline]
+fn ensure_win_arm64_generic_timer_accessible() -> bool {
+    win_arm64_timer::ensure_accessible()
+}
+
+#[cfg(all(target_arch = "aarch64", target_os = "windows"))]
+#[inline]
+fn read_win_qpc_counter() -> u64 {
+    win_arm64_timer::read_qpc_counter()
+}
+
+#[cfg(all(target_arch = "aarch64", target_os = "windows"))]
+fn generic_timer_frequency() -> u64 {
+    if ensure_win_arm64_generic_timer_accessible() {
+        read_cntfrq_el0()
+    } else {
+        0
+    }
+}
+
 /// Plausible generic-timer frequency range. Armv8.6+ fixes the frequency at
 /// 1 GHz; earlier systems commonly use 19.2–100 MHz (24 MHz on Apple Silicon).
-#[cfg(target_arch = "aarch64")]
+#[cfg(any(test, target_arch = "aarch64"))]
 const GENERIC_TIMER_PLAUSIBLE_HZ: std::ops::RangeInclusive<u64> = 1_000_000..=1_000_000_000;
 
 /// Where the aarch64 calibration rate came from.
-#[cfg(target_arch = "aarch64")]
+#[cfg(any(test, target_arch = "aarch64"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum GenericTimerSource {
     /// `CNTFRQ_EL0`, used as-is (exact).
@@ -216,7 +426,7 @@ enum GenericTimerSource {
 /// not detect a wrong register value anyway. Only a zero or out-of-range value
 /// (misprogrammed firmware) falls back to `measure`, which returns
 /// `(elapsed_cycles, elapsed_nanos)`. Returns `None` when neither is usable.
-#[cfg(target_arch = "aarch64")]
+#[cfg(any(test, target_arch = "aarch64"))]
 fn choose_generic_timer_mult(
     reported_hz: u64,
     measure: impl FnOnce() -> Option<(u64, u64)>,
@@ -227,6 +437,21 @@ fn choose_generic_timer_mult(
     }
     let (cycles, nanos) = measure()?;
     mult_for_rate(cycles, nanos).map(|m| (m, GenericTimerSource::Measured))
+}
+
+/// Selects the Windows ARM64 calibration outcome given whether EL0 counter
+/// access succeeded without trapping.
+#[cfg(any(test, all(target_arch = "aarch64", target_os = "windows")))]
+fn calibrate_aarch64_with_probe(
+    el0_accessible: bool,
+    reported_hz: impl FnOnce() -> u64,
+    measure: impl FnOnce() -> Option<(u64, u64)>,
+) -> Option<(u64, GenericTimerSource, u64)> {
+    if !el0_accessible {
+        return None;
+    }
+    let hz = reported_hz();
+    choose_generic_timer_mult(hz, measure).map(|(mult, source)| (mult, source, hz))
 }
 
 /// Measures the generic timer against `Instant` over `windows` windows of
@@ -264,7 +489,9 @@ fn measure_generic_timer(window: Duration, windows: usize) -> Option<(u64, u64)>
 /// aarch64: from the architected generic-timer frequency (`CNTFRQ_EL0`),
 /// exact and without blocking whenever the value is plausible. Only a zero or
 /// implausible value (misprogrammed firmware) triggers a short measurement
-/// (best of three 5 ms windows), with a warning.
+/// (best of three 5 ms windows), with a warning. On Windows ARM64, EL0 access
+/// to `CNTVCT_EL0`/`CNTFRQ_EL0` is probed safely first; if inaccessible,
+/// `TSC_MULT` stays `0` so [`rdtsc_nanos`] uses `Instant` (QPC) fallback.
 ///
 /// Runs only once at program startup (cold-path).
 #[cfg(target_arch = "aarch64")]
@@ -273,29 +500,65 @@ pub fn calibrate_tsc() {
     if is_tsc_calibrated() {
         return;
     }
-    let reported_hz = generic_timer_frequency();
-    let measure = || measure_generic_timer(Duration::from_millis(5), 3);
-    match choose_generic_timer_mult(reported_hz, measure) {
-        Some((mult, GenericTimerSource::Register)) => {
-            publish_calibration(mult);
-            log::info!(
-                "Generic timer (CNTVCT_EL0) calibrated at {:.3} MHz from CNTFRQ_EL0",
-                reported_hz as f64 / 1.0e6
-            );
-        }
-        Some((mult, GenericTimerSource::Measured)) => {
-            publish_calibration(mult);
+    #[cfg(target_os = "windows")]
+    {
+        let accessible = ensure_win_arm64_generic_timer_accessible();
+        if !accessible {
             log::warn!(
-                "CNTFRQ_EL0 reports an implausible {} Hz; generic timer calibrated \
-                 from a measurement instead",
-                reported_hz
+                "ARM64 generic timer (CNTVCT_EL0/CNTFRQ_EL0) inaccessible in EL0 on Windows \
+                 (arm64-generic-timer-unavailable) — cycle clock left uncalibrated (Instant/QPC fallback)"
             );
+            return;
         }
-        None => log::warn!(
-            "Generic timer could not be calibrated (CNTFRQ_EL0 = {} Hz, no usable \
-             measurement) — cycle clock left uncalibrated (Instant fallback)",
-            reported_hz
-        ),
+        let measure = || measure_generic_timer(Duration::from_millis(5), 3);
+        match calibrate_aarch64_with_probe(accessible, generic_timer_frequency, measure) {
+            Some((mult, GenericTimerSource::Register, reported_hz)) => {
+                publish_calibration(mult);
+                log::info!(
+                    "Generic timer (CNTVCT_EL0) calibrated at {:.3} MHz from CNTFRQ_EL0",
+                    reported_hz as f64 / 1.0e6
+                );
+            }
+            Some((mult, GenericTimerSource::Measured, reported_hz)) => {
+                publish_calibration(mult);
+                log::warn!(
+                    "CNTFRQ_EL0 reports an implausible {} Hz; generic timer calibrated \
+                     from Instant/QPC measurement instead",
+                    reported_hz
+                );
+            }
+            None => log::warn!(
+                "Generic timer could not be calibrated on Windows ARM64 \
+                 (arm64-generic-timer-unavailable) — cycle clock left uncalibrated (Instant/QPC fallback)"
+            ),
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let reported_hz = generic_timer_frequency();
+        let measure = || measure_generic_timer(Duration::from_millis(5), 3);
+        match choose_generic_timer_mult(reported_hz, measure) {
+            Some((mult, GenericTimerSource::Register)) => {
+                publish_calibration(mult);
+                log::info!(
+                    "Generic timer (CNTVCT_EL0) calibrated at {:.3} MHz from CNTFRQ_EL0",
+                    reported_hz as f64 / 1.0e6
+                );
+            }
+            Some((mult, GenericTimerSource::Measured)) => {
+                publish_calibration(mult);
+                log::warn!(
+                    "CNTFRQ_EL0 reports an implausible {} Hz; generic timer calibrated \
+                     from a measurement instead",
+                    reported_hz
+                );
+            }
+            None => log::warn!(
+                "Generic timer could not be calibrated (CNTFRQ_EL0 = {} Hz, no usable \
+                 measurement) — cycle clock left uncalibrated (Instant fallback)",
+                reported_hz
+            ),
+        }
     }
 }
 

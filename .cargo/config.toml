@@ -47,3 +47,16 @@ rustflags = [
   # Remove unreachable code and metadata from the final Mach-O image.
   "-Clink-arg=-Wl,-dead_strip",
 ]
+
+[target.x86_64-pc-windows-msvc]
+rustflags = [
+  # `-Ctarget-cpu=x86-64-v3` is inherited from `[target.'cfg(target_arch = "x86_64")']`.
+  # Discard unreferenced functions and fold identical COMDAT sections in PE/COFF binaries.
+  "-Clink-arg=/OPT:REF,ICF",
+]
+
+[target.aarch64-pc-windows-msvc]
+rustflags = [
+  "-Ctarget-feature=+neon",
+  "-Clink-arg=/OPT:REF,ICF",
+]

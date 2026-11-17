@@ -25,8 +25,17 @@ rc=0
   set -e
   unset CARGO_TARGET_DIR || true
   cd "$d"
-  for t in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu aarch64-apple-darwin; do
-    rustup target list --installed | grep -qx "$t" || { echo "ERROR: target $t missing (run: rustup target add $t)" >&2; exit 1; }
+  installed=$(rustup target list --installed)
+  targets=(x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu aarch64-apple-darwin)
+  for t in "${targets[@]}"; do
+    printf '%s\n' "$installed" | grep -qx "$t" || { echo "ERROR: target $t missing (run: rustup target add $t)" >&2; exit 1; }
+  done
+  for wt in x86_64-pc-windows-msvc aarch64-pc-windows-msvc; do
+    if printf '%s\n' "$installed" | grep -qx "$wt"; then
+      targets+=("$wt")
+    else
+      echo "GAP:target-not-installed:$wt" >> "$d/gaps.txt"
+    fi
   done
   if env -u RUSTFLAGS cargo check --target x86_64-unknown-linux-gnu --message-format=json > bare.json 2> bare.log; then
     echo "consumer x86 sem flag: verde (esperado FAIL)" >&2; exit 1
@@ -42,8 +51,8 @@ rc=0
     echo "consumer x86 sem flag: causa inesperada (code=${code:-?} role=${role:-?})" >&2
     cat "$contract" bare.log >&2; exit 1
   }
-  for t in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu aarch64-apple-darwin; do
-    flags=""; [ "$t" = x86_64-unknown-linux-gnu ] && flags="-Ctarget-cpu=x86-64-v3"
+  for t in "${targets[@]}"; do
+    case "$t" in x86_64-*) flags="-Ctarget-cpu=x86-64-v3" ;; *) flags="" ;; esac
     RUSTFLAGS="$flags" cargo check --target "$t" || { echo "consumer $t: FAIL" >&2; exit 1; }
   done
   host_t=$(rustc -vV | sed -n 's/^host: //p')
@@ -54,5 +63,11 @@ if [ "$rc" -ne 0 ]; then
   cat "$log" >&2 || true
   FAILS+=("consumer-smoke"); emit "PHASE: consumer-smoke FAIL rc=$rc log=$log"; finish || true; exit 1
 fi
-emit "PHASE: consumer-smoke PASS log=$log"
+if [ -s "$d/gaps.txt" ]; then
+  while IFS= read -r g; do
+    gap "consumer-smoke:${g#GAP:}"
+  done < "$d/gaps.txt"
+else
+  emit "PHASE: consumer-smoke PASS log=$log"
+fi
 finish
