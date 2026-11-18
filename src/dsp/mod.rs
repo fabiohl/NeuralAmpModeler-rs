@@ -8,12 +8,16 @@
 pub mod adaptive;
 /// Cabinet simulator: impulse response convolution engine (mono/stereo, variable-length).
 pub mod cabsim;
+/// Input calibration and output level mode math for neural amp models.
+pub mod calibration;
 /// Noise gate: envelope-based gate with configurable hysteresis and fade curve.
 pub mod gate;
 /// Gate runtime state flags: per-sample clipping, gain applied, gate open/closed signaling.
 pub mod gate_flags;
 /// Mirror buffer: zero-copy virtual-memory ring buffer with automatic GPU/DMA mirroring.
 pub mod mirror_buf;
+/// Reference-compatible musical noise gate (quadratic downward expander).
+pub mod musical_gate;
 /// Oversampling engine: 2× UPSAMPLE → PROCESS → 2× DOWNSAMPLE via half-band FIR stages.
 pub mod oversample;
 /// DSP processing pipeline: staged audio graph with input, inference, output, and telemetry.

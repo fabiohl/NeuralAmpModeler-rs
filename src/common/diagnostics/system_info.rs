@@ -21,6 +21,11 @@ pub fn set_host_library_version(version: String) {
     let _ = HOST_LIBRARY_VERSION.set(version);
 }
 
+/// Returns the registered host library version, if set.
+pub(crate) fn host_library_version() -> Option<&'static str> {
+    HOST_LIBRARY_VERSION.get().map(String::as_str)
+}
+
 /// Snapshot of the execution environment, captured once at startup.
 ///
 /// Includes static system information useful for triage:

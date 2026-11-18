@@ -246,3 +246,57 @@ fn test_production_crash_directory_windows_and_posix_fallbacks() {
         None
     );
 }
+
+#[test]
+fn test_panic_report_reads_host_library_version_set_after_hook_install() {
+    let mut snap = SystemSnapshot::capture();
+    snap.host_library_version = None;
+
+    crate::common::diagnostics::set_host_library_version("test-host 1.2.3".to_string());
+
+    let mut buf = [0u8; 16384];
+    let n = format_panic_report_to_buf(
+        &mut buf,
+        "test-component",
+        "test-thread",
+        "src/test.rs:1:1",
+        "test panic message",
+        Some(&snap),
+    );
+    let report = std::str::from_utf8(&buf[..n]).expect("report is utf-8");
+    assert!(
+        report.contains("host_library=test-host 1.2.3"),
+        "expected dynamic host_library_version fallback, got:\n{report}"
+    );
+}
+
+#[test]
+fn test_panic_report_suppression_guard_skips_file_write() {
+    let crash_dir = std::path::PathBuf::from("target/test_crashes_suppressed");
+    let _ = std::fs::remove_dir_all(&crash_dir);
+    std::fs::create_dir_all(&crash_dir).expect("create test crash dir");
+    let _env = EnvVarGuard::set("NAM_CRASH_DIR", &crash_dir);
+
+    install_panic_hook("test-suppression");
+    assert!(!PANIC_REPORT_SUPPRESSED.with(|c| c.get()));
+
+    {
+        let _guard = suppress_panic_report_on_current_thread();
+        assert!(PANIC_REPORT_SUPPRESSED.with(|c| c.get()));
+        let res = std::panic::catch_unwind(|| {
+            panic!("contained third-party panic");
+        });
+        assert!(res.is_err());
+    }
+
+    assert!(!PANIC_REPORT_SUPPRESSED.with(|c| c.get()));
+    let entries: Vec<_> = std::fs::read_dir(&crash_dir)
+        .expect("read test crash dir")
+        .filter_map(|e| e.ok())
+        .collect();
+    assert!(
+        entries.is_empty(),
+        "expected no crash file when suppression guard is active, found: {entries:?}"
+    );
+    let _ = std::fs::remove_dir_all(&crash_dir);
+}

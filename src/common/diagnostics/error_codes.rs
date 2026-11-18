@@ -211,9 +211,37 @@ pub enum NamErrorCode {
     CpuAffinityFailed,
     /// Audio processing exceeded the deadline budget.
     ProcessingOverload,
+    /// Oversampling scratch buffer capacity exceeded.
+    OsScratchCapacity,
+    /// Failed to write CPU DMA latency PM QoS request.
+    PmQosWriteFailed,
+    /// Permission denied accessing `/dev/cpu_dma_latency`.
+    PmQosAccessDenied,
+    /// Hardware audio sink probe failed.
+    HwSinkProbeFailed,
+    /// Hardware audio sink probe timed out.
+    HwSinkProbeTimeout,
+    /// Hardware audio sink probe output was truncated.
+    HwSinkProbeTruncated,
+    /// Failed to query OS memory page size.
+    PageSizeQueryFailed,
+    /// Host log quiescence barrier stalled.
+    HostLogQuiescenceStalled,
+    /// Host callback quiescence barrier stalled.
+    HostCallQuiescenceStalled,
+    /// Failed to query real-time thread scheduling policy.
+    RtGetSchedFailed,
     /// The audio host renegotiated a format diverging from the strict
     /// contract (e.g. non-planar, incorrect channel count).
     HostFormatContractViolation,
+    /// Non-finite audio input (NaN/Inf) contained and zeroed.
+    NonFiniteInputContained,
+    /// Requested CPU core index is out of bounds.
+    CpuOutOfBounds,
+    /// Audio sample rate mismatch between host and engine.
+    RateMismatch,
+    /// Failed to apply real-time thread scheduling policy.
+    RtSchedFailed,
     /// The audio backend lost fatal connectivity (stream error or post-streaming
     /// disconnect) and the host is terminating observably — fail-fast.
     BackendFailure,
@@ -227,6 +255,10 @@ pub enum NamErrorCode {
     GcCorrupted,
     /// Invalid SPSC channel capacity (must be greater than 0 and capacity * 4 must not overflow).
     InvalidSpscCapacity,
+    /// Failed to apply slimmable channel slice.
+    SlimmableSliceFailed,
+    /// Failed to reset slimmable submodel state.
+    SlimmableResetFailed,
 
     // E4xxx — Runtime / CLI
     // Reserved for downstream integrations (e.g., CLI tools, plugin wrappers):
@@ -310,12 +342,28 @@ impl NamErrorCode {
             Self::RtPriorityDenied => "E2300",
             Self::CpuAffinityFailed => "E2301",
             Self::ProcessingOverload => "E2001",
+            Self::OsScratchCapacity => "E2004",
+            Self::PmQosWriteFailed => "E2111",
+            Self::PmQosAccessDenied => "E2112",
+            Self::HwSinkProbeFailed => "E2113",
+            Self::HwSinkProbeTimeout => "E2114",
+            Self::HwSinkProbeTruncated => "E2115",
+            Self::PageSizeQueryFailed => "E2120",
+            Self::HostLogQuiescenceStalled => "E2130",
+            Self::HostCallQuiescenceStalled => "E2131",
+            Self::RtGetSchedFailed => "E2303",
             Self::HostFormatContractViolation => "E2304",
+            Self::NonFiniteInputContained => "E2305",
+            Self::CpuOutOfBounds => "E2306",
+            Self::RateMismatch => "E2307",
+            Self::RtSchedFailed => "E2308",
             Self::BackendFailure => "E2302",
             Self::ParamChannelFull => "E3100",
             Self::GcOverflow => "E3101",
             Self::GcCorrupted => "E3102",
             Self::InvalidSpscCapacity => "E3103",
+            Self::SlimmableSliceFailed => "E3104",
+            Self::SlimmableResetFailed => "E3105",
             Self::InvalidGainValue => "E4100",
             Self::UnknownCommand => "E4101",
             Self::CtrlCHandlerFailed => "E4102",
@@ -422,9 +470,25 @@ impl NamErrorCode {
             Self::RtPriorityDenied => "Real-time priority denied",
             Self::CpuAffinityFailed => "CPU affinity setting failed",
             Self::ProcessingOverload => "Processing deadline exceeded",
+            Self::OsScratchCapacity => "Oversampling scratch buffer capacity exceeded",
+            Self::PmQosWriteFailed => "Failed to write CPU DMA latency PM QoS request",
+            Self::PmQosAccessDenied => "Permission denied accessing /dev/cpu_dma_latency",
+            Self::HwSinkProbeFailed => "Hardware audio sink probe failed",
+            Self::HwSinkProbeTimeout => "Hardware audio sink probe timed out",
+            Self::HwSinkProbeTruncated => "Hardware audio sink probe output was truncated",
+            Self::PageSizeQueryFailed => "Failed to query OS memory page size",
+            Self::HostLogQuiescenceStalled => "Host log quiescence barrier stalled",
+            Self::HostCallQuiescenceStalled => "Host callback quiescence barrier stalled",
+            Self::RtGetSchedFailed => "Failed to query real-time thread scheduling policy",
             Self::HostFormatContractViolation => {
                 "Audio host format contract violation (expected planar float stereo)"
             }
+            Self::NonFiniteInputContained => {
+                "Non-finite audio input (NaN/Inf) contained and zeroed"
+            }
+            Self::CpuOutOfBounds => "Requested CPU core index is out of bounds",
+            Self::RateMismatch => "Audio sample rate mismatch between host and engine",
+            Self::RtSchedFailed => "Failed to apply real-time thread scheduling policy",
             Self::BackendFailure => "Audio backend failure",
             Self::ParamChannelFull => "Parameter channel full",
             Self::GcOverflow => "Garbage collection overflow",
@@ -432,6 +496,8 @@ impl NamErrorCode {
             Self::InvalidSpscCapacity => {
                 "Invalid SPSC channel capacity (must be greater than 0 and capacity * 4 must not overflow)"
             }
+            Self::SlimmableSliceFailed => "Failed to apply slimmable channel slice",
+            Self::SlimmableResetFailed => "Failed to reset slimmable submodel state",
             Self::InvalidGainValue => "Invalid gain value",
             Self::UnknownCommand => "Unknown command",
             Self::CtrlCHandlerFailed => "Ctrl-C handler setup failed",
@@ -500,12 +566,28 @@ impl NamErrorCode {
             Self::RtPriorityDenied => "RT_PRIORITY_DENIED",
             Self::CpuAffinityFailed => "CPU_AFFINITY_FAILED",
             Self::ProcessingOverload => "PROCESSING_OVERLOAD",
+            Self::OsScratchCapacity => "OS_SCRATCH_CAPACITY",
+            Self::PmQosWriteFailed => "PM_QOS_WRITE_FAILED",
+            Self::PmQosAccessDenied => "PM_QOS_ACCESS_DENIED",
+            Self::HwSinkProbeFailed => "HW_SINK_PROBE_FAILED",
+            Self::HwSinkProbeTimeout => "HW_SINK_PROBE_TIMEOUT",
+            Self::HwSinkProbeTruncated => "HW_SINK_PROBE_TRUNCATED",
+            Self::PageSizeQueryFailed => "PAGE_SIZE_QUERY_FAILED",
+            Self::HostLogQuiescenceStalled => "HOST_LOG_QUIESCENCE_STALLED",
+            Self::HostCallQuiescenceStalled => "HOST_CALL_QUIESCENCE_STALLED",
+            Self::RtGetSchedFailed => "RT_GET_SCHED_FAILED",
             Self::HostFormatContractViolation => "HOST_FORMAT_CONTRACT_VIOLATION",
+            Self::NonFiniteInputContained => "NON_FINITE_INPUT_CONTAINED",
+            Self::CpuOutOfBounds => "CPU_OUT_OF_BOUNDS",
+            Self::RateMismatch => "RATE_MISMATCH",
+            Self::RtSchedFailed => "RT_SCHED_FAILED",
             Self::BackendFailure => "BACKEND_FAILURE",
             Self::ParamChannelFull => "PARAM_CHANNEL_FULL",
             Self::GcOverflow => "GC_OVERFLOW",
             Self::GcCorrupted => "GC_CORRUPTED",
             Self::InvalidSpscCapacity => "INVALID_SPSC_CAPACITY",
+            Self::SlimmableSliceFailed => "SLIMMABLE_SLICE_FAILED",
+            Self::SlimmableResetFailed => "SLIMMABLE_RESET_FAILED",
             Self::InvalidGainValue => "INVALID_GAIN_VALUE",
             Self::UnknownCommand => "UNKNOWN_COMMAND",
             Self::CtrlCHandlerFailed => "CTRL_C_HANDLER_FAILED",

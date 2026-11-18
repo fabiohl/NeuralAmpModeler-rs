@@ -573,11 +573,11 @@ show where a cache *could* help and why it is not justified now:
   transparent restore would therefore need provenance tracking and would change
   the documented `prewarm_reset` contract (it currently always arms pending
   work, which consumers and split-equivalence tests rely on).
-* **Consumer path:** `NAM-Plug` already amortizes stabilization through the
-  split primitives and holds the dry path until convergence
-  (consumer `clap/processor/mod.rs` reset/prewarm drain), preserving a bit-exact
-  split-vs-integral result. A cache would add invalidation surface (weights,
-  rate, geometry, precision) for a latency win the consumer already abstracts.
+* **Consumer path:** Downstream hosts already amortize stabilization through the
+  split primitives and hold the dry path until convergence during reset/prewarm
+  drains, preserving a bit-exact split-vs-integral result. A cache would add
+  invalidation surface (weights, rate, geometry, precision) for a latency win
+  the consumer already abstracts.
 * **Evidence gate:** these are indicative local Criterion numbers on the
   reference host; the calibrated long/RT gates remain operator-run, so
   promoting a cache as a verified gain would require a dedicated performance

@@ -386,7 +386,8 @@ pub fn run_inference(
         let host_rate = ctx.resampler.host_rate();
         let nam_rate = ctx.resampler.nam_rate();
         let max_input_per_pass =
-            NamResampler::max_input_samples(MAX_RESAMP_BUF, host_rate, nam_rate);
+            NamResampler::max_input_samples_checked(MAX_RESAMP_BUF, host_rate, nam_rate)
+                .unwrap_or(0);
 
         let mut total_output: usize = 0;
         let mut input_offset: usize = 0;

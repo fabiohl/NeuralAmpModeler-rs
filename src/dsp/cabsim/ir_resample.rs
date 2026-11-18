@@ -16,16 +16,18 @@ use std::io;
 /// This is a batch/offline operation: feeds the entire IR through `NamResampler`
 /// and pads with zeros to flush the filter’s delay line.
 pub(crate) fn resample(input: &[f32], input_rate: u32, output_rate: u32) -> io::Result<Vec<f32>> {
-    let mut resampler = NamResampler::new_simple(input_rate, output_rate).map_err(|e| {
+    let mut resampler = NamResampler::new_simple_typed(input_rate, output_rate).map_err(|e| {
         io::Error::other(format!(
-            "IR resample failed ({} Hz → {} Hz): {:#}",
+            "IR resample failed ({} Hz → {} Hz): {}",
             input_rate, output_rate, e
         ))
     })?;
 
     // Bounded by both buffers: when downsampling, the output bound exceeds `in_buf`.
-    let max_input_chunk = NamResampler::max_input_samples(MAX_RESAMP_BUF, input_rate, output_rate)
-        .min(MAX_RESAMP_BUF);
+    let max_input_chunk =
+        NamResampler::max_input_samples_checked(MAX_RESAMP_BUF, input_rate, output_rate)
+            .unwrap_or(0)
+            .min(MAX_RESAMP_BUF);
 
     let est_len =
         ((input.len() as f64 * output_rate as f64 / input_rate as f64).ceil() as usize) + 256;

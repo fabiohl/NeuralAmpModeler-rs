@@ -25,6 +25,7 @@
 //! installs the global logger and subsequent instances reuse it without
 //! triggering `SetLoggerError`.
 
+use core::fmt::NumBuffer;
 use log::{LevelFilter, Log, Metadata, Record, SetLoggerError};
 use std::cell::Cell;
 use std::collections::VecDeque;
@@ -155,9 +156,39 @@ impl LogRecord {
 /// capacity is exceeded, the oldest entry is discarded (FIFO). Designed
 /// exclusively for off-RT use; the `try_push` variant is safe to call from
 /// panic hooks because it falls back gracefully on lock contention.
+/// Writes a single log record line to `writer` without heap allocations,
+/// appending ` (repeated {count}x)` when `repeat_count > 1`.
+fn write_log_line(writer: &mut impl std::fmt::Write, record: &LogRecord, repeat_count: u32) {
+    let mut ts_buf = NumBuffer::new();
+    let _ = write!(
+        writer,
+        "[{}] {} {}: {}",
+        record.timestamp_secs.format_into(&mut ts_buf),
+        record.level,
+        record.target,
+        record.message
+    );
+    if repeat_count > 1 {
+        let mut count_buf = NumBuffer::new();
+        let _ = write!(
+            writer,
+            " (repeated {}x)",
+            repeat_count.format_into(&mut count_buf)
+        );
+    }
+    let _ = writeln!(writer);
+}
+
+/// Thread-safe ring buffer for retaining a bounded history of log entries.
+///
+/// Uses a `Mutex<VecDeque<(LogRecord, u32)>>` with a fixed maximum capacity.
+/// Consecutive identical records are coalesced in place by incrementing the
+/// repeat counter; when capacity is exceeded, the oldest entry is discarded
+/// (FIFO). Designed exclusively for off-RT use; the `try_push` variant is safe
+/// to call from panic hooks because it falls back gracefully on lock contention.
 #[derive(Debug)]
 pub struct LogBuffer {
-    inner: Mutex<VecDeque<LogRecord>>,
+    inner: Mutex<VecDeque<(LogRecord, u32)>>,
     capacity: usize,
 }
 
@@ -177,16 +208,30 @@ impl LogBuffer {
         }
     }
 
-    /// Pushes a `LogRecord` into the buffer, discarding the oldest entry if
-    /// the buffer has reached its capacity.
+    fn push_coalesced(inner: &mut VecDeque<(LogRecord, u32)>, capacity: usize, record: LogRecord) {
+        if let Some((last, count)) = inner.back_mut()
+            && last.level == record.level
+            && last.target == record.target
+            && last.message == record.message
+            && last.instance_id == record.instance_id
+        {
+            last.timestamp_secs = record.timestamp_secs;
+            *count = count.saturating_add(1);
+            return;
+        }
+        if inner.len() >= capacity {
+            inner.pop_front();
+        }
+        inner.push_back((record, 1));
+    }
+
+    /// Pushes a `LogRecord` into the buffer, coalescing consecutive identical
+    /// records or discarding the oldest entry if capacity is reached.
     ///
     /// Uses a blocking `lock()` — intended for off-RT callers.
     pub fn push(&self, record: LogRecord) {
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        if inner.len() >= self.capacity {
-            inner.pop_front();
-        }
-        inner.push_back(record);
+        Self::push_coalesced(&mut inner, self.capacity, record);
     }
 
     /// Attempts to push without blocking. Returns `false` if the lock could
@@ -197,10 +242,7 @@ impl LogBuffer {
         let Some(mut inner) = self.inner.try_lock().ok() else {
             return false;
         };
-        if inner.len() >= self.capacity {
-            inner.pop_front();
-        }
-        inner.push_back(record);
+        Self::push_coalesced(&mut inner, self.capacity, record);
         true
     }
 
@@ -211,7 +253,7 @@ impl LogBuffer {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .iter()
-            .cloned()
+            .map(|(r, _)| r.clone())
             .collect()
     }
 
@@ -221,8 +263,8 @@ impl LogBuffer {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .iter()
-            .filter(|r| r.instance_id == Some(instance_id))
-            .cloned()
+            .filter(|(r, _)| r.instance_id == Some(instance_id))
+            .map(|(r, _)| r.clone())
             .collect()
     }
 
@@ -230,7 +272,7 @@ impl LogBuffer {
     /// lock could not be acquired.
     pub fn try_snapshot(&self) -> Option<Vec<LogRecord>> {
         let inner = self.inner.try_lock().ok()?;
-        Some(inner.iter().cloned().collect())
+        Some(inner.iter().map(|(r, _)| r.clone()).collect())
     }
 
     /// Attempts to take a snapshot for a specific `instance_id` without blocking.
@@ -239,8 +281,8 @@ impl LogBuffer {
         Some(
             inner
                 .iter()
-                .filter(|r| r.instance_id == Some(instance_id))
-                .cloned()
+                .filter(|(r, _)| r.instance_id == Some(instance_id))
+                .map(|(r, _)| r.clone())
                 .collect(),
         )
     }
@@ -252,17 +294,10 @@ impl LogBuffer {
     /// `[timestamp_secs] LEVEL target: message`
     pub fn render_trace(&self, limit: usize) -> String {
         let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        let start = if inner.len() > limit {
-            inner.len() - limit
-        } else {
-            0
-        };
+        let start = inner.len().saturating_sub(limit);
         let mut out = String::with_capacity(limit * 128);
-        for record in inner.range(start..) {
-            out.push_str(&format!(
-                "[{}] {} {}: {}\n",
-                record.timestamp_secs, record.level, record.target, record.message
-            ));
+        for (record, repeat_count) in inner.range(start..) {
+            write_log_line(&mut out, record, *repeat_count);
         }
         out
     }
@@ -271,21 +306,14 @@ impl LogBuffer {
     /// as a formatted string suitable for embedding in diagnostic dumps.
     pub fn render_trace_for_instance(&self, instance_id: u64, limit: usize) -> String {
         let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        let filtered: Vec<&LogRecord> = inner
+        let filtered: Vec<&(LogRecord, u32)> = inner
             .iter()
-            .filter(|r| r.instance_id == Some(instance_id))
+            .filter(|(r, _)| r.instance_id == Some(instance_id))
             .collect();
-        let start = if filtered.len() > limit {
-            filtered.len() - limit
-        } else {
-            0
-        };
+        let start = filtered.len().saturating_sub(limit);
         let mut out = String::with_capacity(limit * 128);
-        for record in &filtered[start..] {
-            out.push_str(&format!(
-                "[{}] {} {}: {}\n",
-                record.timestamp_secs, record.level, record.target, record.message
-            ));
+        for (record, repeat_count) in &filtered[start..] {
+            write_log_line(&mut out, record, *repeat_count);
         }
         out
     }
@@ -294,17 +322,10 @@ impl LogBuffer {
     /// lock could not be acquired.
     pub fn try_render_trace(&self, limit: usize) -> Option<String> {
         let inner = self.inner.try_lock().ok()?;
-        let start = if inner.len() > limit {
-            inner.len() - limit
-        } else {
-            0
-        };
+        let start = inner.len().saturating_sub(limit);
         let mut out = String::with_capacity(limit * 128);
-        for record in inner.range(start..) {
-            out.push_str(&format!(
-                "[{}] {} {}: {}\n",
-                record.timestamp_secs, record.level, record.target, record.message
-            ));
+        for (record, repeat_count) in inner.range(start..) {
+            write_log_line(&mut out, record, *repeat_count);
         }
         Some(out)
     }
@@ -312,21 +333,14 @@ impl LogBuffer {
     /// Attempts to render a trace for a specific `instance_id` without blocking.
     pub fn try_render_trace_for_instance(&self, instance_id: u64, limit: usize) -> Option<String> {
         let inner = self.inner.try_lock().ok()?;
-        let filtered: Vec<&LogRecord> = inner
+        let filtered: Vec<&(LogRecord, u32)> = inner
             .iter()
-            .filter(|r| r.instance_id == Some(instance_id))
+            .filter(|(r, _)| r.instance_id == Some(instance_id))
             .collect();
-        let start = if filtered.len() > limit {
-            filtered.len() - limit
-        } else {
-            0
-        };
+        let start = filtered.len().saturating_sub(limit);
         let mut out = String::with_capacity(limit * 128);
-        for record in &filtered[start..] {
-            out.push_str(&format!(
-                "[{}] {} {}: {}\n",
-                record.timestamp_secs, record.level, record.target, record.message
-            ));
+        for (record, repeat_count) in &filtered[start..] {
+            write_log_line(&mut out, record, *repeat_count);
         }
         Some(out)
     }
@@ -341,18 +355,10 @@ impl LogBuffer {
             Ok(guard) => guard,
             Err(_) => return 0,
         };
-        let start = if inner.len() > limit {
-            inner.len() - limit
-        } else {
-            0
-        };
+        let start = inner.len().saturating_sub(limit);
         let mut count = 0;
-        for record in inner.range(start..) {
-            let _ = writeln!(
-                writer,
-                "[{}] {} {}: {}",
-                record.timestamp_secs, record.level, record.target, record.message
-            );
+        for (record, repeat_count) in inner.range(start..) {
+            write_log_line(writer, record, *repeat_count);
             count += 1;
         }
         count
@@ -370,22 +376,14 @@ impl LogBuffer {
             Ok(guard) => guard,
             Err(_) => return 0,
         };
-        let filtered: Vec<&LogRecord> = inner
+        let filtered: Vec<&(LogRecord, u32)> = inner
             .iter()
-            .filter(|r| r.instance_id == Some(instance_id))
+            .filter(|(r, _)| r.instance_id == Some(instance_id))
             .collect();
-        let start = if filtered.len() > limit {
-            filtered.len() - limit
-        } else {
-            0
-        };
+        let start = filtered.len().saturating_sub(limit);
         let mut count = 0;
-        for record in &filtered[start..] {
-            let _ = writeln!(
-                writer,
-                "[{}] {} {}: {}",
-                record.timestamp_secs, record.level, record.target, record.message
-            );
+        for (record, repeat_count) in &filtered[start..] {
+            write_log_line(writer, record, *repeat_count);
             count += 1;
         }
         count

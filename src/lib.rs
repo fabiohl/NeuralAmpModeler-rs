@@ -307,7 +307,12 @@ pub mod prelude {
     pub use crate::dsp::cabsim::adapter::CabSimAdapter;
     pub use crate::dsp::cabsim::conv::ConvEngine;
     pub use crate::dsp::cabsim::loader::CabSimIr;
+    pub use crate::dsp::calibration::{
+        CalibrationGains, ModelCalibrationMeta, OutputMode, compute_calibration_gains,
+        sanitize_calibration_level_dbu,
+    };
     pub use crate::dsp::gate::{GateParams, GateParamsBuilder};
+    pub use crate::dsp::musical_gate::MusicalNoiseGate;
     pub use crate::dsp::oversample::{OversampleEngine, OversampleFactor};
     pub use crate::dsp::resampler::NamResampler;
     pub use crate::dsp::utils::DelayLine;

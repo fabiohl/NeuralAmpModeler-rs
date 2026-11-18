@@ -786,6 +786,10 @@ fn test_win32_native_fault_injection_s0_to_s4() -> Result<(), Box<dyn std::error
 #[cfg(target_os = "linux")]
 #[test]
 #[serial]
+#[cfg_attr(
+    miri,
+    ignore = "MirroredBuffer allocation requires memfd_create/mmap (FFI), which Miri cannot interpret; footprint invariance is validated by the native test suite"
+)]
 fn test_mirror_buf_64kib_footprint_and_model_invariance() -> Result<(), Box<dyn std::error::Error>>
 {
     use crate::loader::dispatcher::build_model;

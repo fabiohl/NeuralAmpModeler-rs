@@ -764,3 +764,112 @@ fn test_windows_path_and_text_redaction_on_any_os() {
         ext_redacted
     );
 }
+
+#[test]
+fn test_all_nam_error_codes_have_unique_code_and_nonempty_message() {
+    use std::collections::HashSet;
+
+    let all_codes = [
+        NamErrorCode::FileNotFound,
+        NamErrorCode::FileReadError,
+        NamErrorCode::UnknownExtension,
+        NamErrorCode::NamJsonParseError,
+        NamErrorCode::NamJsonInvalidEnvelope,
+        NamErrorCode::NamJsonWeightsExceedLimit,
+        NamErrorCode::NamJsonTrainingTooLarge,
+        NamErrorCode::NamJsonTrainingTooDeep,
+        NamErrorCode::NamJsonSubmodelsExceedLimit,
+        NamErrorCode::NamJsonSubmodelsTooDeep,
+        NamErrorCode::NamJsonWeightNotFinite,
+        NamErrorCode::NamJsonInvalidSampleRate,
+        NamErrorCode::NamJsonUnsupportedTopology,
+        NamErrorCode::NamJsonInvalidVersionFormat,
+        NamErrorCode::NamJsonUnsupportedVersion,
+        NamErrorCode::NamJsonUnsupportedMultiChannel,
+        NamErrorCode::NamJsonUnknownActivation,
+        NamErrorCode::NamJsonSampleRateMismatch,
+        NamErrorCode::NamJsonValueExceedsLimit,
+        NamErrorCode::NamJsonValueTooDeep,
+        NamErrorCode::InvalidMetadata,
+        NamErrorCode::NambNonFiniteWeight,
+        NamErrorCode::NambInvalidHeaderField,
+        NamErrorCode::NambCrc32Mismatch,
+        NamErrorCode::NambCrc32Missing,
+        NamErrorCode::NambInvalidMagic,
+        NamErrorCode::NambUnsupportedVersion,
+        NamErrorCode::NambTruncated,
+        NamErrorCode::UnsupportedArchitecture,
+        NamErrorCode::TopologyDetectionFailed,
+        NamErrorCode::WeightCountMismatch,
+        NamErrorCode::ModelBuildFailed,
+        NamErrorCode::ModelTooLarge,
+        NamErrorCode::InvalidModelTopology,
+        NamErrorCode::SequentialEmptyModels,
+        NamErrorCode::SequentialIncompleteChild,
+        NamErrorCode::SequentialChannelMismatch,
+        NamErrorCode::SequentialSampleRateMismatch,
+        NamErrorCode::SequentialTopLevelWeightsNotEmpty,
+        NamErrorCode::SequentialRecursionDepthExceeded,
+        NamErrorCode::LinearInvalidChannels,
+        NamErrorCode::LinearWeightCountMismatch,
+        NamErrorCode::SequentialChildrenExceedLimit,
+        NamErrorCode::InvalidFeatureTopology,
+        NamErrorCode::WavInvalidFormat,
+        NamErrorCode::WavInvalidFile,
+        NamErrorCode::AudioInitFailed,
+        NamErrorCode::StreamError,
+        NamErrorCode::ResamplerBuildFailed,
+        NamErrorCode::ResamplerChannelFull,
+        NamErrorCode::InvalidCabsimPartitionSize,
+        NamErrorCode::RtPriorityDenied,
+        NamErrorCode::CpuAffinityFailed,
+        NamErrorCode::ProcessingOverload,
+        NamErrorCode::OsScratchCapacity,
+        NamErrorCode::PmQosWriteFailed,
+        NamErrorCode::PmQosAccessDenied,
+        NamErrorCode::HwSinkProbeFailed,
+        NamErrorCode::HwSinkProbeTimeout,
+        NamErrorCode::HwSinkProbeTruncated,
+        NamErrorCode::PageSizeQueryFailed,
+        NamErrorCode::HostLogQuiescenceStalled,
+        NamErrorCode::HostCallQuiescenceStalled,
+        NamErrorCode::RtGetSchedFailed,
+        NamErrorCode::HostFormatContractViolation,
+        NamErrorCode::NonFiniteInputContained,
+        NamErrorCode::CpuOutOfBounds,
+        NamErrorCode::RateMismatch,
+        NamErrorCode::RtSchedFailed,
+        NamErrorCode::BackendFailure,
+        NamErrorCode::ParamChannelFull,
+        NamErrorCode::GcOverflow,
+        NamErrorCode::GcCorrupted,
+        NamErrorCode::InvalidSpscCapacity,
+        NamErrorCode::SlimmableSliceFailed,
+        NamErrorCode::SlimmableResetFailed,
+        NamErrorCode::InvalidGainValue,
+        NamErrorCode::UnknownCommand,
+        NamErrorCode::CtrlCHandlerFailed,
+        NamErrorCode::IrLoadFailed,
+        NamErrorCode::OutOfMemory,
+        NamErrorCode::UnsupportedCpuArchitecture,
+    ];
+
+    let mut seen_codes = HashSet::new();
+    let mut seen_mnemonics = HashSet::new();
+    for err in all_codes {
+        let code = err.code();
+        let msg = err.message();
+        let mnemonic = err.mnemonic();
+        assert!(
+            code.starts_with('E') && code.len() == 5,
+            "unexpected code format for {err:?}: {code}"
+        );
+        assert!(!msg.is_empty(), "empty message for {err:?}");
+        assert!(!mnemonic.is_empty(), "empty mnemonic for {err:?}");
+        assert!(seen_codes.insert(code), "duplicate error code {code}");
+        assert!(
+            seen_mnemonics.insert(mnemonic),
+            "duplicate mnemonic {mnemonic}"
+        );
+    }
+}

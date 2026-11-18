@@ -194,8 +194,8 @@ fn len_and_is_empty() {
     assert!(!buf.is_empty());
     assert_eq!(buf.len(), 1);
 
-    for _ in 0..20 {
-        buf.push(LogRecord::now("DEBUG", "t", "fill"));
+    for i in 0..20 {
+        buf.push(LogRecord::now("DEBUG", "t", format!("fill-{i}")));
     }
     assert_eq!(buf.len(), 16);
 }
@@ -961,4 +961,64 @@ fn logger_config_builder_sets_all_fields() {
     assert_eq!(cfg.level_filter, LevelFilter::Warn);
     assert!(cfg.emit_stderr);
     assert_eq!(cfg.buffer_capacity, Some(1024));
+}
+
+#[test]
+fn test_log_buffer_coalesces_consecutive_duplicates_and_preserves_history() {
+    let buf = LogBuffer::new(3);
+
+    buf.push(LogRecord::now_with_instance(
+        "INFO",
+        "mod",
+        "startup",
+        Some(1),
+    ));
+    for i in 0..5 {
+        let mut rec = LogRecord::now_with_instance("ERROR", "rt", "No active model", Some(1));
+        rec.timestamp_secs = 100 + i;
+        if i % 2 == 0 {
+            buf.push(rec);
+        } else {
+            assert!(buf.try_push(rec));
+        }
+    }
+    buf.push(LogRecord::now_with_instance(
+        "WARN",
+        "mod",
+        "different message",
+        Some(1),
+    ));
+
+    // Coalescing preserved history within capacity=3 without evicting "startup".
+    assert_eq!(buf.len(), 3);
+    let snap = buf.snapshot();
+    assert_eq!(snap[0].message, "startup");
+    assert_eq!(snap[1].message, "No active model");
+    assert_eq!(snap[1].timestamp_secs, 104);
+    assert_eq!(snap[2].message, "different message");
+
+    let trace = buf.render_trace(10);
+    assert!(
+        trace.contains("[104] ERROR rt: No active model (repeated 5x)\n"),
+        "expected coalesced suffix in render_trace:\n{trace}"
+    );
+
+    let inst_trace = buf.render_trace_for_instance(1, 10);
+    assert_eq!(inst_trace, trace);
+
+    let try_trace = buf.try_render_trace(10).expect("unlocked");
+    assert_eq!(try_trace, trace);
+
+    let try_inst_trace = buf.try_render_trace_for_instance(1, 10).expect("unlocked");
+    assert_eq!(try_inst_trace, trace);
+
+    let mut into_buf = String::new();
+    let written = buf.try_render_trace_into(&mut into_buf, 10);
+    assert_eq!(written, 3);
+    assert_eq!(into_buf, trace);
+
+    let mut inst_into_buf = String::new();
+    let inst_written = buf.try_render_trace_for_instance_into(1, &mut inst_into_buf, 10);
+    assert_eq!(inst_written, 3);
+    assert_eq!(inst_into_buf, trace);
 }

@@ -35,6 +35,31 @@ static SHUTDOWN_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 
 thread_local! {
     static PANIC_HOOK_ACTIVE: Cell<bool> = const { Cell::new(false) };
+    static PANIC_REPORT_SUPPRESSED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// RAII guard that suppresses writing crash report files on the current thread
+/// while alive.
+///
+/// Intended for `catch_unwind` boundaries around third-party UI/windowing
+/// teardown where contained panics should not produce spurious `crash-*.txt`
+/// files on disk.
+#[derive(Debug)]
+pub struct PanicReportSuppressionGuard {
+    prev: bool,
+}
+
+impl Drop for PanicReportSuppressionGuard {
+    fn drop(&mut self) {
+        PANIC_REPORT_SUPPRESSED.with(|c| c.set(self.prev));
+    }
+}
+
+/// Suppresses writing crash report files (`crash-*.txt`) on the current thread
+/// for the lifetime of the returned guard.
+pub fn suppress_panic_report_on_current_thread() -> PanicReportSuppressionGuard {
+    let prev = PANIC_REPORT_SUPPRESSED.with(|c| c.replace(true));
+    PanicReportSuppressionGuard { prev }
 }
 
 /// Sets the global flag signaling that shutdown is in progress.
@@ -221,11 +246,12 @@ fn format_panic_report_to_buf(
     if let Some(system) = system {
         let _ = writeln!(w, "arch={}", system.arch);
         let _ = writeln!(w, "os={} kernel={}", system.os, system.kernel);
-        let _ = write!(
-            w,
-            "host_library={}",
-            system.host_library_version.as_deref().unwrap_or("N/A")
-        );
+        let host_lib = system
+            .host_library_version
+            .as_deref()
+            .or_else(|| crate::common::diagnostics::system_info::host_library_version())
+            .unwrap_or("N/A");
+        let _ = write!(w, "host_library={}", host_lib);
         let _ = write!(w, "\nfeatures=");
         if system.features.is_empty() {
             let _ = write!(
@@ -385,7 +411,7 @@ pub fn install_panic_hook(component: &'static str) {
 
     let prev_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        if is_shutdown_in_progress() {
+        if is_shutdown_in_progress() || PANIC_REPORT_SUPPRESSED.with(|c| c.get()) {
             prev_hook(info);
             return;
         }
