@@ -207,6 +207,10 @@ pub struct TelemetrySnapshot {
     pub input_buffer_miss: u32,
     /// Total host buffer misses on the playback (output) side.
     pub output_buffer_miss: u32,
+    /// Total DSP cycle durations discarded as implausible clock anomalies
+    /// (> 1 s). Distinct from `xruns`: these samples never reached the
+    /// latency histogram or the overload counter.
+    pub elapsed_discarded_total: u32,
 }
 
 impl TelemetrySnapshot {
@@ -222,6 +226,7 @@ impl TelemetrySnapshot {
         drains: u32,
         input_buffer_miss: u32,
         output_buffer_miss: u32,
+        elapsed_discarded_total: u32,
     ) -> Self {
         Self {
             p50_us,
@@ -233,6 +238,7 @@ impl TelemetrySnapshot {
             drains,
             input_buffer_miss,
             output_buffer_miss,
+            elapsed_discarded_total,
         }
     }
 }
@@ -253,6 +259,8 @@ pub struct RuntimeSnapshot {
     pub flags_seen: u64,
     /// Model memory footprint in bytes, if known.
     pub model_memory_bytes: Option<usize>,
+    /// Optional host-supplied telemetry counters rendered under `telemetry.<key>=<value>`.
+    pub extra_telemetry: Vec<(&'static str, u64)>,
 }
 
 impl RuntimeSnapshot {
@@ -265,6 +273,7 @@ impl RuntimeSnapshot {
             telemetry: provider.telemetry_snapshot(),
             flags_seen: provider.flags_seen(),
             model_memory_bytes: provider.model_memory_bytes(),
+            extra_telemetry: provider.extra_telemetry(),
         }
     }
 }
@@ -284,6 +293,11 @@ pub trait HasRuntimeSnapshot {
     /// Returns model memory footprint in bytes, if known.
     fn model_memory_bytes(&self) -> Option<usize> {
         None
+    }
+    /// Returns optional host-supplied telemetry counters (`(key, value)`),
+    /// rendered as `telemetry.<key>=<value>` in [`super::DiagnosticBundle`].
+    fn extra_telemetry(&self) -> Vec<(&'static str, u64)> {
+        Vec::new()
     }
 }
 
@@ -392,6 +406,7 @@ impl HasRuntimeSnapshot for crate::common::spsc::RtStatusFlags {
         let drains = self.drains.load(Ordering::Relaxed);
         let input_buffer_miss = self.input_buffer_miss.load(Ordering::Relaxed);
         let output_buffer_miss = self.output_buffer_miss.load(Ordering::Relaxed);
+        let elapsed_discarded_total = self.elapsed_discarded_total.load(Ordering::Relaxed);
 
         TelemetrySnapshot {
             p50_us,
@@ -403,6 +418,7 @@ impl HasRuntimeSnapshot for crate::common::spsc::RtStatusFlags {
             drains,
             input_buffer_miss,
             output_buffer_miss,
+            elapsed_discarded_total,
         }
     }
 

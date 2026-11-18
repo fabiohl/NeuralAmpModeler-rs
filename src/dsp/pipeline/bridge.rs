@@ -38,6 +38,12 @@ pub struct BridgeBuffer {
     pub n_samples: u32,
     /// Generation counter corresponding to the published buffer contents.
     pub generation: u64,
+    /// Capture-side start timestamp (nanoseconds, monotonic TSC domain) that
+    /// produced this buffer. `0` means "unknown" (silence placeholder or a
+    /// writer that did not publish a stamp). Travels with the generation so the
+    /// playback thread can compute capture→playback latency for the *delivered*
+    /// generation instead of the last global capture timestamp (F8 / T5.2).
+    pub capture_tsc: u64,
 }
 
 impl BridgeBuffer {
@@ -48,6 +54,7 @@ impl BridgeBuffer {
             buf_r: [0.0; MAX_BRIDGE_BUF],
             n_samples: 0,
             generation: 0,
+            capture_tsc: 0,
         }
     }
 }
@@ -241,9 +248,11 @@ impl DspBridge {
         let buf0 = self.buffers[0].get_mut();
         buf0.n_samples = 0;
         buf0.generation = 0;
+        buf0.capture_tsc = 0;
         let buf1 = self.buffers[1].get_mut();
         buf1.n_samples = 0;
         buf1.generation = 0;
+        buf1.capture_tsc = 0;
         self.active_read_idx.store(0, Ordering::Release);
         self.consumed_gen.store(next_gen, Ordering::Release);
         self.generation.store(next_gen, Ordering::Release);
@@ -285,6 +294,7 @@ impl DspBridge {
         back_buf.buf_r[..n].fill(0.0);
         back_buf.n_samples = n as u32;
         back_buf.generation = next_gen;
+        back_buf.capture_tsc = 0;
         self.active_read_idx.store(back_idx, Ordering::Release);
         self.generation.store(next_gen, Ordering::Release);
     }
@@ -415,6 +425,22 @@ impl DspBridgeWriter {
         n_pw: usize,
         process_mono: bool,
     ) {
+        self.write_block_stamped(resamp_out_l, resamp_out_r, n_pw, process_mono, 0);
+    }
+
+    /// Same as [`Self::write_block`], additionally publishing the capture-side
+    /// start timestamp (`capture_tsc`, nanoseconds, monotonic TSC domain) with
+    /// the block so the reader can compute per-generation capture→playback
+    /// latency. `0` means "unknown". No allocation, lock, or I/O is added to
+    /// the RT path (one extra 8-byte store inside the back-buffer).
+    pub fn write_block_stamped(
+        &self,
+        resamp_out_l: &[f32],
+        resamp_out_r: &[f32],
+        n_pw: usize,
+        process_mono: bool,
+        capture_tsc: u64,
+    ) {
         let avail_l = resamp_out_l.len();
         let avail = if process_mono {
             avail_l
@@ -474,6 +500,7 @@ impl DspBridgeWriter {
             }
             (*back_buf).n_samples = n_bridge as u32;
             (*back_buf).generation = next_gen;
+            (*back_buf).capture_tsc = capture_tsc;
 
             (*bridge).active_read_idx.store(back_idx, Ordering::Release);
             (*bridge).generation.store(next_gen, Ordering::Release);
@@ -507,6 +534,7 @@ impl DspBridgeWriter {
             let back_buf = (*bridge).buffers[back_idx].get();
             (*back_buf).n_samples = 0;
             (*back_buf).generation = next_gen;
+            (*back_buf).capture_tsc = 0;
 
             (*bridge).active_read_idx.store(back_idx, Ordering::Release);
             (*bridge).generation.store(next_gen, Ordering::Release);
@@ -564,7 +592,33 @@ impl DspBridgeReader {
     ///
     /// Returns `Some(R)` if a new, valid block is available.
     /// Otherwise, returns `None`.
+    ///
+    /// # Borrow & Post-Return Stability Contract
+    ///
+    /// The `&[f32]` slices passed to `f` are valid for the duration of `f`; once
+    /// `f` returns, `read_block` acknowledges consumption by storing `current_gen`
+    /// into `consumed_gen` (`Ordering::Release`). Under the single-writer /
+    /// single-reader invariant, the writer can subsequently publish at most one
+    /// block into the complementary back-buffer before blocking on
+    /// `current_gen > consumed_gen`, so the previously read front-buffer stays
+    /// unmodified until either the next `read_block` call or an exclusive
+    /// teardown (`reset_to_silence` / `prime_silence`) after both RT callbacks
+    /// are quiescent. Callers that defer copying past `read_block`'s return
+    /// rely on non-reentrancy of the single reader and quiescent teardown ordering.
     pub fn read_block<F, R>(&self, last_bridge_gen: &mut u64, f: F) -> Option<R>
+    where
+        F: FnOnce(&[f32], &[f32]) -> R,
+    {
+        self.read_block_stamped(last_bridge_gen, f)
+            .map(|(_, _, result)| result)
+    }
+
+    /// Same as [`Self::read_block`], additionally returning the delivered
+    /// generation and the capture-side start timestamp that produced it
+    /// (`capture_tsc`, `0` when unknown). The tuple is
+    /// `(generation, capture_tsc, R)`. RT-safe: the stamp is copied out of the
+    /// front-buffer alongside the samples, no extra atomic and no allocation.
+    pub fn read_block_stamped<F, R>(&self, last_bridge_gen: &mut u64, f: F) -> Option<(u64, u64, R)>
     where
         F: FnOnce(&[f32], &[f32]) -> R,
     {
@@ -603,10 +657,11 @@ impl DspBridgeReader {
                 &(&(*front_buf).buf_r)[..n_samples],
             );
 
+            let capture_tsc = (*front_buf).capture_tsc;
             *last_bridge_gen = current_gen;
             (*bridge).consumed_gen.store(current_gen, Ordering::Release);
 
-            Some(result)
+            Some((current_gen, capture_tsc, result))
         }
     }
 }

@@ -17,6 +17,9 @@ mod routing;
 
 /// Writes processed output samples into the inter-stage bridge buffer.
 pub use bridge::write_bridge;
+/// Writes processed output samples into the bridge together with the capture
+/// quantum start timestamp (per-generation capture→playback latency).
+pub use bridge::write_bridge_stamped;
 /// Dispatches model inference across architecture-specific process methods.
 pub use inference::run_inference;
 /// Streaming inference pass with strict host cardinality (F-PERF-002).

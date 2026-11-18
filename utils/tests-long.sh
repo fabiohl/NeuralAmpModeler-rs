@@ -3,7 +3,7 @@
 # Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 # tests-long.sh — long-duration audit, stress, and verification suite. Classe B.
 # Uso: utils/tests-long.sh [--strict] [--only <fase>[,<fase>]]
-# Orçamento: 330         # inclui recibo .partial por run id, telemetria por rodada e publish atômico (S3-T2)
+# Orçamento: 345         # inclui recibo .partial, telemetria por rodada, publish atômico e carrier consumer-smoke-status.tsv
 set -x; PS4='+ ${BASH_SOURCE##*/}:${LINENO}: '
 set -o pipefail
 cd "$(dirname "$0")/.."
@@ -206,8 +206,19 @@ exec_phase "preflight-catalog" "preflight-catalog" 120 1 run_preflight_catalog
 
 # --- Preflight 3: package ---
 run_preflight_package() {
-  local pkg_args=(--locked); [ -n "$(git status --porcelain 2>/dev/null)" ] && pkg_args+=(--allow-dirty)
-  run_cmd cargo package "${pkg_args[@]}" && run_cmd env lib_quiet=1 bash utils/consumer-smoke.sh
+  local pkg_args=(--locked) cs_tsv="$LOG_DIR/consumer-smoke-status.tsv" cs_status="" cs_gaps=""
+  [ -n "$(git status --porcelain 2>/dev/null)" ] && pkg_args+=(--allow-dirty)
+  run_cmd cargo package "${pkg_args[@]}" && run_cmd env lib_quiet=1 bash utils/consumer-smoke.sh || return $?
+  [ -f "$cs_tsv" ] || { echo "ERROR: missing $cs_tsv" >&2; return 1; }
+  IFS=$'\t' read -r _ cs_status cs_gaps _ < "$cs_tsv" || { echo "ERROR: unreadable $cs_tsv" >&2; return 1; }
+  case "$cs_status" in
+    PASS) return 0 ;;
+    PASS_WITH_GAPS)
+      PHASE_GAP="${cs_gaps:-consumer-smoke-gap}"
+      [ "$STRICT" -eq 1 ] && { echo "ERROR: consumer-smoke reported gaps under --strict: $PHASE_GAP" >&2; return 1; }
+      return 0 ;;
+    *) echo "ERROR: unexpected consumer-smoke status '$cs_status'" >&2; return 1 ;;
+  esac
 }
 exec_phase "preflight-package" "preflight-package" 600 0 run_preflight_package
 
@@ -262,7 +273,7 @@ run_phase_rt_deadline() {
   local core; core=$(run_cmd "$PERF_GATE_BIN" pick-core "${pick_args[@]}") || return $?
   [ "$core" = "GAP" ] && { PHASE_GAP=no-bench-core; [ "$STRICT" -eq 1 ] && return 1; return 0; }
   export NAM_BENCH_CORE="$core"
-  run_cmd cargo test --locked --release --features testing,pinned --test rt_pinned rt_deadline:: -- --include-ignored --nocapture
+  run_cmd cargo test --locked --release --features testing,pinned --test rt_pinned rt_deadline:: -- --include-ignored --test-threads=1 --nocapture
 }
 exec_phase "phase5" "rt-deadline" 300 1 run_phase_rt_deadline
 

@@ -46,14 +46,18 @@ const WARMUP_BLOCKS: usize = 256;
 /// Number of measured blocks for stable p50/p99 statistics.
 const MEASURE_BLOCKS: usize = 2048;
 
-/// Preflight runs once per process; subsequent calls return the cached result.
+/// Preflight runs once per process; subsequent calls re-pin the calling test
+/// thread (each `#[test]` runs on a fresh `libtest` thread) and return the
+/// cached environment verdict.
 fn preflight_ok() -> bool {
     static PREFLIGHT: OnceLock<bool> = OnceLock::new();
-    *PREFLIGHT.get_or_init(|| {
+    let pinned_this_thread = rt_helpers::pin_current_thread_to_bench_core();
+    let env_ok = *PREFLIGHT.get_or_init(|| {
         let result = rt_helpers::rt_preflight();
         rt_helpers::print_preflight(&result);
         result.status == RtPreflightStatus::Pass
-    })
+    });
+    env_ok && pinned_this_thread
 }
 
 #[derive(Debug, Default)]

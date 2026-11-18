@@ -56,6 +56,8 @@ pub use stages::run_inference;
 pub use stages::run_inference_streaming;
 /// Bridge write-out: copies processed output into the inter-stage bridge buffer.
 pub use stages::write_bridge;
+/// Bridge write-out published with the capture quantum start timestamp.
+pub use stages::write_bridge_stamped;
 
 /// Full DSP pipeline capture: input → processing chain → bridge in a single pass.
 pub use capture::capture_dsp_pipeline;

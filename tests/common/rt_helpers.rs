@@ -154,6 +154,24 @@ fn check_background_load(num_cpus: usize) -> (bool, Option<f64>) {
     }
 }
 
+/// Pins the calling thread to `effective_bench_core()` on Linux and returns
+/// whether the calling thread now has single-core CPU affinity.
+pub fn pin_current_thread_to_bench_core() -> bool {
+    #[cfg(target_os = "linux")]
+    if let Some(core) = effective_bench_core() {
+        // SAFETY: `cpu_set_t` is POD and zero-initialized before `CPU_SET`;
+        // `core` fits within `CPU_SETSIZE` for valid Linux CPU indices.
+        unsafe {
+            let mut set: libc::cpu_set_t = std::mem::zeroed();
+            if (core as usize) < libc::CPU_SETSIZE as usize {
+                libc::CPU_SET(core as usize, &mut set);
+                libc::sched_setaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), &set);
+            }
+        }
+    }
+    check_cpu_affinity(true).0
+}
+
 /// Preflight check for deterministic single-core RT deadline verification (`rt_deadline.rs`).
 ///
 /// Requires single-core CPU affinity, performance governor, and low background load.
@@ -172,13 +190,8 @@ pub fn rt_preflight_jitter() -> RtPreflightResult {
 fn rt_preflight_impl(single_core_required: bool) -> RtPreflightResult {
     let num_cpus = system_cpu_count();
 
-    #[cfg(target_os = "linux")]
-    if let (true, Some(core)) = (single_core_required, effective_bench_core()) {
-        unsafe {
-            let mut set: libc::cpu_set_t = std::mem::zeroed();
-            libc::CPU_SET(core as usize, &mut set);
-            libc::sched_setaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), &set);
-        }
+    if single_core_required {
+        let _ = pin_current_thread_to_bench_core();
     }
 
     let (cpu_affinity_ok, pinned_core) = check_cpu_affinity(single_core_required);

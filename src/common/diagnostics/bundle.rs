@@ -286,6 +286,7 @@ impl DiagnosticBundle {
              telemetry.total_blocks={}\n\
              telemetry.xruns={}\n\
              telemetry.drains={}\n\
+             telemetry.elapsed_discarded={}\n\
              flags_seen={:#x}\n",
             self.runtime.audio.sample_rate,
             self.runtime.audio.buffer_size,
@@ -307,8 +308,13 @@ impl DiagnosticBundle {
             self.runtime.telemetry.total_blocks,
             self.runtime.telemetry.xruns,
             self.runtime.telemetry.drains,
+            self.runtime.telemetry.elapsed_discarded_total,
             self.runtime.flags_seen
         ));
+
+        for (key, value) in &self.runtime.extra_telemetry {
+            block.push_str(&format!("telemetry.{key}={value}\n"));
+        }
 
         // System information
         block.push_str(&format!(

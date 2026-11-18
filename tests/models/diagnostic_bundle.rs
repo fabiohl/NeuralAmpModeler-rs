@@ -70,7 +70,7 @@ fn test_diagnostic_bundle_with_mock_provider() {
         )),
         audio: AudioInfo::new(48000, 256, 2, "PluginHost"),
         rt: RtInfo::new(90, "FIFO", Some(3), true, "hugetlb"),
-        telemetry: TelemetrySnapshot::new(120, 250, 400, 850, 10000, 2, 5, 0, 0),
+        telemetry: TelemetrySnapshot::new(120, 250, 400, 850, 10000, 2, 5, 0, 0, 7),
         flags: 0x1a,
     };
 
@@ -106,9 +106,49 @@ fn test_diagnostic_bundle_with_mock_provider() {
     assert!(rendered.contains("telemetry.total_blocks=10000"));
     assert!(rendered.contains("telemetry.xruns=2"));
     assert!(rendered.contains("telemetry.drains=5"));
+    assert!(rendered.contains("telemetry.elapsed_discarded=7"));
 
     // Verify flags seen in hex format
     assert!(rendered.contains("flags_seen=0x1a"));
+}
+
+#[test]
+fn test_diagnostic_bundle_renders_extra_telemetry() {
+    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    struct ExtraProvider;
+    impl HasRuntimeSnapshot for ExtraProvider {
+        fn model_info(&self) -> Option<ModelInfo> {
+            None
+        }
+        fn audio_info(&self, consumer: &AudioMetadata) -> AudioInfo {
+            AudioInfo::new(
+                48000,
+                64,
+                consumer.channel_count,
+                consumer.host_name.clone(),
+            )
+        }
+        fn rt_info(&self) -> RtInfo {
+            RtInfo::default()
+        }
+        fn telemetry_snapshot(&self) -> TelemetrySnapshot {
+            TelemetrySnapshot::default()
+        }
+        fn flags_seen(&self) -> u64 {
+            0
+        }
+        fn extra_telemetry(&self) -> Vec<(&'static str, u64)> {
+            vec![("custom_overflow", 3)]
+        }
+    }
+
+    let consumer = AudioMetadata::new(2, "PluginHost");
+    let bundle = DiagnosticBundle::capture_with_runtime(&ExtraProvider, &consumer);
+    let rendered = bundle.render();
+    assert!(
+        rendered.contains("telemetry.custom_overflow=3"),
+        "expected extra_telemetry line in rendered bundle:\n{rendered}"
+    );
 }
 
 #[test]
@@ -456,7 +496,7 @@ fn test_diagnostic_bundle_regex_roundtrip() {
         )),
         audio: AudioInfo::new(96000, 128, 1, "PluginHost"),
         rt: RtInfo::new(95, "FIFO", Some(1), false, "off"),
-        telemetry: TelemetrySnapshot::new(10, 20, 30, 100, 500, 0, 0, 0, 0),
+        telemetry: TelemetrySnapshot::new(10, 20, 30, 100, 500, 0, 0, 0, 0, 0),
         flags: 0x01,
     };
 

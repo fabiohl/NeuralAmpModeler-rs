@@ -207,8 +207,14 @@ pub struct RtStatusFlags {
     pub structural_deferred_total: AtomicU32,
     /// Total count of GC items successfully drained.
     pub drains: AtomicU32,
+    /// Total count of DSP cycle durations discarded as implausible
+    /// (> 1 s, see `MAX_PLAUSIBLE_ELAPSED_NS`). Monotonic telemetry counter —
+    /// never reset, and *separate* from `dsp_overloads`: a discarded sample is
+    /// a clock-anomaly diagnostic, not a real overload. Accompanies the
+    /// defense-in-depth discard in the plugin telemetry path (F8 / T5.1).
+    pub elapsed_discarded_total: AtomicU32,
     /// Padding to isolate RT-hot fields to their own 64-byte cache line.
-    _pad_rt_hot: [u8; 24],
+    _pad_rt_hot: [u8; 20],
 
     // =========================================================================
     // Lines 1..3: RT Control & Handshake (Rate / Model / CabSim / Oversample / Quantum)
@@ -394,7 +400,8 @@ impl RtStatusFlags {
             degrade_transitions_total: AtomicU32::new(0),
             structural_deferred_total: AtomicU32::new(0),
             drains: AtomicU32::new(0),
-            _pad_rt_hot: [0; 24],
+            elapsed_discarded_total: AtomicU32::new(0),
+            _pad_rt_hot: [0; 20],
 
             active_rate: AtomicU32::new(0),
             active_rate_changed: AtomicU32::new(0),

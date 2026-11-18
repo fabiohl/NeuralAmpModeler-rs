@@ -18,3 +18,19 @@ pub fn write_bridge(
         writer.write_block(resamp_out_l, resamp_out_r, n_pw, process_mono);
     }
 }
+
+/// Stage 4 with a capture-side timestamp: writes to the bridge and publishes
+/// the capture quantum start (`capture_tsc`, nanoseconds) with the generation.
+#[inline(always)]
+pub fn write_bridge_stamped(
+    resamp_out_l: &[f32],
+    resamp_out_r: &[f32],
+    n_pw: usize,
+    bridge: Option<DspBridgeWriter>,
+    process_mono: bool,
+    capture_tsc: u64,
+) {
+    if let Some(writer) = bridge {
+        writer.write_block_stamped(resamp_out_l, resamp_out_r, n_pw, process_mono, capture_tsc);
+    }
+}

@@ -315,3 +315,252 @@ fn test_bridge_write_block_source_length_bounds_safeguard() {
         "Clamped to MAX_BRIDGE_BUF"
     );
 }
+
+fn run_spsc_interleaved_tear_free(rounds: usize) -> usize {
+    use core::sync::atomic::AtomicU32;
+    use std::sync::Barrier;
+
+    const BLOCK_LEN: usize = 64;
+    assert!(
+        rounds > 0 && (rounds as u64) * 2 + 2 <= (1u64 << 24),
+        "generations must remain exact in IEEE-754 f32 (<= 2^24)"
+    );
+
+    let mut bridge = new_bridge();
+    let bridge_ptr = &raw mut *bridge;
+    // SAFETY: `bridge_ptr` points to the live `Box<DspBridge>` above, which outlives
+    // the scoped producer and reader threads. Narrowing to `dropped_frames` avoids
+    // creating a whole-struct `&DspBridge` concurrently with buffer writes.
+    let dropped_frames: &AtomicU32 = unsafe { &(*bridge_ptr).dropped_frames };
+    // SAFETY: `bridge_ptr` is valid, non-null, and outlives the scoped threads.
+    let writer = unsafe { DspBridgeWriter::new(bridge_ptr) };
+    // SAFETY: `bridge_ptr` is valid, non-null, and outlives the scoped threads.
+    let reader = unsafe { DspBridgeReader::new(bridge_ptr) };
+
+    // Four barriers enforce the deterministic interleaving per round:
+    // (a) `b_pub_g`: producer published generation `g`
+    // (b) `b_ack_g`: reader acknowledged `g` (advancing `consumed_gen = g`) while deferring copy
+    // (c) `b_attempt_g2`: producer published `g + 1` in the complementary slot and attempted `g + 2` (dropped)
+    // (d) `b_round_done`: reader copied `g` intact and consumed `g + 1` before the next round begins
+    let b_pub_g = Barrier::new(2);
+    let b_ack_g = Barrier::new(2);
+    let b_attempt_g2 = Barrier::new(2);
+    let b_round_done = Barrier::new(2);
+
+    let torn_reads = std::thread::scope(|s| {
+        s.spawn(|| {
+            let mut src_l = [0.0f32; BLOCK_LEN];
+            let mut src_r = [0.0f32; BLOCK_LEN];
+
+            for round in 0..rounds {
+                let g = (round as u64) * 2 + 1;
+
+                // (a) Publish generation `g`.
+                let g_val = g as f32;
+                src_l.fill(g_val);
+                src_r.fill(g_val);
+                writer.write_block(&src_l, &src_r, BLOCK_LEN, false);
+                b_pub_g.wait();
+
+                // Wait for (b) reader to acknowledge `g`.
+                b_ack_g.wait();
+
+                // Publish `g + 1` into the complementary back-buffer.
+                let g1_val = (g + 1) as f32;
+                src_l.fill(g1_val);
+                src_r.fill(g1_val);
+                writer.write_block(&src_l, &src_r, BLOCK_LEN, false);
+
+                // (c) Attempt to publish `g + 2` before `g + 1` is consumed: must drop and increment `dropped_frames`.
+                let drops_before = dropped_frames.load(Ordering::Relaxed);
+                let g2_val = (g + 2) as f32;
+                src_l.fill(g2_val);
+                src_r.fill(g2_val);
+                writer.write_block(&src_l, &src_r, BLOCK_LEN, false);
+                let drops_after = dropped_frames.load(Ordering::Relaxed);
+                assert_eq!(
+                    drops_after,
+                    drops_before + 1,
+                    "blocked write for g+2 must increment dropped_frames at round {round}"
+                );
+                b_attempt_g2.wait();
+
+                b_round_done.wait();
+            }
+        });
+
+        let reader_handle = s.spawn(|| {
+            let mut last_gen = 0u64;
+            let mut tears = 0usize;
+            let mut copy_l = [0.0f32; BLOCK_LEN];
+            let mut copy_r = [0.0f32; BLOCK_LEN];
+
+            for round in 0..rounds {
+                let g = (round as u64) * 2 + 1;
+
+                // Wait for (a) producer to publish `g`.
+                b_pub_g.wait();
+
+                // (b) Acknowledge `g` and capture raw front-buffer addresses, mirroring
+                // the host playback path where the payload copy happens after `read_block` returns.
+                let captured = reader.read_block(&mut last_gen, |l, r| {
+                    assert_eq!(l.len(), BLOCK_LEN, "unexpected L length for gen {g}");
+                    assert_eq!(r.len(), BLOCK_LEN, "unexpected R length for gen {g}");
+                    let expected = g as f32;
+                    for (&sl, &sr) in l.iter().zip(r.iter()) {
+                        if sl != expected || sr != expected {
+                            tears += 1;
+                        }
+                    }
+                    (l.as_ptr() as usize, l.len(), r.as_ptr() as usize, r.len())
+                });
+                let (src_l_addr, n_l, src_r_addr, n_r) =
+                    captured.unwrap_or_else(|| panic!("expected generation {g} to be readable"));
+                assert_eq!(last_gen, g, "reader generation mismatch at round {round}");
+                assert_eq!(n_l, BLOCK_LEN);
+                assert_eq!(n_r, BLOCK_LEN);
+                b_ack_g.wait();
+
+                // Wait for (c) producer to publish `g + 1` and attempt `g + 2` (blocked).
+                b_attempt_g2.wait();
+
+                // Copy `g` after `g + 1` publication and blocked `g + 2` attempt: `g`'s slot
+                // must remain intact and homogeneous while `consumed_gen == g`.
+                // SAFETY: `src_l_addr`/`src_r_addr` point into the front-buffer selected for `g`.
+                // Because `consumed_gen == g` and `generation == g + 1`, the writer's skip-on-overflow
+                // guard prevented any overwrite of `g`'s buffer until `g + 1` is consumed below.
+                unsafe {
+                    core::ptr::copy_nonoverlapping(
+                        src_l_addr as *const f32,
+                        copy_l.as_mut_ptr(),
+                        BLOCK_LEN,
+                    );
+                    core::ptr::copy_nonoverlapping(
+                        src_r_addr as *const f32,
+                        copy_r.as_mut_ptr(),
+                        BLOCK_LEN,
+                    );
+                }
+                let expected_g = g as f32;
+                for i in 0..BLOCK_LEN {
+                    if copy_l[i] != expected_g || copy_r[i] != expected_g {
+                        tears += 1;
+                    }
+                    assert_eq!(
+                        copy_l[i], expected_g,
+                        "torn/overwritten L sample for gen {g} at index {i}"
+                    );
+                    assert_eq!(
+                        copy_r[i], expected_g,
+                        "torn/overwritten R sample for gen {g} at index {i}"
+                    );
+                }
+
+                // Consume `g + 1` and verify uniform payload and coherent generation.
+                let next_ok = reader.read_block(&mut last_gen, |l, r| {
+                    assert_eq!(l.len(), BLOCK_LEN, "unexpected L length for gen {}", g + 1);
+                    assert_eq!(r.len(), BLOCK_LEN, "unexpected R length for gen {}", g + 1);
+                    let expected_g1 = (g + 1) as f32;
+                    for (i, (&sl, &sr)) in l.iter().zip(r.iter()).enumerate() {
+                        if sl != expected_g1 || sr != expected_g1 {
+                            tears += 1;
+                        }
+                        assert_eq!(
+                            sl,
+                            expected_g1,
+                            "torn L sample for gen {} at index {i}",
+                            g + 1
+                        );
+                        assert_eq!(
+                            sr,
+                            expected_g1,
+                            "torn R sample for gen {} at index {i}",
+                            g + 1
+                        );
+                    }
+                });
+                assert!(
+                    next_ok.is_some(),
+                    "expected generation {} to be readable",
+                    g + 1
+                );
+                assert_eq!(
+                    last_gen,
+                    g + 1,
+                    "reader generation mismatch for g+1 at round {round}"
+                );
+
+                b_round_done.wait();
+            }
+
+            tears
+        });
+
+        reader_handle.join().expect("reader thread panicked")
+    });
+
+    assert_eq!(
+        bridge.dropped_frames.load(Ordering::Relaxed),
+        rounds as u32,
+        "exactly one blocked write per round must be recorded in dropped_frames"
+    );
+    assert_eq!(torn_reads, 0, "zero torn reads allowed");
+    torn_reads
+}
+
+#[test]
+fn test_bridge_spsc_interleaved_tear_free_quick() {
+    // Measured: N=256 rounds (512 consumed blocks, 256 dropped), torn_reads=0, elapsed=<0.01s
+    let torn_reads = run_spsc_interleaved_tear_free(256);
+    assert_eq!(torn_reads, 0);
+}
+
+#[test]
+#[ignore = "long: deterministic SPSC interleaving soak across many buffer flips"]
+fn test_bridge_spsc_interleaved_tear_free_soak() {
+    // Measured: N=50_000 rounds (100_000 consumed blocks, 50_000 dropped), torn_reads=0, elapsed=1.36s
+    let torn_reads = run_spsc_interleaved_tear_free(50_000);
+    assert_eq!(torn_reads, 0);
+}
+
+/// T5.2 / F8: the capture-side timestamp travels with the published
+/// generation, so the playback thread can compute capture→playback latency for
+/// the *delivered* generation (never the last global capture timestamp).
+#[test]
+fn test_bridge_stamped_publication_preserves_generation_timestamp() {
+    let mut bridge = new_bridge();
+    let bridge_ptr = &raw mut *bridge;
+    // SAFETY: Pointer is valid and points to an allocated DspBridge instance.
+    let writer = unsafe { DspBridgeWriter::new(bridge_ptr) };
+    // SAFETY: Pointer is valid and points to an allocated DspBridge instance.
+    let reader = unsafe { DspBridgeReader::new(bridge_ptr) };
+
+    writer.write_block_stamped(&[1.0, 2.0], &[3.0, 4.0], 2, false, 1_234_567_890);
+    let mut last_gen = 0u64;
+    let read = reader.read_block_stamped(&mut last_gen, |l, r| (l[0], r[0]));
+    assert_eq!(
+        read,
+        Some((1, 1_234_567_890, (1.0f32, 3.0f32))),
+        "generation and capture timestamp must be delivered together"
+    );
+
+    // The plain API stays source-compatible and still sees the block.
+    writer.write_block(&[5.0, 6.0], &[7.0, 8.0], 2, false);
+    let plain = reader.read_block(&mut last_gen, |l, _| l[0]);
+    assert_eq!(plain, Some(5.0));
+
+    // A silence publication never carries a stale capture timestamp: the
+    // zero-length block is consumed (generation advances) but not surfaced.
+    let before_silence_gen = last_gen;
+    writer.write_silence();
+    let read = reader.read_block_stamped(&mut last_gen, |l, _| l.len());
+    assert_eq!(
+        read, None,
+        "zero-length silence blocks are not surfaced by read_block"
+    );
+    assert_eq!(
+        last_gen,
+        before_silence_gen + 1,
+        "the silence generation is consumed even though no payload is surfaced"
+    );
+}

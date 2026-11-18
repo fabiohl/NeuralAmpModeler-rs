@@ -187,9 +187,9 @@ jobs:
       # Linux ARM64 runs the full canonical discipline (fmt, check/clippy matrix,
       # cross-x86_64, doc, policies, budget); macOS keeps the native clippy gate
       # because the full lint matrix exceeds its job budget.
-      - name: Install cross target (Linux ARM64)
+      - name: Install cross targets (Linux ARM64)
         if: runner.os == 'Linux'
-        run: rustup target add x86_64-unknown-linux-gnu
+        run: rustup target add x86_64-unknown-linux-gnu x86_64-pc-windows-msvc aarch64-pc-windows-msvc
       - name: Lints (Linux ARM64)
         if: runner.os == 'Linux'
         run: ${QA_BASH:-bash} ./utils/lints.sh
