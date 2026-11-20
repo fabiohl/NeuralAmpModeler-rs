@@ -447,6 +447,11 @@ impl<R: SwapRing> RtSwapDrain<R> {
     {
         let mut candidate: Option<Box<R::Payload>> = None;
         let mut pops = 0usize;
+        // If Phase 0 had to re-park a deferred payload (budget exhausted), it is
+        // causally ahead of everything in the ring; nothing behind it may drain.
+        if self.deferred.is_some() {
+            return (0, None);
+        }
         while pops < self.tunables.pops_per_callback {
             // Classify the head without detaching it from the ring: an
             // unresolvable structural payload remains queued (zero-loss,
@@ -456,6 +461,13 @@ impl<R: SwapRing> RtSwapDrain<R> {
                 break;
             };
             if is_stale(handler, head) {
+                // Do not pop behind a candidate that cannot be installed this
+                // callback: `resolve_candidate` can only roll back a single pop
+                // (the parked candidate's own slot), so popping a stale tail
+                // first would leave the parked slot covered by the ack.
+                if !budget.can_apply() && candidate.is_some() {
+                    break;
+                }
                 // Superseded rebuild: the producer moved on while this
                 // envelope was in flight. Discard without installing.
                 if let Some(p) = self.ring.pop() {
@@ -465,6 +477,18 @@ impl<R: SwapRing> RtSwapDrain<R> {
                 continue;
             }
             if !handler.is_structural(head) {
+                // Flush any pending structural candidate before applying a
+                // subsequent scalar so FIFO causality across the command
+                // stream is strictly preserved.
+                if let Some(cand) = candidate.take() {
+                    if budget.can_apply() {
+                        handler.install(cand, gc);
+                        budget.consume();
+                    } else {
+                        candidate = Some(cand);
+                        break;
+                    }
+                }
                 // Light scalar: applies inline, never parked, never coalesced
                 // by the scheduler (handler-side coalescing owns that policy).
                 if let Some(p) = self.ring.pop() {

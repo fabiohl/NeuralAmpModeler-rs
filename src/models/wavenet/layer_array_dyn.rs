@@ -6,6 +6,7 @@ use super::conv1d_dyn::Conv1dDyn;
 use super::dense_dyn::DenseLayerDyn;
 use super::layer_dyn::WaveNetLayerDyn;
 use crate::arch::simd::{_MM_HINT_T0, _mm_prefetch};
+use crate::common::diagnostics::NamErrorCode;
 use crate::math::common::AlignedVec;
 use crate::math::common::SimdMath;
 
@@ -55,40 +56,184 @@ impl HeadRechannelDyn {
 #[derive(Clone)]
 pub struct WaveNetLayerArrayDyn {
     /// Number of input channels.
-    pub in_ch: usize,
+    pub(crate) in_ch: usize,
     /// Number of conditioning channels (runtime-configurable; 1 for classic WaveNet A1).
-    pub cond: usize,
+    pub(crate) cond: usize,
     /// Number of internal channels.
-    pub ch: usize,
+    pub(crate) ch: usize,
     /// Kernel size.
-    pub k: usize,
+    pub(crate) k: usize,
     /// Head projection size (skip-connection output dimension).
-    pub head: usize,
+    pub(crate) head: usize,
     /// Vec with structural topology (length defines blocks).
-    pub layers: Vec<WaveNetLayerDyn>,
+    pub(crate) layers: Vec<WaveNetLayerDyn>,
     /// RingBuffer states, one for each Layer in the system.
-    pub states: Vec<WaveNetLayerState>,
+    pub(crate) states: Vec<WaveNetLayerState>,
     /// Initial `Dense` tensor opening.
-    pub rechannel: DenseLayerDyn,
+    pub(crate) rechannel: DenseLayerDyn,
     /// Final tensor closure generating Head projection.
-    pub head_rechannel: HeadRechannelDyn,
+    pub(crate) head_rechannel: HeadRechannelDyn,
     /// Pre-allocated temporary output array.
-    pub array_outputs: AlignedVec<f32>,
+    pub(crate) array_outputs: AlignedVec<f32>,
     /// CH-sized intermediate accumulator for layer contributions before the Head projection.
-    pub head_accum: AlignedVec<f32>,
+    pub(crate) head_accum: AlignedVec<f32>,
     /// Allocated global Linear projection memory (HEAD-sized).
-    pub head_outputs: AlignedVec<f32>,
+    pub(crate) head_outputs: AlignedVec<f32>,
     /// Dimensional field size (global receptive field) for routing.
-    pub receptive_field_size: usize,
+    pub(crate) receptive_field_size: usize,
     /// Shared activation buffer size.
-    pub block_size: usize,
+    pub(crate) block_size: usize,
     /// Temporary accumulator for blocks (pre-allocated).
-    pub block_buffer: AlignedVec<f32>,
+    pub(crate) block_buffer: AlignedVec<f32>,
     /// Active number of layers for soft-degrade. Set to `layers.len()` by default.
-    pub effective_layers: usize,
+    pub(crate) effective_layers: usize,
 }
 
 impl WaveNetLayerArrayDyn {
+    /// Constructs a validated dynamic `WaveNetLayerArrayDyn`.
+    ///
+    /// Allocates internal working buffers and validates all topology,
+    /// layer/state pairing, and tensor invariants once at construction.
+    ///
+    /// # Errors
+    /// Returns [`NamErrorCode::InvalidModelTopology`] if `is_sound()` fails, or
+    /// [`NamErrorCode::OutOfMemory`] on allocation failure.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Runtime-dimensioned WaveNet layer array constructor initializes geometry, projections, and working buffers"
+    )]
+    pub fn from_parts(
+        in_ch: usize,
+        cond: usize,
+        ch: usize,
+        k: usize,
+        head: usize,
+        layers: Vec<WaveNetLayerDyn>,
+        states: Vec<WaveNetLayerState>,
+        rechannel: DenseLayerDyn,
+        head_rechannel: HeadRechannelDyn,
+        receptive_field_size: usize,
+    ) -> Result<Self, NamErrorCode> {
+        let frame_elems = ch
+            .checked_mul(WAVENET_MAX_NUM_FRAMES)
+            .ok_or(NamErrorCode::InvalidModelTopology)?;
+        let head_elems = head
+            .checked_mul(WAVENET_MAX_NUM_FRAMES)
+            .ok_or(NamErrorCode::InvalidModelTopology)?;
+        let num_layers = layers.len();
+        let array = Self {
+            in_ch,
+            cond,
+            ch,
+            k,
+            head,
+            layers,
+            states,
+            rechannel,
+            head_rechannel,
+            array_outputs: AlignedVec::new(frame_elems, 0.0f32)?,
+            head_accum: AlignedVec::new(frame_elems, 0.0f32)?,
+            head_outputs: AlignedVec::new(head_elems, 0.0f32)?,
+            receptive_field_size,
+            block_size: ch,
+            block_buffer: AlignedVec::new(frame_elems, 0.0f32)?,
+            effective_layers: num_layers,
+        };
+        if !array.is_sound() {
+            return Err(NamErrorCode::InvalidModelTopology);
+        }
+        Ok(array)
+    }
+
+    /// Returns the number of input channels.
+    #[inline(always)]
+    pub fn in_ch(&self) -> usize {
+        self.in_ch
+    }
+
+    /// Returns the number of conditioning channels.
+    #[inline(always)]
+    pub fn cond(&self) -> usize {
+        self.cond
+    }
+
+    /// Returns the number of internal channels.
+    #[inline(always)]
+    pub fn ch(&self) -> usize {
+        self.ch
+    }
+
+    /// Returns the kernel size.
+    #[inline(always)]
+    pub fn k(&self) -> usize {
+        self.k
+    }
+
+    /// Returns the head projection output width.
+    #[inline(always)]
+    pub fn head(&self) -> usize {
+        self.head
+    }
+
+    /// Returns the layers of this array.
+    #[inline(always)]
+    pub fn layers(&self) -> &[WaveNetLayerDyn] {
+        &self.layers
+    }
+
+    /// Returns the delay-line states of this array.
+    #[inline(always)]
+    pub fn states(&self) -> &[WaveNetLayerState] {
+        &self.states
+    }
+
+    /// Returns the input rechannel dense layer.
+    #[inline(always)]
+    pub fn rechannel(&self) -> &DenseLayerDyn {
+        &self.rechannel
+    }
+
+    /// Returns the head rechannel projection.
+    #[inline(always)]
+    pub fn head_rechannel(&self) -> &HeadRechannelDyn {
+        &self.head_rechannel
+    }
+
+    /// Returns the pre-allocated array output buffer.
+    #[inline(always)]
+    pub fn array_outputs(&self) -> &[f32] {
+        &self.array_outputs
+    }
+
+    /// Returns the intermediate head accumulator buffer.
+    #[inline(always)]
+    pub fn head_accum(&self) -> &[f32] {
+        &self.head_accum
+    }
+
+    /// Returns the head projection output buffer.
+    #[inline(always)]
+    pub fn head_outputs(&self) -> &[f32] {
+        &self.head_outputs
+    }
+
+    /// Returns the receptive field size of this array.
+    #[inline(always)]
+    pub fn receptive_field_size(&self) -> usize {
+        self.receptive_field_size
+    }
+
+    /// Returns the block buffer width.
+    #[inline(always)]
+    pub fn block_size(&self) -> usize {
+        self.block_size
+    }
+
+    /// Returns the active number of layers for soft-degrade.
+    #[inline(always)]
+    pub fn effective_layers(&self) -> usize {
+        self.effective_layers
+    }
     /// Sets the effective number of layers for soft-degrade.
     /// Clamped to [1, layers.len()].
     #[inline(always)]

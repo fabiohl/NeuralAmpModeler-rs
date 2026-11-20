@@ -65,3 +65,49 @@ fn compute_calibration_gains_matches_expected_db_math() {
     );
     assert_eq!(empty, CalibrationGains::default());
 }
+
+#[test]
+fn loudness_outside_sane_bounds_is_rejected() {
+    use crate::loader::LoadedModelPair;
+    use crate::loader::nam_json::NamMetadata;
+
+    let make_pair = |loudness: f32| LoadedModelPair {
+        model_l: None,
+        model_r: None,
+        input_mult_adj: 1.0,
+        output_mult_adj: 1.0,
+        sample_rate: 48_000,
+        architecture: "Linear".to_string(),
+        topology: "RF1".to_string(),
+        metadata: Some(NamMetadata {
+            loudness: Some(loudness),
+            ..Default::default()
+        }),
+        weights_layout: "Original".to_string(),
+    };
+
+    for extreme in [-300.0, -120.1, 60.1, 200.0, f32::NAN, f32::INFINITY] {
+        let meta = ModelCalibrationMeta::from_loaded_model(&make_pair(extreme));
+        assert_eq!(
+            meta.loudness, None,
+            "extreme loudness {extreme} must be rejected by from_loaded_model"
+        );
+
+        let direct_meta = ModelCalibrationMeta {
+            has_model: true,
+            input_level_dbu: None,
+            output_level_dbu: None,
+            loudness: Some(extreme),
+        };
+        let gains = compute_calibration_gains(direct_meta, false, 12.0, OutputMode::Normalized);
+        assert_eq!(
+            gains.output_mult, 1.0,
+            "extreme loudness {extreme} must yield unity output_mult"
+        );
+    }
+
+    for valid in [MIN_LOUDNESS_DB, -18.0, 0.0, MAX_LOUDNESS_DB] {
+        let meta = ModelCalibrationMeta::from_loaded_model(&make_pair(valid));
+        assert_eq!(meta.loudness, Some(valid));
+    }
+}

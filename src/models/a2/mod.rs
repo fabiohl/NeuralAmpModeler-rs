@@ -168,7 +168,7 @@ impl NamModel for model::dynamic::WaveNetA2Dyn {
 
     /// Deferred pass pending? (`true` when nothing is armed/left.)
     fn prewarm_complete(&self) -> bool {
-        self.prewarm_pending == 0
+        self.prewarm_complete()
     }
 
     fn prewarm_samples(&self) -> usize {
@@ -220,6 +220,23 @@ impl NamModel for model::cascade::WaveNetA2Cascade {
 
     fn prewarm(&mut self, _num_samples: usize) {
         self.prewarm();
+    }
+
+    /// Zero phase of the deferred split stabilization for the cascade and its
+    /// nested `condition_dsp`. Real-time safe.
+    fn prewarm_reset(&mut self) {
+        self.prewarm_reset();
+    }
+
+    /// Advances the armed stabilization by up to `samples` zeroed samples;
+    /// returns the remaining count. Real-time safe.
+    fn prewarm_step(&mut self, samples: usize) -> usize {
+        self.prewarm_step(samples)
+    }
+
+    /// Deferred pass pending? (`true` when nothing is armed/left.)
+    fn prewarm_complete(&self) -> bool {
+        self.prewarm_complete()
     }
 
     fn prewarm_samples(&self) -> usize {

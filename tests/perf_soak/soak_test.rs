@@ -191,17 +191,7 @@ fn test_wavenet_silence_decomposition() {
     );
 
     // ── Phase 2: zero out conv1d biases → isolate quantization ────
-    let mut model_clean = build_soak_wavenet();
-    for layer in &mut model_clean.array1.layers {
-        for v in &mut *layer.conv1d.bias {
-            *v = 0.0;
-        }
-    }
-    for layer in &mut model_clean.array2.layers {
-        for v in &mut *layer.conv1d.bias {
-            *v = 0.0;
-        }
-    }
+    let mut model_clean = super::common::model_builders::build_soak_wavenet_with_bias(0.0);
     model_clean.prewarm();
 
     let mut output_clean = vec![0.0f32; 64];

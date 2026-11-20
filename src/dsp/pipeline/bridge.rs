@@ -358,41 +358,47 @@ impl BridgeRef {
     }
 }
 
-#[derive(Clone, Copy)]
-/// Write face of `DspBridge` exposed to the capture thread.
+/// Write face of `DspBridge` exposed exclusively to the single SPSC capture thread.
+///
+/// Intentionally neither [`Clone`], [`Copy`], nor [`Sync`]: at most one
+/// producer thread may hold and drive a `DspBridgeWriter` for a given
+/// `DspBridge` at any time.
+///
+/// ```compile_fail
+/// use neural_amp_modeler_rs::dsp::pipeline::DspBridgeWriter;
+/// fn assert_clone<T: Clone>() {}
+/// fn main() { assert_clone::<DspBridgeWriter>(); }
+/// ```
+///
+/// ```compile_fail
+/// use neural_amp_modeler_rs::dsp::pipeline::DspBridgeWriter;
+/// fn assert_sync<T: Sync>() {}
+/// fn main() { assert_sync::<DspBridgeWriter>(); }
+/// ```
 pub struct DspBridgeWriter(std::ptr::NonNull<DspBridge>);
 
-/// SAFETY: DspBridgeWriter owns a `NonNull<DspBridge>` that points to a heap-immortal
-/// allocation (Box::leak in standalone mode, or host/plugin lifecycle memory).
-/// Sending between threads for initialization is safe.
+/// SAFETY: `DspBridgeWriter` owns exclusive producer access to a
+/// `NonNull<DspBridge>` pointing to a heap-immortal allocation (`Box::leak` in
+/// standalone mode, or host/plugin lifecycle memory). Moving it to the single
+/// capture thread during setup is sound. `Sync` is intentionally NOT
+/// implemented so `&DspBridgeWriter` cannot be shared across threads.
 unsafe impl Send for DspBridgeWriter {}
-/// SAFETY: `Sync` is sound **only under the single-writer/single-reader
-/// discipline declared as an invariant of the bridge type** (DspBridge doc,
-/// "RT ordering invariants", rule 6): exactly one capture thread may hold or
-/// use a `DspBridgeWriter`, and exactly one playback thread a
-/// `DspBridgeReader`. Under that discipline the `&self` writer methods mutate
-/// only the back-buffer the reader never touches and publish it with Release
-/// stores the reader observes with Acquire — no data race. The atomics alone
-/// do NOT provide this: `write_block` writes the payload with non-atomic
-/// `copy_nonoverlapping` and updates `n_samples`/`generation` non-atomically,
-/// so two threads sharing `&DspBridgeWriter` could legally collide. The
-/// discipline is upheld by the bridge lifecycle (the writer is handed to one
-/// capture callback, the reader to one playback callback), not enforceable by
-/// the type itself without an API redesign (an alternative `&mut`-only wrapper
-/// design was considered and deferred to avoid a public-API break).
-unsafe impl Sync for DspBridgeWriter {}
 
 impl DspBridgeWriter {
     /// Creates a `DspBridgeWriter` from a raw pointer to `DspBridge`.
     ///
     /// # Safety
     ///
-    /// The pointer must be valid and non-null, and must reference heap-immortal
-    /// memory (leaked `Box`, or host/plugin lifecycle memory that outlives the
-    /// writer) — see the `Send`/`Sync` SAFETY comments. The null check is a
-    /// `debug_assert!` (loud in dev builds, compiled out in release): a null
-    /// pointer here is a programming error on the initialization path, not a
-    /// runtime-recoverable condition.
+    /// - `ptr` must be valid, non-null, and reference heap-immortal memory
+    ///   (leaked `Box`, or host/plugin lifecycle memory that outlives the
+    ///   writer).
+    /// - **SPSC single-producer uniqueness**: no other live `DspBridgeWriter`
+    ///   may exist concurrently for the same `DspBridge` (two writers writing
+    ///   to the back-buffer concurrently is immediate UB).
+    ///
+    /// The null check is a `debug_assert!` (loud in dev builds, compiled out in
+    /// release): a null pointer here is a programming error on the
+    /// initialization path, not a runtime-recoverable condition.
     #[inline(always)]
     pub unsafe fn new(ptr: *mut DspBridge) -> Self {
         debug_assert!(
@@ -407,9 +413,31 @@ impl DspBridgeWriter {
 
     /// Creates a `DspBridgeWriter` from a `BridgeRef`.
     /// Returns `None` if the reference is null.
+    ///
+    /// # Safety
+    ///
+    /// - When `r` is non-null, it must point to a valid, heap-immortal
+    ///   `DspBridge` allocation that outlives the returned writer.
+    /// - **SPSC single-producer uniqueness**: the caller must ensure at most
+    ///   one `DspBridgeWriter` exists and is used at any time for the
+    ///   underlying `DspBridge`.
     #[inline(always)]
-    pub fn from_ref(r: BridgeRef) -> Option<Self> {
+    pub unsafe fn from_ref(r: BridgeRef) -> Option<Self> {
         std::ptr::NonNull::new(r.0).map(Self)
+    }
+
+    /// Splits a `BridgeRef` into its exclusive SPSC `(writer, reader)` pair.
+    /// Returns `None` if `r` is null.
+    ///
+    /// # Safety
+    ///
+    /// - When `r` is non-null, it must point to a valid, heap-immortal
+    ///   `DspBridge` allocation that outlives both returned endpoints.
+    /// - **SPSC uniqueness**: no other `DspBridgeWriter` or `DspBridgeReader`
+    ///   may exist concurrently for the underlying `DspBridge`.
+    #[inline(always)]
+    pub unsafe fn split_spsc(r: BridgeRef) -> Option<(Self, DspBridgeReader)> {
+        std::ptr::NonNull::new(r.0).map(|ptr| (Self(ptr), DspBridgeReader(ptr)))
     }
 
     /// Writes a stereo sample block into the bridge's active back-buffer.
@@ -542,33 +570,48 @@ impl DspBridgeWriter {
     }
 }
 
-#[derive(Clone, Copy)]
-/// Read face of `DspBridge` exposed to the playback thread.
+/// Read face of `DspBridge` exposed exclusively to the single SPSC playback thread.
+///
+/// Intentionally neither [`Clone`], [`Copy`], nor [`Sync`]: at most one
+/// consumer thread may hold and drive a `DspBridgeReader` for a given
+/// `DspBridge` at any time.
+///
+/// ```compile_fail
+/// use neural_amp_modeler_rs::dsp::pipeline::DspBridgeReader;
+/// fn assert_clone<T: Clone>() {}
+/// fn main() { assert_clone::<DspBridgeReader>(); }
+/// ```
+///
+/// ```compile_fail
+/// use neural_amp_modeler_rs::dsp::pipeline::DspBridgeReader;
+/// fn assert_sync<T: Sync>() {}
+/// fn main() { assert_sync::<DspBridgeReader>(); }
+/// ```
 pub struct DspBridgeReader(std::ptr::NonNull<DspBridge>);
 
-/// SAFETY: DspBridgeReader owns a `NonNull<DspBridge>` pointing to a heap-immortal
-/// allocation (same lifecycle as DspBridgeWriter — Box::leaked or host/plugin memory).
-/// Sending between threads for init is safe.
+/// SAFETY: `DspBridgeReader` owns exclusive consumer access to a
+/// `NonNull<DspBridge>` pointing to a heap-immortal allocation (same lifecycle
+/// as `DspBridgeWriter` — `Box::leak` or host/plugin memory). Moving it to the
+/// single playback thread during setup is sound. `Sync` is intentionally NOT
+/// implemented so `&DspBridgeReader` cannot be shared across threads.
 unsafe impl Send for DspBridgeReader {}
-/// SAFETY: sound under the bridge's single-writer/single-reader type invariant
-/// (see the writer's `Sync` SAFETY note): exactly one playback thread reads,
-/// its `&self` method only reads the front-buffer selected atomically via
-/// `active_read_idx` (Acquire) and publishes consumption via `consumed_gen`
-/// (Release), while the single writer mutates only the complementary
-/// back-buffer — no mutable aliasing occurs under that discipline.
-unsafe impl Sync for DspBridgeReader {}
 
 impl DspBridgeReader {
     /// Creates a `DspBridgeReader` from a raw pointer to `DspBridge`.
     ///
     /// # Safety
     ///
-    /// The pointer must be valid and non-null, and must reference heap-immortal
-    /// memory (leaked `Box`, or host/plugin lifecycle memory that outlives the
-    /// reader) — see the `Send`/`Sync` SAFETY comments. The null check is a
-    /// `debug_assert!` (loud in dev builds, compiled out in release): a null
-    /// pointer here is a programming error on the initialization path, not a
-    /// runtime-recoverable condition.
+    /// - `ptr` must be valid, non-null, and reference heap-immortal memory
+    ///   (leaked `Box`, or host/plugin lifecycle memory that outlives the
+    ///   reader).
+    /// - **SPSC single-consumer uniqueness**: no other live `DspBridgeReader`
+    ///   may exist concurrently for the same `DspBridge` (two readers mutating
+    ///   `consumed_gen` or advancing past the front-buffer simultaneously breaks
+    ///   the SPSC protocol).
+    ///
+    /// The null check is a `debug_assert!` (loud in dev builds, compiled out in
+    /// release): a null pointer here is a programming error on the
+    /// initialization path, not a runtime-recoverable condition.
     #[inline(always)]
     pub unsafe fn new(ptr: *mut DspBridge) -> Self {
         debug_assert!(
@@ -583,8 +626,16 @@ impl DspBridgeReader {
 
     /// Creates a `DspBridgeReader` from a `BridgeRef`.
     /// Returns `None` if the reference is null.
+    ///
+    /// # Safety
+    ///
+    /// - When `r` is non-null, it must point to a valid, heap-immortal
+    ///   `DspBridge` allocation that outlives the returned reader.
+    /// - **SPSC single-consumer uniqueness**: the caller must ensure at most
+    ///   one `DspBridgeReader` exists and is used at any time for the
+    ///   underlying `DspBridge`.
     #[inline(always)]
-    pub fn from_ref(r: BridgeRef) -> Option<Self> {
+    pub unsafe fn from_ref(r: BridgeRef) -> Option<Self> {
         std::ptr::NonNull::new(r.0).map(Self)
     }
 

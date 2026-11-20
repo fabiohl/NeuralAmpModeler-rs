@@ -66,29 +66,29 @@ pub struct A2GroupedConv1d {
     /// `[kernel][channel]` after that block; the depthwise kernel reads it by
     /// offset, so the hot general path keeps the historical field layout and
     /// the reference keeps validating the pre-repack bytes.
-    pub weights: AlignedVec<f32>,
+    pub(crate) weights: AlignedVec<f32>,
     /// Bias vector `[out_ch]`.
-    pub bias: AlignedVec<f32>,
+    pub(crate) bias: AlignedVec<f32>,
     /// Whether to add bias to the accumulator.
-    pub do_bias: bool,
+    pub(crate) do_bias: bool,
     /// Temporal dilation factor.
-    pub dilation: usize,
+    pub(crate) dilation: usize,
     /// Number of input channels (must be divisible by `groups`).
-    pub in_ch: usize,
+    pub(crate) in_ch: usize,
     /// Number of output channels (must be divisible by `groups`).
-    pub out_ch: usize,
+    pub(crate) out_ch: usize,
     /// Number of groups for the grouped convolution.
-    pub groups: usize,
+    pub(crate) groups: usize,
     /// Input channels per group (`in_ch / groups`).
-    pub in_per_group: usize,
+    pub(crate) in_per_group: usize,
     /// Output channels per group (`out_ch / groups`).
-    pub out_per_group: usize,
+    pub(crate) out_per_group: usize,
     /// Number of 4-channel blocks per group (`ceil(out_per_group / 4)`).
-    pub num_blocks_per_group: usize,
+    pub(crate) num_blocks_per_group: usize,
     /// Total 4-channel blocks across all groups (`groups * num_blocks_per_group`).
-    pub total_blocks: usize,
+    pub(crate) total_blocks: usize,
     /// Kernel size.
-    pub kernel: usize,
+    pub(crate) kernel: usize,
 }
 
 impl A2GroupedConv1d {
@@ -99,16 +99,18 @@ impl A2GroupedConv1d {
     /// `[group][num_blocks][kernel][in_per_group][4]`.
     ///
     /// # Errors
-    /// Returns [`NamErrorCode::InvalidModelTopology`] when `groups == 0`,
-    /// when `kernel` is zero or exceeds `MAX_KERNEL`, when
-    /// `in_ch`/`out_ch` are not exactly divisible by `groups`, or when geometry
-    /// calculations overflow. Returns [`NamErrorCode::WeightCountMismatch`] when
-    /// `raw_weights` does not hold exactly `(out_ch * in_ch / groups) * kernel`
-    /// values, or when `raw_bias` is absent, short, or mismatched with `out_ch`
-    /// (when `do_bias` is enabled, or when a non-empty bias vector is supplied
-    /// with `do_bias` disabled). The constructor is reachable from hostile `.nam`
-    /// parsing (public loader path), so every violation is a typed `Err` — never
-    /// `assert!`, which would panic the host process in release builds too (F-RES2-01).
+    /// Returns [`NamErrorCode::InvalidModelTopology`] when `in_ch == 0`,
+    /// `out_ch == 0`, `groups == 0`, `dilation == 0`,
+    /// `dilation > MAX_DILATION`, when `kernel` is zero or exceeds
+    /// `MAX_KERNEL`, when `in_ch`/`out_ch` are not exactly divisible by
+    /// `groups`, or when geometry/lookback calculations overflow. Returns
+    /// [`NamErrorCode::WeightCountMismatch`] when `raw_weights` does not hold
+    /// exactly `(out_ch * in_ch / groups) * kernel` values, or when `raw_bias`
+    /// is absent, short, or mismatched with `out_ch` (when `do_bias` is enabled,
+    /// or when a non-empty bias vector is supplied with `do_bias` disabled).
+    /// The constructor is reachable from hostile `.nam` parsing (public loader
+    /// path), so every violation is a typed `Err` — never `assert!`, which
+    /// would panic the host process in release builds too (F-RES2-01).
     /// Rejection logging happens at the off-RT loader call site (this file also
     /// hosts the SIMD hot-path kernels, so no `log::` calls are allowed here).
     pub fn new(
@@ -121,7 +123,14 @@ impl A2GroupedConv1d {
         kernel: usize,
         groups: usize,
     ) -> Result<Self, NamErrorCode> {
-        if groups == 0 || !in_ch.is_multiple_of(groups) || !out_ch.is_multiple_of(groups) {
+        if in_ch == 0
+            || out_ch == 0
+            || groups == 0
+            || dilation == 0
+            || dilation > crate::loader::nam_json::MAX_DILATION
+            || !in_ch.is_multiple_of(groups)
+            || !out_ch.is_multiple_of(groups)
+        {
             return Err(NamErrorCode::InvalidModelTopology);
         }
         // The SIMD kernels read taps through a fixed `MAX_KERNEL`-entry pointer
@@ -131,6 +140,9 @@ impl A2GroupedConv1d {
         // `Conv1dDyn::try_from_parts` ceiling — hostile input must not rely on
         // the loader's upstream validation alone.
         if kernel == 0 || kernel > MAX_KERNEL {
+            return Err(NamErrorCode::InvalidModelTopology);
+        }
+        if dilation.checked_mul(kernel.saturating_sub(1)).is_none() {
             return Err(NamErrorCode::InvalidModelTopology);
         }
         // The divisibility checks above make `out_ch / groups` exact, so this
@@ -246,6 +258,78 @@ impl A2GroupedConv1d {
         })
     }
 
+    /// Returns the grouped-interleaved weight slice.
+    #[inline(always)]
+    pub fn weights(&self) -> &[f32] {
+        &self.weights
+    }
+
+    /// Returns the bias slice (`[out_ch]`).
+    #[inline(always)]
+    pub fn bias(&self) -> &[f32] {
+        &self.bias
+    }
+
+    /// Returns whether bias is enabled.
+    #[inline(always)]
+    pub fn do_bias(&self) -> bool {
+        self.do_bias
+    }
+
+    /// Returns the temporal dilation factor.
+    #[inline(always)]
+    pub fn dilation(&self) -> usize {
+        self.dilation
+    }
+
+    /// Returns the number of input channels.
+    #[inline(always)]
+    pub fn in_ch(&self) -> usize {
+        self.in_ch
+    }
+
+    /// Returns the number of output channels.
+    #[inline(always)]
+    pub fn out_ch(&self) -> usize {
+        self.out_ch
+    }
+
+    /// Returns the number of groups.
+    #[inline(always)]
+    pub fn groups(&self) -> usize {
+        self.groups
+    }
+
+    /// Returns the number of input channels per group.
+    #[inline(always)]
+    pub fn in_per_group(&self) -> usize {
+        self.in_per_group
+    }
+
+    /// Returns the number of output channels per group.
+    #[inline(always)]
+    pub fn out_per_group(&self) -> usize {
+        self.out_per_group
+    }
+
+    /// Returns the number of 4-channel blocks per group.
+    #[inline(always)]
+    pub fn num_blocks_per_group(&self) -> usize {
+        self.num_blocks_per_group
+    }
+
+    /// Returns the total number of 4-channel blocks across all groups.
+    #[inline(always)]
+    pub fn total_blocks(&self) -> usize {
+        self.total_blocks
+    }
+
+    /// Returns the kernel size.
+    #[inline(always)]
+    pub fn kernel(&self) -> usize {
+        self.kernel
+    }
+
     /// Processes a single frame through the grouped dilated convolution using SIMD AVX2.
     /// Dispatches to the depthwise fast-path when `groups == in_ch == out_ch`,
     /// otherwise uses the general grouped AVX2 kernel.
@@ -261,13 +345,6 @@ impl A2GroupedConv1d {
         frame_idx: usize,
         mixin: Option<&[f32]>,
     ) {
-        // SAFETY-CRITICAL: these preconditions gate the raw pointer
-        // arithmetic performed by `process_single_frame_depthwise_avx2`/
-        // `grouped_conv1d_single_frame_simd` below (`frame_idx` in particular
-        // drives an offset into `layer_buffer` computed via
-        // signed-then-unsigned arithmetic that wraps to a huge value if
-        // `frame_idx` is too small). Must be `assert!`, not `debug_assert!`
-        // — confirmed to cause a SIGSEGV in release when elided.
         assert!(
             out_frame.len() >= self.out_ch,
             "out_frame len {} < out_ch {}",
@@ -283,12 +360,17 @@ impl A2GroupedConv1d {
             self.dilation,
             self.kernel.saturating_sub(1)
         );
+        let end_idx = frame_idx
+            .checked_add(1)
+            .and_then(|f| f.checked_mul(self.in_ch))
+            .expect("frame_idx overflow");
         assert!(
-            layer_buffer.len() > frame_idx * self.in_ch,
-            "layer_buffer len {} <= frame_idx {} * in_ch {}",
+            layer_buffer.len() >= end_idx,
+            "layer_buffer len {} < (frame_idx {} + 1) * in_ch {} ({})",
             layer_buffer.len(),
             frame_idx,
-            self.in_ch
+            self.in_ch,
+            end_idx
         );
         assert!(
             mixin.is_none_or(|m| m.len() >= self.out_ch),
@@ -299,7 +381,7 @@ impl A2GroupedConv1d {
 
         // SAFETY: the `assert!`s above guarantee the documented preconditions of this
         // `unsafe fn`: `out_frame.len() >= self.out_ch`, `frame_idx >= lookback`,
-        // `layer_buffer.len() > frame_idx * self.in_ch`, and the `mixin` length check,
+        // `layer_buffer.len() >= (frame_idx + 1) * self.in_ch`, and the `mixin` length check,
         // keeping the raw pointer arithmetic in the kernels in-bounds.
         unsafe {
             if self.groups == self.in_ch && self.groups == self.out_ch {

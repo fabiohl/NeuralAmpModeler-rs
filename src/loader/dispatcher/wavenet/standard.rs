@@ -91,14 +91,7 @@ pub(crate) fn build_wavenet_typed<const CH: usize, const K: usize, const HEAD: u
 
     let rf = array1.receptive_field_size.max(array2.receptive_field_size);
 
-    let model = WaveNetModel::<CH, K, HEAD> {
-        array1,
-        array2,
-        head_scale,
-        receptive_field_size: rf,
-        prewarm_on_reset: true,
-        prewarm_pending: false,
-    };
+    let model = WaveNetModel::<CH, K, HEAD>::from_parts(array1, array2, head_scale, rf)?;
 
     info!(
         "[Dispatcher] WaveNet {:?} built — CH={}, K={}, HEAD={}, head_scale={:.6}, weights={}",

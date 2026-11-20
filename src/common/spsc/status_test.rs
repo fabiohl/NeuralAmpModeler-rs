@@ -17,7 +17,9 @@ fn test_rt_status_flags_alignment_and_cache_isolation() {
     assert!(offset_of!(RtStatusFlags, xruns) < 64);
     assert!(offset_of!(RtStatusFlags, degrade_transitions_total) < 64);
     assert!(offset_of!(RtStatusFlags, structural_deferred_total) < 64);
+    assert!(offset_of!(RtStatusFlags, structural_superseded_total) < 64);
     assert!(offset_of!(RtStatusFlags, drains) < 64);
+    assert!(offset_of!(RtStatusFlags, elapsed_discarded_total) < 64);
 
     // Verify latency histogram is 128-byte aligned and isolated
     let hist_offset = offset_of!(RtStatusFlags, latency_hist);
@@ -68,6 +70,11 @@ fn test_rt_status_flags_alignment_and_cache_isolation() {
     assert_ne!(
         main_line, rt_hot_line,
         "Main and RT hot path must not share a cache line"
+    );
+    assert_ne!(
+        offset_of!(RtStatusFlags, structural_superseded_total) / 64,
+        offset_of!(RtStatusFlags, flags_seen) / 64,
+        "structural_superseded_total (RT) and flags_seen (Main) must not share a cache line"
     );
 
     assert!(capture_line < hist_line_start || capture_line > hist_line_end);

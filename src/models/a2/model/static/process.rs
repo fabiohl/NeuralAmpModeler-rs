@@ -5,12 +5,9 @@
 //!
 //! ## Block Size Contract
 //!
-//! Any input size ≤ `max_buffer_size` is safe: processing is internally chunked
-//! into sub-blocks of ≤ `WAVENET_MAX_NUM_FRAMES` (64), matching the kernel scratch
-//! buffer capacity. Exceeding `max_buffer_size` causes silent truncation: only the
-//! first `max_buffer_size` frames are processed and the remaining are left as zeros.
-//! This matches the audio host contract which guarantees
-//! `block_size <= max_block_size` negotiated at activation.
+//! Any input size is processed in full: processing is internally chunked into
+//! sub-blocks of ≤ `WAVENET_MAX_NUM_FRAMES` (64), matching the kernel scratch
+//! buffer capacity and `MirroredBuffer` / `head_accum` ring margins.
 //!
 //! The `dispatch_simd!` macro evaluates `M::ISA` (compile-time constant
 //! through the `SimdMath` trait) to monomorphize the full forward pass,
@@ -65,16 +62,9 @@ impl<const CH: usize> WaveNetA2<CH> {
             return;
         }
 
-        debug_assert!(
-            total <= self.max_buffer_size,
-            "process: input ({total}) > max_buffer_size ({}) — host violated block-size contract",
-            self.max_buffer_size
-        );
-        let nf_total = total.min(self.max_buffer_size);
-
         let mut pos = 0;
-        while pos < nf_total {
-            let nf = (nf_total - pos).min(WAVENET_MAX_NUM_FRAMES);
+        while pos < total {
+            let nf = (total - pos).min(WAVENET_MAX_NUM_FRAMES);
 
             self.rechannel_prescale(input, pos, nf);
             let head_wp = self.advance_head_ring(nf);
@@ -190,7 +180,7 @@ impl<const CH: usize> WaveNetA2<CH> {
             }
         }
 
-        if bs + nf * ch + self.max_buffer_size * ch > ring_size * 2 {
+        if bs + nf * ch + WAVENET_MAX_NUM_FRAMES * ch > ring_size * 2 {
             self.layer_buffer_starts[li] = bs + nf * ch - ring_size;
         } else {
             self.layer_buffer_starts[li] = bs + nf * ch;

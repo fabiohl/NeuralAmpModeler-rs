@@ -650,8 +650,10 @@ fn build_model_pair_from_data(
         "[Loader] Dispatching model build: arch=\"{}\", layout={:?}",
         model_data.architecture, model_data.weights_layout
     );
-    let mut model_l =
-        dispatcher::build_model_with_prewarm(&model_data, options.prewarm != Some(false)).map_err(
+    // Pass `prewarm = false` here so architectures with a build-time prewarm
+    // (`SlimmableContainer`) do not run a duplicate pass before the explicit
+    // `set_max_buffer_size` + `prewarm` sequence below.
+    let mut model_l = dispatcher::build_model_with_prewarm(&model_data, false).map_err(
             |e| {
                 let (code, is_topo) =
                     if let Some(topo_err) = e.chain().find_map(|c| c.downcast_ref::<TopologyError>()) {
@@ -734,43 +736,39 @@ fn build_model_pair_from_data(
     // right channel. Both channels run strictly disjoint internal states (ring buffers,
     // delay lines, recurrent memory) to guarantee zero stereo crosstalk.
     let model_r = if build_dual_mono {
-        let mut model =
-            dispatcher::build_model_with_prewarm(&model_data, options.prewarm != Some(false))
-                .map_err(|e| {
-                    let (code, is_topo) = if let Some(topo_err) =
-                        e.chain().find_map(|c| c.downcast_ref::<TopologyError>())
-                    {
-                        (topo_err.code, true)
-                    } else if let Some(&code) =
-                        e.chain().find_map(|c| c.downcast_ref::<NamErrorCode>())
-                    {
-                        let is_topo = matches!(
-                            code,
-                            NamErrorCode::InvalidModelTopology
-                                | NamErrorCode::InvalidFeatureTopology
-                                | NamErrorCode::NamJsonUnknownActivation
-                                | NamErrorCode::NamJsonSampleRateMismatch
-                        );
-                        (code, is_topo)
-                    } else {
-                        (NamErrorCode::ModelBuildFailed, false)
-                    };
-                    error!(
-                        "[Loader] Model build failed: file='{}', size={} bytes, code={:?} — \
+        let mut model = dispatcher::build_model_with_prewarm(&model_data, false).map_err(|e| {
+            let (code, is_topo) = if let Some(topo_err) =
+                e.chain().find_map(|c| c.downcast_ref::<TopologyError>())
+            {
+                (topo_err.code, true)
+            } else if let Some(&code) = e.chain().find_map(|c| c.downcast_ref::<NamErrorCode>()) {
+                let is_topo = matches!(
+                    code,
+                    NamErrorCode::InvalidModelTopology
+                        | NamErrorCode::InvalidFeatureTopology
+                        | NamErrorCode::NamJsonUnknownActivation
+                        | NamErrorCode::NamJsonSampleRateMismatch
+                );
+                (code, is_topo)
+            } else {
+                (NamErrorCode::ModelBuildFailed, false)
+            };
+            error!(
+                "[Loader] Model build failed: file='{}', size={} bytes, code={:?} — \
                  failed to build model (R) (detail: {}).",
-                        source_label, file_size, code, e
-                    );
-                    if is_topo {
-                        LoadError::InvalidTopology {
-                            code,
-                            reason: e.to_string(),
-                        }
-                    } else if code == NamErrorCode::WeightCountMismatch {
-                        LoadError::DimensionMismatch(e.to_string())
-                    } else {
-                        LoadError::ModelBuildFailed(e.to_string())
-                    }
-                })?;
+                source_label, file_size, code, e
+            );
+            if is_topo {
+                LoadError::InvalidTopology {
+                    code,
+                    reason: e.to_string(),
+                }
+            } else if code == NamErrorCode::WeightCountMismatch {
+                LoadError::DimensionMismatch(e.to_string())
+            } else {
+                LoadError::ModelBuildFailed(e.to_string())
+            }
+        })?;
         model
             .set_max_buffer_size(crate::dsp::pipeline::MAX_RESAMP_BUF)
             .map_err(|e| LoadError::Internal(e.to_string()))?;

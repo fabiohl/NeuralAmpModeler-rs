@@ -169,9 +169,15 @@ impl LstmLayerDyn {
     /// topology where AVX-512 duplication has low ROI).
     #[inline]
     pub fn process(&mut self, input: &[f32]) {
+        assert!(
+            input.len() >= self.input_size,
+            "LstmLayerDyn::process: input slice too short ({} < {})",
+            input.len(),
+            self.input_size
+        );
         // SAFETY: `process_sample_avx2` requires AVX2+FMA+F16C, guaranteed by the
         // crate's x86-64-v3 build baseline (`-Ctarget-cpu=x86-64-v3` in
-        // `.cargo/config.toml`).
+        // `.cargo/config.toml`), and `input.len() >= self.input_size` was asserted above.
         unsafe {
             self.process_sample_avx2(input);
         }

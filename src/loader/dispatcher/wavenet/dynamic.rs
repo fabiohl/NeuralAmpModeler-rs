@@ -482,6 +482,11 @@ fn build_wavenet_dynamic_inner(
         allowed_channels: geom.allowed_channels.clone(),
         pending_slim_channel: None,
     };
+    if !model.validate_state() {
+        return Err(anyhow::Error::from(
+            crate::common::diagnostics::NamErrorCode::InvalidModelTopology,
+        ));
+    }
 
     info!(
         "[Dispatcher] WaveNet Dynamic built — CH={}, K={}, HEAD={}, arrays={}, \

@@ -18,34 +18,52 @@ pub struct ParamSmoother {
 impl ParamSmoother {
     /// Creates a new smoother with initial value and alpha coefficient.
     ///
+    /// Non-finite `initial_value` is sanitized to `0.0`. Non-finite `sample_rate`
+    /// or `cutoff_hz` (or `sample_rate <= 0.0`) forces `alpha = 1.0`.
+    ///
     /// # Parameters
     /// * `initial_value`: Initial value (and initial target).
     /// * `sample_rate`: Sampling rate (fs).
     /// * `cutoff_hz`: Cutoff frequency (fc). Recommended ~20Hz for gains.
     pub fn new(initial_value: f32, sample_rate: f32, cutoff_hz: f32) -> Self {
-        let alpha = if sample_rate > 0.0 {
+        let init = if initial_value.is_finite() {
+            initial_value
+        } else {
+            0.0
+        };
+        let alpha = if sample_rate.is_finite() && sample_rate > 0.0 && cutoff_hz.is_finite() {
             // α = 1 - exp(-2π * fc / fs)
-            1.0 - (-(2.0 * std::f32::consts::PI * cutoff_hz) / sample_rate).exp()
+            let raw = 1.0 - (-(2.0 * std::f32::consts::PI * cutoff_hz) / sample_rate).exp();
+            if raw.is_finite() {
+                raw.clamp(0.0, 1.0)
+            } else {
+                1.0
+            }
         } else {
             1.0
         };
 
         Self {
-            current: initial_value,
-            target: initial_value,
-            alpha: alpha.clamp(0.0, 1.0),
+            current: init,
+            target: init,
+            alpha,
         }
     }
 
-    /// Updates the target value of the parameter.
+    /// Updates the target value of the parameter (ignores non-finite values).
     #[inline]
     pub fn set_target(&mut self, target: f32) {
-        self.target = target;
+        if target.is_finite() {
+            self.target = target;
+        }
     }
 
     /// Jumps immediately to the target value (without smoothing).
     #[inline]
     pub fn snap_to_target(&mut self) {
+        if !self.target.is_finite() {
+            self.target = 0.0;
+        }
         self.current = self.target;
     }
 
@@ -56,6 +74,13 @@ impl ParamSmoother {
     /// overhead for this hot-path 1-pole IIR tick.
     #[inline]
     pub fn tick(&mut self) -> f32 {
+        if !self.target.is_finite() {
+            self.target = 0.0;
+        }
+        if !self.current.is_finite() {
+            self.current = self.target;
+            return self.current;
+        }
         let diff = self.current - self.target;
         // Threshold proportional to the target: 2-5x faster convergence for higher values.
         let threshold = 1e-6 * self.target.abs().max(1.0);
@@ -63,9 +88,8 @@ impl ParamSmoother {
             self.current = self.target;
         } else {
             let next = self.alpha * self.target + (1.0 - self.alpha) * self.current;
-            if next == self.current {
-                // Precision stall detection in f32: if the step is smaller than
-                // the smallest representable variation, forces a snap to the target.
+            if !next.is_finite() || next == self.current {
+                // Precision stall or overflow in f32: snap to target.
                 self.current = self.target;
             } else {
                 self.current = next;
@@ -114,10 +138,12 @@ impl ParamSmoother {
         self.alpha
     }
 
-    /// Sets the current value.
+    /// Sets the current value (ignores non-finite values).
     #[inline]
     pub fn set(&mut self, val: f32) {
-        self.current = val;
+        if val.is_finite() {
+            self.current = val;
+        }
     }
 }
 

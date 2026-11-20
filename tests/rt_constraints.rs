@@ -86,5 +86,7 @@ mod budget_tests {
 mod a2_heap_audit;
 #[path = "rt_constraints/cabsim_heap_audit.rs"]
 mod cabsim_heap_audit;
+#[path = "rt_constraints/prewarm_heap_audit.rs"]
+mod prewarm_heap_audit;
 #[path = "rt_constraints/resampler_heap_audit.rs"]
 mod resampler_heap_audit;

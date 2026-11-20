@@ -28,6 +28,7 @@ fn build_single_block_model() -> ConvNetModel {
             .expect("allocation should succeed for test-sized buffers"),
         prewarm_on_reset: true,
         prewarm_pending: false,
+        prewarm_remaining: 0,
         linear_head: None,
     }
 }
@@ -89,6 +90,7 @@ fn test_linear_head_flat_cpp_parity() {
             .expect("allocation should succeed for test-sized buffers"),
         prewarm_on_reset: true,
         prewarm_pending: false,
+        prewarm_remaining: 0,
         linear_head: Some(linear_head),
     };
 
@@ -120,6 +122,7 @@ fn test_empty_model_outputs_silence() {
             .expect("allocation should succeed for test-sized buffers"),
         prewarm_on_reset: true,
         prewarm_pending: false,
+        prewarm_remaining: 0,
         linear_head: None,
     };
 
@@ -179,6 +182,7 @@ fn test_two_block_chain() {
             .expect("allocation should succeed for test-sized buffers"),
         prewarm_on_reset: true,
         prewarm_pending: false,
+        prewarm_remaining: 0,
         linear_head: None,
     };
 
@@ -234,6 +238,7 @@ fn test_post_stack_head_integration() {
             .expect("allocation should succeed for test-sized buffers"),
         prewarm_on_reset: true,
         prewarm_pending: false,
+        prewarm_remaining: 0,
         linear_head: None,
     };
 
@@ -281,6 +286,7 @@ fn test_prewarm_with_head() {
             .expect("allocation should succeed for test-sized buffers"),
         prewarm_on_reset: true,
         prewarm_pending: false,
+        prewarm_remaining: 0,
         linear_head: None,
     };
 
@@ -319,6 +325,7 @@ fn test_convnet_prewarm_fixed_point_invariant() {
             scratch_b: AlignedVec::new(WAVENET_MAX_NUM_FRAMES, 0.0).expect("scratch_b"),
             prewarm_on_reset: true,
             prewarm_pending: false,
+            prewarm_remaining: 0,
             linear_head: None,
         }
     }
@@ -362,4 +369,60 @@ fn test_convnet_prewarm_fixed_point_invariant() {
 #[test]
 fn test_struct_alignment() {
     assert_eq!(std::mem::align_of::<ConvNetModel>(), 64);
+}
+
+#[test]
+fn test_convnet_split_prewarm_matches_integral_and_advances_monotonically() {
+    fn create_model() -> ConvNetModel {
+        let mut block =
+            ConvNetBlock::new(1, 1, 3, 2, false, ActivationType::Tanh, 0).expect("create block");
+        let weights = vec![
+            0.4f32, -0.2, 0.3, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        ];
+        block.set_conv_weights(&weights);
+        block.set_bn_params(&[1.0f32], &[0.25f32]).unwrap();
+        let rf = block.receptive_field();
+        ConvNetModel::from_parts(
+            vec![block],
+            1.0,
+            rf,
+            None,
+            AlignedVec::new(WAVENET_MAX_NUM_FRAMES, 0.0).unwrap(),
+            AlignedVec::new(WAVENET_MAX_NUM_FRAMES, 0.0).unwrap(),
+            AlignedVec::new(WAVENET_MAX_NUM_FRAMES, 0.0).unwrap(),
+            None,
+        )
+    }
+
+    let mut integral = create_model();
+    integral.prewarm();
+    assert!(integral.prewarm_complete());
+
+    let mut split = create_model();
+    split.prewarm_reset();
+    assert!(!split.prewarm_complete());
+    let before_zero = split.prewarm_step(0);
+    assert_eq!(before_zero, split.receptive_field_size + 1);
+    assert!(!split.prewarm_complete());
+
+    let mut prev = before_zero;
+    while !split.prewarm_complete() {
+        let rem = split.prewarm_step(2);
+        assert!(rem < prev, "prewarm_step must decrease monotonically");
+        prev = rem;
+    }
+    assert_eq!(prev, 0);
+
+    let probe: Vec<f32> = (0..128).map(|i| (i as f32 * 0.1).sin() * 0.5).collect();
+    let mut out_int = vec![0.0f32; 128];
+    let mut out_spl = vec![0.0f32; 128];
+    integral.process(&probe, &mut out_int);
+    split.process(&probe, &mut out_spl);
+    for (i, (&a, &b)) in out_int.iter().zip(out_spl.iter()).enumerate() {
+        assert_eq!(
+            a.to_bits(),
+            b.to_bits(),
+            "ConvNet split prewarm diverged at {i}: {a} vs {b}"
+        );
+    }
 }

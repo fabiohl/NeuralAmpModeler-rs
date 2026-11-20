@@ -419,6 +419,22 @@ macro_rules! impl_avx2_activations {
             // SAFETY: arguments satisfy the function's documented invariants.
             unsafe { super::super::dsp::gain::crossfade_blend_mono_avx2(out, pending, t) }
         }
+
+        #[inline(always)]
+        // SAFETY: slices are valid; CPU supports AVX2+FMA (x86-64-v3, verified by dispatch).
+        unsafe fn crossfade_blend_ramp_mono(
+            out: &mut [f32],
+            pending: &[f32],
+            t_start: f32,
+            t_step: f32,
+        ) {
+            // SAFETY: arguments satisfy the function's documented invariants.
+            unsafe {
+                super::super::dsp::gain::crossfade_blend_ramp_mono_avx2(
+                    out, pending, t_start, t_step,
+                )
+            }
+        }
     };
 }
 pub(crate) use impl_avx2_activations;

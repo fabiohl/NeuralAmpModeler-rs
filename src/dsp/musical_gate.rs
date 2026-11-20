@@ -12,7 +12,7 @@
 //! - Loudness floor: `-120.0 dB` (`1e-12` power)
 //!
 //! Real-time constraints:
-//! - Per-channel state and gain scratch (`Box<[f32; MAX_RESAMP_BUF]>`) are pre-allocated off-RT.
+//! - Per-channel state and gain scratch (`Box<[f32]>`) are pre-allocated off-RT.
 //! - Sample-rate coefficients (`alpha`, `beta`, `dt`, inverse ramp times) are computed only
 //!   inside `MusicalNoiseGate::prepare` off the per-sample hot path using pure IEEE-754 math.
 //! - Per-sample `log10` and `10^x` evaluations use exact-range IEEE-754 bit reduction plus
@@ -135,13 +135,16 @@ pub struct MusicalNoiseGate {
     inv_open_samples: f64,
     inv_close_samples: f64,
     threshold_db: f64,
+    threshold_power: f64,
     max_gain_reduction_db: f64,
     d_open: f64,
     d_close: f64,
     enabled: bool,
     channels: [MusicalGateChannel; 2],
-    gains_l: Box<[f32; MAX_RESAMP_BUF]>,
-    gains_r: Box<[f32; MAX_RESAMP_BUF]>,
+    gains_l: Box<[f32]>,
+    gains_r: Box<[f32]>,
+    valid_gain_l: usize,
+    valid_gain_r: usize,
 }
 
 impl MusicalNoiseGate {
@@ -155,6 +158,7 @@ impl MusicalNoiseGate {
             inv_open_samples: 0.0,
             inv_close_samples: 0.0,
             threshold_db: -90.0,
+            threshold_power: MINIMUM_LOUDNESS_POWER,
             max_gain_reduction_db: 0.0,
             d_open: 0.0,
             d_close: 0.0,
@@ -173,8 +177,10 @@ impl MusicalNoiseGate {
                     time_held: 0.0,
                 },
             ],
-            gains_l: Box::new([1.0f32; MAX_RESAMP_BUF]),
-            gains_r: Box::new([1.0f32; MAX_RESAMP_BUF]),
+            gains_l: vec![1.0f32; MAX_RESAMP_BUF].into_boxed_slice(),
+            gains_r: vec![1.0f32; MAX_RESAMP_BUF].into_boxed_slice(),
+            valid_gain_l: 0,
+            valid_gain_r: 0,
         };
         gate.prepare(sample_rate);
         gate
@@ -244,6 +250,8 @@ impl MusicalNoiseGate {
 
     #[inline]
     fn recompute_threshold_slopes(&mut self) {
+        self.threshold_power =
+            fast_pow10_nonpos_f64(self.threshold_db * 0.1).max(MINIMUM_LOUDNESS_POWER);
         let max_gr = gain_reduction_db(MINIMUM_LOUDNESS_DB, self.threshold_db);
         self.max_gain_reduction_db = max_gr;
         self.d_open = -max_gr * self.inv_open_samples;
@@ -264,6 +272,8 @@ impl MusicalNoiseGate {
         };
         self.channels[0].reset(init_gr);
         self.channels[1].reset(init_gr);
+        self.valid_gain_l = 0;
+        self.valid_gain_r = 0;
     }
 
     /// Resets channels to full open (`0.0 dB`, `1.0x`) for clean bypass transitions.
@@ -274,6 +284,8 @@ impl MusicalNoiseGate {
             ch.last_gain_reduction_db = 0.0;
             ch.time_held = 0.0;
         }
+        self.valid_gain_l = 0;
+        self.valid_gain_r = 0;
     }
 
     /// Returns whether the musical gate is actively attenuating audio (`> 0.5 dB` reduction).
@@ -324,9 +336,13 @@ impl MusicalNoiseGate {
         };
         let n = n_samples.min(MAX_RESAMP_BUF).min(in_l.len());
         self.process_channel_trigger(0, &in_l[..n], scale);
+        self.valid_gain_l = n;
         if !process_mono {
             let nr = n.min(in_r.len());
             self.process_channel_trigger(1, &in_r[..nr], scale);
+            self.valid_gain_r = nr;
+        } else {
+            self.valid_gain_r = 0;
         }
     }
 
@@ -336,6 +352,7 @@ impl MusicalNoiseGate {
         let beta = self.beta;
         let dt = self.dt;
         let threshold_db = self.threshold_db;
+        let threshold_power = self.threshold_power;
         let max_gr = self.max_gain_reduction_db;
         let d_open = self.d_open;
         let d_close = self.d_close;
@@ -360,23 +377,32 @@ impl MusicalNoiseGate {
             };
             level = (alpha * level + beta * (x * x))
                 .clamp(MINIMUM_LOUDNESS_POWER, MAXIMUM_LOUDNESS_POWER);
-            let level_db = 10.0 * fast_log10_pos_f64(level);
 
             match state {
                 TriggerState::Holding => {
                     last_gr = 0.0;
-                    if level_db < threshold_db {
-                        time_held += dt;
-                        if time_held >= MUSICAL_GATE_HOLD_TIME_SEC {
-                            state = TriggerState::Moving;
-                        }
-                    } else {
+                    if level >= threshold_power {
                         time_held = 0.0;
+                    } else {
+                        let level_db = 10.0 * fast_log10_pos_f64(level);
+                        if level_db < threshold_db {
+                            time_held += dt;
+                            if time_held >= MUSICAL_GATE_HOLD_TIME_SEC {
+                                state = TriggerState::Moving;
+                            }
+                        } else {
+                            time_held = 0.0;
+                        }
                     }
                     *out_g = 1.0;
                 }
                 TriggerState::Moving => {
-                    let target_gr = gain_reduction_db(level_db, threshold_db);
+                    let target_gr = if level >= threshold_power {
+                        0.0
+                    } else {
+                        let level_db = 10.0 * fast_log10_pos_f64(level);
+                        gain_reduction_db(level_db, threshold_db)
+                    };
                     if target_gr > last_gr {
                         let d_gain = (0.5 * (target_gr - last_gr)).clamp(0.0, d_open);
                         last_gr += d_gain;
@@ -406,6 +432,76 @@ impl MusicalNoiseGate {
         ch.state = state;
     }
 
+    #[inline]
+    #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2"))]
+    #[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
+    unsafe fn apply_channel_gain_simd(
+        out: &mut [f32],
+        gains: &[f32],
+        valid_gain: usize,
+        n_out: usize,
+    ) {
+        use crate::arch::simd::*;
+
+        let lim = n_out.min(MAX_RESAMP_BUF).min(out.len()).min(gains.len());
+        let valid_avail = valid_gain.min(gains.len());
+        let valid = lim.min(valid_avail);
+
+        let out_ptr = out.as_mut_ptr();
+        let gains_ptr = gains.as_ptr();
+        let mut i = 0usize;
+        while i + 8 <= valid {
+            // SAFETY: `i + 8 <= valid <= lim <= out.len().min(gains.len())`, so both 8-lane
+            // unaligned loads/stores are in-bounds.
+            unsafe {
+                let yv = _mm256_loadu_ps(out_ptr.add(i));
+                let gv = _mm256_loadu_ps(gains_ptr.add(i));
+                _mm256_storeu_ps(out_ptr.add(i), _mm256_mul_ps(yv, gv));
+            }
+            i += 8;
+        }
+        while i < valid {
+            // SAFETY: `i < valid <= lim <= out.len().min(gains.len())`.
+            unsafe {
+                *out_ptr.add(i) *= *gains_ptr.add(i);
+            }
+            i += 1;
+        }
+
+        if valid < lim {
+            let tail_gain = if valid_avail > 0 {
+                gains[valid_avail - 1]
+            } else {
+                1.0
+            };
+            let gv = _mm256_set1_ps(tail_gain);
+            let mut j = valid;
+            while j + 8 <= lim {
+                // SAFETY: `j + 8 <= lim <= out.len()`, so the 8-lane load/store is in-bounds.
+                unsafe {
+                    let yv = _mm256_loadu_ps(out_ptr.add(j));
+                    _mm256_storeu_ps(out_ptr.add(j), _mm256_mul_ps(yv, gv));
+                }
+                j += 8;
+            }
+            while j < lim {
+                // SAFETY: `j < lim <= out.len()`.
+                unsafe {
+                    *out_ptr.add(j) *= tail_gain;
+                }
+                j += 1;
+            }
+        }
+    }
+
+    #[inline]
+    fn apply_channel_gain(out: &mut [f32], gains: &[f32], valid_gain: usize, n_out: usize) {
+        // SAFETY: x86-64-v3 (AVX2) / aarch64 (NEON) baseline guarantees SIMD availability.
+        unsafe {
+            Self::apply_channel_gain_simd(out, gains, valid_gain, n_out);
+        }
+    }
+
     /// Applies precomputed per-sample expander gains to model output (post-model, pre-CabSim IR).
     #[inline]
     pub fn apply_gain(
@@ -418,15 +514,9 @@ impl MusicalNoiseGate {
         if !self.enabled {
             return;
         }
-        let nl = n_out.min(MAX_RESAMP_BUF).min(out_l.len());
-        for (y, &g) in out_l[..nl].iter_mut().zip(self.gains_l[..nl].iter()) {
-            *y *= g;
-        }
+        Self::apply_channel_gain(out_l, &self.gains_l, self.valid_gain_l, n_out);
         if !process_mono {
-            let nr = n_out.min(MAX_RESAMP_BUF).min(out_r.len());
-            for (y, &g) in out_r[..nr].iter_mut().zip(self.gains_r[..nr].iter()) {
-                *y *= g;
-            }
+            Self::apply_channel_gain(out_r, &self.gains_r, self.valid_gain_r, n_out);
         }
     }
 

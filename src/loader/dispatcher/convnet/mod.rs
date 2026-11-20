@@ -117,6 +117,15 @@ fn build_convnet_flat_cpp(
             let beta = cursor.read_slice(out_ch)?;
             let eps = cursor.read_f32_finite()?;
 
+            crate::models::convnet::batch_norm::validate_raw_batchnorm_params(
+                out_ch,
+                gamma,
+                beta,
+                running_mean,
+                running_var,
+                eps,
+            )?;
+
             let mut scale = vec![0.0f32; out_ch];
             let mut offset = vec![0.0f32; out_ch];
             for c in 0..out_ch {
@@ -179,18 +188,16 @@ fn build_convnet_flat_cpp(
     let scratch_a = AlignedVec::new(max_scratch_ch * WAVENET_MAX_NUM_FRAMES, 0.0)?;
     let scratch_b = AlignedVec::new(max_scratch_ch * WAVENET_MAX_NUM_FRAMES, 0.0)?;
 
-    let model = ConvNetModel {
+    let model = ConvNetModel::from_parts(
         blocks,
         head_scale,
-        receptive_field_size: total_rf,
-        post_stack_head: None,
+        total_rf,
+        None,
         head_output_scratch,
         scratch_a,
         scratch_b,
-        prewarm_on_reset: true,
-        prewarm_pending: false,
         linear_head,
-    };
+    );
 
     let bn_label = if batchnorm { "with BN" } else { "no BN" };
     info!(
@@ -296,9 +303,13 @@ fn build_convnet_layers(
         let kernel = topo.kernel_sizes[i];
         let dilations = &topo.dilations[i];
 
-        let dilation = *dilations
-            .first()
-            .context(format!("ConvNet block {i}: empty dilations list"))?;
+        if dilations.len() != 1 {
+            anyhow::bail!(
+                "ConvNet block {i}: Layers format requires exactly 1 dilation per layer, got {}",
+                dilations.len()
+            );
+        }
+        let dilation = dilations[0];
 
         let do_bias = true;
 
@@ -351,9 +362,7 @@ fn build_convnet_layers(
         let bn_offset = cursor.read_slice(out_ch)?;
         block.set_bn_params(bn_scale, bn_offset)?;
 
-        for &d in dilations {
-            total_rf += (kernel - 1) * d;
-        }
+        total_rf += (kernel - 1) * dilation;
 
         blocks.push(block);
     }
@@ -409,18 +418,16 @@ fn build_convnet_layers(
     let scratch_a = AlignedVec::new(max_scratch_ch * WAVENET_MAX_NUM_FRAMES, 0.0)?;
     let scratch_b = AlignedVec::new(max_scratch_ch * WAVENET_MAX_NUM_FRAMES, 0.0)?;
 
-    let model = ConvNetModel {
+    let model = ConvNetModel::from_parts(
         blocks,
         head_scale,
-        receptive_field_size: total_rf,
+        total_rf,
         post_stack_head,
         head_output_scratch,
         scratch_a,
         scratch_b,
-        prewarm_on_reset: true,
-        prewarm_pending: false,
-        linear_head: None,
-    };
+        None,
+    );
 
     info!(
         "[Dispatcher] ConvNet built — num_blocks={}, head_scale={:.6}, weights={}",

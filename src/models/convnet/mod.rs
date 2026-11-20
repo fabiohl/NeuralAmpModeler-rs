@@ -36,31 +36,21 @@ impl NamModel for ConvNetModel {
         self.prewarm();
     }
 
-    /// Deferred split flow for hard-deadline consumers: this family's
-    /// stabilization is a single one-shot feed (no separate zero phase), so
-    /// it is armed as one pending unit and executed on the first
-    /// [`NamModel::prewarm_step`] call.
-    ///
-    /// The zero phase clears every block's delay-line state so the pending
-    /// stabilization starts from the freshly-built condition.
+    /// Zero phase of the deferred split flow: clears every block's delay-line
+    /// state and arms `receptive_field_size + 1` zero-feed samples.
     fn prewarm_reset(&mut self) {
-        self.clear_state();
-        self.prewarm_pending = true;
+        self.prewarm_reset();
     }
 
-    /// Executes the one-shot stabilization unit (bounded by one pass);
-    /// returns the remaining unit count.
+    /// Advances the armed stabilization by up to `samples` zeroed samples
+    /// without heap allocation; returns the remaining sample count.
     fn prewarm_step(&mut self, samples: usize) -> usize {
-        if self.prewarm_pending && samples > 0 {
-            self.prewarm();
-            self.prewarm_pending = false;
-        }
-        if self.prewarm_pending { 1 } else { 0 }
+        self.prewarm_step(samples)
     }
 
     /// Deferred pass pending? (`true` when nothing is armed/left.)
     fn prewarm_complete(&self) -> bool {
-        !self.prewarm_pending
+        self.prewarm_complete()
     }
 
     fn prewarm_samples(&self) -> usize {

@@ -22,6 +22,10 @@ pub const MIN_CALIBRATION_DBU: f32 = -60.0;
 pub const MAX_CALIBRATION_DBU: f32 = 60.0;
 /// Target normalized loudness in LUFS/dB.
 pub const TARGET_LOUDNESS_DB: f32 = -18.0;
+/// Minimum plausible model loudness in dB LUFS/dB.
+pub const MIN_LOUDNESS_DB: f32 = -120.0;
+/// Maximum plausible model loudness in dB LUFS/dB.
+pub const MAX_LOUDNESS_DB: f32 = 60.0;
 
 /// Output gain compensation mode for neural amp models.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -125,7 +129,7 @@ impl ModelCalibrationMeta {
             .has_loudness()
             .then(|| pair.loudness())
             .flatten()
-            .filter(|v| v.is_finite());
+            .filter(|v| is_valid_loudness(*v));
         Self {
             has_model: true,
             input_level_dbu,
@@ -179,6 +183,11 @@ fn is_valid_dbu(val: f32) -> bool {
 }
 
 #[inline]
+fn is_valid_loudness(val: f32) -> bool {
+    val.is_finite() && (MIN_LOUDNESS_DB..=MAX_LOUDNESS_DB).contains(&val)
+}
+
+#[inline]
 fn db_to_linear_exact(db: f32) -> f32 {
     if db == 0.0 || !db.is_finite() {
         return 1.0;
@@ -219,12 +228,12 @@ pub fn compute_calibration_gains(
     let output_db = match output_mode {
         OutputMode::Raw => 0.0,
         OutputMode::Normalized => match meta.loudness {
-            Some(loudness_db) => TARGET_LOUDNESS_DB - loudness_db,
-            None => 0.0,
+            Some(loudness_db) if is_valid_loudness(loudness_db) => TARGET_LOUDNESS_DB - loudness_db,
+            _ => 0.0,
         },
         OutputMode::Calibrated => match meta.output_level_dbu {
-            Some(model_out_dbu) => model_out_dbu - cal_dbu,
-            None => 0.0,
+            Some(model_out_dbu) if is_valid_dbu(model_out_dbu) => model_out_dbu - cal_dbu,
+            _ => 0.0,
         },
     };
 

@@ -26,13 +26,13 @@ use super::batch_norm::BatchNorm1D;
 #[repr(align(64))]
 pub struct ConvNetBlock {
     /// Causal 1D convolution (runtime dimensions).
-    pub conv: Conv1dDyn,
+    pub(crate) conv: Conv1dDyn,
     /// Batch normalization (pre-fused affine transform).
-    pub bn: BatchNorm1D,
+    pub(crate) bn: BatchNorm1D,
     /// Activation function applied after batch norm.
-    pub activation: ActivationType,
+    pub(crate) activation: ActivationType,
     /// Ring buffer state for causal convolution lookback.
-    pub state: WaveNetLayerState,
+    pub(crate) state: WaveNetLayerState,
 }
 
 impl ConvNetBlock {
@@ -80,6 +80,30 @@ impl ConvNetBlock {
             activation,
             state,
         })
+    }
+
+    /// Returns the causal 1D convolution layer of this block.
+    #[inline(always)]
+    pub fn conv(&self) -> &Conv1dDyn {
+        &self.conv
+    }
+
+    /// Returns the batch normalization layer of this block.
+    #[inline(always)]
+    pub fn bn(&self) -> &BatchNorm1D {
+        &self.bn
+    }
+
+    /// Returns the activation function of this block.
+    #[inline(always)]
+    pub fn activation(&self) -> &ActivationType {
+        &self.activation
+    }
+
+    /// Returns the causal delay-line ring buffer state of this block.
+    #[inline(always)]
+    pub fn state(&self) -> &WaveNetLayerState {
+        &self.state
     }
 
     /// Returns the receptive field contribution of this block.

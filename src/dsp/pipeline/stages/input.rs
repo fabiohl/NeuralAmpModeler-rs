@@ -29,7 +29,7 @@ pub const DENORMAL_DITHER_OFFSET: f32 = 1.0e-11;
 /// Delegates gate-flag reporting to the canonical `report_gate_flags`.
 #[cold]
 #[inline(never)]
-pub fn handle_silence_bypass(bridge: Option<DspBridgeWriter>, rt_status: &RtStatusFlags) {
+pub fn handle_silence_bypass(bridge: Option<&DspBridgeWriter>, rt_status: &RtStatusFlags) {
     crate::dsp::gate_flags::report_gate_flags(rt_status, crate::dsp::gate::GateState::Closed);
 
     if let Some(writer) = bridge {
@@ -118,6 +118,15 @@ pub(crate) unsafe fn apply_input_stage_mono_inner<M: SimdMath>(
     n_samples: usize,
     ctx: &mut DspPipelineContext<'_>,
 ) -> GateState {
+    let max_len = samples_l.len();
+    let n_samples = if crate::common::unlikely(n_samples > max_len) {
+        ctx.rt_status
+            .set_flag(crate::common::spsc::RT_STATUS_HOST_CONTRACT_VIOLATION);
+        max_len
+    } else {
+        n_samples
+    };
+
     let (mut energy_ms, non_finite_energy) = {
         // SAFETY: slice is valid.
         unsafe { M::compute_energy(&samples_l[..n_samples]) }
@@ -180,6 +189,18 @@ pub(crate) unsafe fn apply_input_stage_inner<M: SimdMath>(
     n_samples: usize,
     ctx: &mut DspPipelineContext<'_>,
 ) -> GateState {
+    #[cfg(feature = "dual-mono")]
+    let max_len = samples_l.len().min(samples_r.len());
+    #[cfg(not(feature = "dual-mono"))]
+    let max_len = samples_l.len();
+    let n_samples = if crate::common::unlikely(n_samples > max_len) {
+        ctx.rt_status
+            .set_flag(crate::common::spsc::RT_STATUS_HOST_CONTRACT_VIOLATION);
+        max_len
+    } else {
+        n_samples
+    };
+
     #[cfg(feature = "dual-mono")]
     let (mut energy_ms, non_finite_energy) = {
         // SAFETY: both slices are valid references of identical length.
@@ -287,3 +308,7 @@ pub(crate) unsafe fn apply_input_stage_inner<M: SimdMath>(
 
     ctx.silence_hysteresis.state()
 }
+
+#[cfg(test)]
+#[path = "input_test.rs"]
+mod input_test;

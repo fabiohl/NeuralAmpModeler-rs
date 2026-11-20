@@ -260,3 +260,87 @@ fn test_conv1d_try_from_parts_validation() {
         "Valid Conv1dDyn parameters should construct successfully"
     );
 }
+
+#[test]
+fn test_dense_layer_dyn_bit_exact_parity_with_const_generic() {
+    use crate::math::common::Avx2Math;
+    use crate::models::wavenet::dense_dyn::DenseLayerDyn;
+
+    fn make_vals(len: usize, seed: u32) -> AlignedVec<f32> {
+        let mut v = AlignedVec::new(len, 0.0f32).unwrap();
+        let mut s = seed;
+        for item in v.iter_mut() {
+            s = s.wrapping_mul(1664525).wrapping_add(1013904223);
+            *item = ((s as f32) / (u32::MAX as f32)) * 2.0 - 1.0;
+        }
+        v
+    }
+
+    fn check_square<const C: usize>(do_bias: bool, num_frames: usize) {
+        let w = make_vals(C * C, 100 + C as u32);
+        let b = make_vals(C, 200 + C as u32);
+        let input = make_vals(num_frames * C, 300 + C as u32);
+        let residual = make_vals(num_frames * C, 400 + C as u32);
+
+        let st = DenseLayer::<C, C>::try_from_parts(w.clone(), b.clone(), do_bias).unwrap();
+        let dy = DenseLayerDyn::try_from_parts(w, b, do_bias, C, C).unwrap();
+
+        let mut out_st = vec![0.0f32; num_frames * C];
+        let mut out_dy = vec![0.0f32; num_frames * C];
+
+        // SAFETY: `input`, `residual`, and `out_*` match `num_frames * C` and `Avx2Math`
+        // matches the x86-64-v3 / NEON host baseline.
+        unsafe {
+            st.process_residual_batch::<Avx2Math>(&input, &residual, &mut out_st, num_frames);
+            dy.process_residual_batch::<Avx2Math>(&input, &residual, &mut out_dy, num_frames);
+        }
+
+        for (i, (&a, &b_val)) in out_st.iter().zip(out_dy.iter()).enumerate() {
+            assert_eq!(
+                a.to_bits(),
+                b_val.to_bits(),
+                "residual mismatch for ({C},{C}) do_bias={do_bias} at idx {i}: {a} vs {b_val}"
+            );
+        }
+    }
+
+    fn check_broadcast<const OUT: usize>(do_bias: bool, num_frames: usize) {
+        let w = make_vals(OUT, 500 + OUT as u32);
+        let b = make_vals(OUT, 600 + OUT as u32);
+        let input = make_vals(num_frames, 700 + OUT as u32);
+
+        let st = DenseLayer::<1, OUT>::try_from_parts(w.clone(), b.clone(), do_bias).unwrap();
+        let dy = DenseLayerDyn::try_from_parts(w, b, do_bias, 1, OUT).unwrap();
+
+        let mut out_st = vec![0.0f32; num_frames * OUT];
+        let mut out_dy = vec![0.0f32; num_frames * OUT];
+
+        // SAFETY: `input` and `out_*` match `num_frames` / `num_frames * OUT` and `Avx2Math`
+        // matches the x86-64-v3 / NEON host baseline.
+        unsafe {
+            st.process_block::<Avx2Math>(&input, &mut out_st, num_frames);
+            dy.process_block::<Avx2Math>(&input, &mut out_dy, num_frames);
+        }
+
+        for (i, (&a, &b_val)) in out_st.iter().zip(out_dy.iter()).enumerate() {
+            assert_eq!(
+                a.to_bits(),
+                b_val.to_bits(),
+                "broadcast mismatch for (1,{OUT}) do_bias={do_bias} at idx {i}: {a} vs {b_val}"
+            );
+        }
+    }
+
+    for &do_bias in &[false, true] {
+        for &nf in &[1usize, 13, 64] {
+            check_square::<4>(do_bias, nf);
+            check_square::<8>(do_bias, nf);
+            check_square::<12>(do_bias, nf);
+            check_square::<16>(do_bias, nf);
+            check_broadcast::<4>(do_bias, nf);
+            check_broadcast::<8>(do_bias, nf);
+            check_broadcast::<12>(do_bias, nf);
+            check_broadcast::<16>(do_bias, nf);
+        }
+    }
+}

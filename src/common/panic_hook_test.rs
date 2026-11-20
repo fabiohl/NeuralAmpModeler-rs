@@ -31,7 +31,7 @@ fn test_shutdown_in_progress_lifecycle_and_reset() {
 fn test_panic_report_without_install_emits_minimal_report() {
     // Do not call install_panic_hook: the hook path must degrade, never panic.
     let written = std::panic::catch_unwind(|| {
-        let mut buf = [0u8; 16384];
+        let mut buf = [0u8; PANIC_REPORT_BUF_SIZE];
         let n = write_panic_report(
             &mut buf,
             "test-no-snapshot",
@@ -45,7 +45,10 @@ fn test_panic_report_without_install_emits_minimal_report() {
 
     let (n, buf) = written;
     assert!(n > 0, "minimal report must produce output");
-    assert!(n <= 16384, "report must stay within the stack buffer");
+    assert!(
+        n <= PANIC_REPORT_BUF_SIZE,
+        "report must stay within the 4096-byte stack buffer"
+    );
     let report = std::str::from_utf8(&buf[..n]).expect("report is utf-8");
     assert!(report.contains("NeuralAmpModeler-rs CRASH REPORT"));
     assert!(report.contains("synthetic panic"));
@@ -60,7 +63,7 @@ fn test_panic_report_without_install_emits_minimal_report() {
 
 #[test]
 fn test_format_panic_report_none_snapshot_is_minimal() {
-    let mut buf = [0u8; 16384];
+    let mut buf = [0u8; PANIC_REPORT_BUF_SIZE];
     let n = format_panic_report_to_buf(
         &mut buf,
         "test-component",
@@ -70,7 +73,7 @@ fn test_format_panic_report_none_snapshot_is_minimal() {
         None,
     );
     assert!(n > 0);
-    assert!(n <= 16384);
+    assert!(n <= PANIC_REPORT_BUF_SIZE);
     let report = std::str::from_utf8(&buf[..n]).expect("report is utf-8");
     assert!(report.starts_with("======================================="));
     assert!(report.contains("test panic message"));
@@ -254,7 +257,7 @@ fn test_panic_report_reads_host_library_version_set_after_hook_install() {
 
     crate::common::diagnostics::set_host_library_version("test-host 1.2.3".to_string());
 
-    let mut buf = [0u8; 16384];
+    let mut buf = [0u8; PANIC_REPORT_BUF_SIZE];
     let n = format_panic_report_to_buf(
         &mut buf,
         "test-component",
@@ -263,6 +266,8 @@ fn test_panic_report_reads_host_library_version_set_after_hook_install() {
         "test panic message",
         Some(&snap),
     );
+    assert_eq!(PANIC_REPORT_BUF_SIZE, 4096);
+    assert!(n <= PANIC_REPORT_BUF_SIZE);
     let report = std::str::from_utf8(&buf[..n]).expect("report is utf-8");
     assert!(
         report.contains("host_library=test-host 1.2.3"),

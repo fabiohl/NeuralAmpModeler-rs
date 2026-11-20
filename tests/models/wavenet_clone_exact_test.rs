@@ -43,11 +43,11 @@ fn test_clone_exact_wavenet_condition_dsp() {
         .expect("wavenet_condition_dsp.nam should load as WavenetDyn");
 
     let exact_clone = model.clone_exact();
-    assert_eq!(exact_clone.ch, model.ch);
-    assert_eq!(exact_clone.arrays.len(), model.arrays.len());
-    for (a_orig, a_clone) in model.arrays.iter().zip(exact_clone.arrays.iter()) {
-        assert_eq!(a_orig.ch, a_clone.ch);
-        assert_eq!(a_orig.in_ch, a_clone.in_ch);
+    assert_eq!(exact_clone.ch(), model.ch());
+    assert_eq!(exact_clone.arrays().len(), model.arrays().len());
+    for (a_orig, a_clone) in model.arrays().iter().zip(exact_clone.arrays().iter()) {
+        assert_eq!(a_orig.ch(), a_clone.ch());
+        assert_eq!(a_orig.in_ch(), a_clone.in_ch());
     }
 
     let storage_clone = clone_wavenet_for_slimmable_storage(&model);
@@ -63,11 +63,11 @@ fn test_clone_exact_wavenet_dyn_free() {
         .expect("wavenet_dyn_free.nam should load as WavenetDyn");
 
     let exact_clone = model.clone_exact();
-    assert_eq!(exact_clone.ch, model.ch);
-    assert_eq!(exact_clone.arrays.len(), model.arrays.len());
-    for (a_orig, a_clone) in model.arrays.iter().zip(exact_clone.arrays.iter()) {
-        assert_eq!(a_orig.ch, a_clone.ch);
-        assert_eq!(a_orig.in_ch, a_clone.in_ch);
+    assert_eq!(exact_clone.ch(), model.ch());
+    assert_eq!(exact_clone.arrays().len(), model.arrays().len());
+    for (a_orig, a_clone) in model.arrays().iter().zip(exact_clone.arrays().iter()) {
+        assert_eq!(a_orig.ch(), a_clone.ch());
+        assert_eq!(a_orig.in_ch(), a_clone.in_ch());
     }
 
     let storage_clone = clone_wavenet_for_slimmable_storage(&model);
@@ -83,11 +83,11 @@ fn test_clone_exact_wavenet_official() {
         .expect("wavenet_official.nam should load as WavenetDyn");
 
     let exact_clone = model.clone_exact();
-    assert_eq!(exact_clone.ch, model.ch);
-    assert_eq!(exact_clone.arrays.len(), model.arrays.len());
-    for (a_orig, a_clone) in model.arrays.iter().zip(exact_clone.arrays.iter()) {
-        assert_eq!(a_orig.ch, a_clone.ch);
-        assert_eq!(a_orig.in_ch, a_clone.in_ch);
+    assert_eq!(exact_clone.ch(), model.ch());
+    assert_eq!(exact_clone.arrays().len(), model.arrays().len());
+    for (a_orig, a_clone) in model.arrays().iter().zip(exact_clone.arrays().iter()) {
+        assert_eq!(a_orig.ch(), a_clone.ch());
+        assert_eq!(a_orig.in_ch(), a_clone.in_ch());
     }
 
     let storage_clone = clone_wavenet_for_slimmable_storage(&model);
@@ -110,11 +110,11 @@ fn test_clone_exact_slammin_marshall() {
     let model = load_wavenet_dyn(basename).expect("present Slammin model must load as WaveNetDyn");
 
     let exact_clone = model.clone_exact();
-    assert_eq!(exact_clone.ch, model.ch);
-    assert_eq!(exact_clone.arrays.len(), model.arrays.len());
-    for (a_orig, a_clone) in model.arrays.iter().zip(exact_clone.arrays.iter()) {
-        assert_eq!(a_orig.ch, a_clone.ch);
-        assert_eq!(a_orig.in_ch, a_clone.in_ch);
+    assert_eq!(exact_clone.ch(), model.ch());
+    assert_eq!(exact_clone.arrays().len(), model.arrays().len());
+    for (a_orig, a_clone) in model.arrays().iter().zip(exact_clone.arrays().iter()) {
+        assert_eq!(a_orig.ch(), a_clone.ch());
+        assert_eq!(a_orig.in_ch(), a_clone.in_ch());
     }
 
     let storage_clone = clone_wavenet_for_slimmable_storage(&model);

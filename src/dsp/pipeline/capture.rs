@@ -72,7 +72,7 @@ pub fn capture_dsp_pipeline(
         ctx.rt_status.set_flag(RT_STATUS_HOST_CONTRACT_VIOLATION);
     }
     if n == 0 {
-        if let Some(writer) = ctx.bridge_writer {
+        if let Some(ref writer) = ctx.bridge_writer {
             writer.write_silence();
         }
         return 0;
@@ -86,7 +86,7 @@ pub fn capture_dsp_pipeline(
         bufs.resamp_out_l[..safe_l].fill(0.0);
         let safe_r = bufs.resamp_out_r.len().min(n);
         bufs.resamp_out_r[..safe_r].fill(0.0);
-        if let Some(writer) = ctx.bridge_writer {
+        if let Some(ref writer) = ctx.bridge_writer {
             writer.write_silence();
         }
         return 0;
@@ -171,7 +171,7 @@ unsafe fn capture_dsp_pipeline_inner<M: SimdMath>(
         // consumer path is the streaming entry
         // (`capture_dsp_pipeline_streaming`), which drains the cab-sim tail
         // on closure instead of cutting to silence instantly.
-        if let Some(writer) = ctx.bridge_writer {
+        if let Some(ref writer) = ctx.bridge_writer {
             writer.write_silence();
         }
         return 0;
@@ -271,7 +271,7 @@ unsafe fn capture_dsp_pipeline_inner<M: SimdMath>(
         bufs.resamp_out_l,
         bufs.resamp_out_r,
         n_pw,
-        ctx.bridge_writer,
+        ctx.bridge_writer.as_ref(),
         *ctx.process_mono,
     );
 
@@ -339,7 +339,7 @@ pub fn capture_dsp_pipeline_streaming<'b>(
         ctx.rt_status.set_flag(RT_STATUS_HOST_CONTRACT_VIOLATION);
     }
     if n == 0 {
-        if let Some(writer) = ctx.bridge_writer {
+        if let Some(ref writer) = ctx.bridge_writer {
             writer.write_silence();
         }
         return 0;
@@ -353,7 +353,7 @@ pub fn capture_dsp_pipeline_streaming<'b>(
         bufs.resamp_out_l[..safe_l].fill(0.0);
         let safe_r = bufs.resamp_out_r.len().min(n);
         bufs.resamp_out_r[..safe_r].fill(0.0);
-        if let Some(writer) = ctx.bridge_writer {
+        if let Some(ref writer) = ctx.bridge_writer {
             writer.write_silence();
         }
         return 0;
@@ -528,7 +528,7 @@ unsafe fn capture_dsp_pipeline_streaming_inner<M: SimdMath>(
                 bufs.resamp_out_l,
                 bufs.resamp_out_r,
                 n_samples,
-                ctx.bridge_writer,
+                ctx.bridge_writer.as_ref(),
                 *ctx.process_mono,
             );
 
@@ -537,7 +537,7 @@ unsafe fn capture_dsp_pipeline_streaming_inner<M: SimdMath>(
             return n_samples;
         }
 
-        if let Some(writer) = ctx.bridge_writer {
+        if let Some(ref writer) = ctx.bridge_writer {
             writer.write_silence();
         }
         return 0;
@@ -637,7 +637,7 @@ unsafe fn capture_dsp_pipeline_streaming_inner<M: SimdMath>(
         bufs.resamp_out_l,
         bufs.resamp_out_r,
         n_pw,
-        ctx.bridge_writer,
+        ctx.bridge_writer.as_ref(),
         *ctx.process_mono,
     );
 

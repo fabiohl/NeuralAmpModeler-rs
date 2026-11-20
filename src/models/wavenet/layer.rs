@@ -4,6 +4,7 @@
 use super::common::{WAVENET_MAX_NUM_FRAMES, WavenetProcessContext};
 use super::conv1d::Conv1d;
 use super::dense::DenseLayer;
+use crate::common::diagnostics::NamErrorCode;
 use crate::math::common::{AlignedVec, SimdMath};
 use crate::models::a2::activations::ActivationType;
 
@@ -28,22 +29,75 @@ mod telemetry_vars {
 #[derive(Clone)]
 pub struct WaveNetLayer<const COND: usize, const CH: usize, const K: usize> {
     /// This layer's parametric dilated Causal 1D convolution mesh.
-    pub conv1d: Conv1d<CH, CH, K>,
+    pub(crate) conv1d: Conv1d<CH, CH, K>,
     /// Conditional injection mixing network.
-    pub input_mixin: DenseLayer<COND, CH>,
+    pub(crate) input_mixin: DenseLayer<COND, CH>,
     /// 1x1 decompression linear affine transform of the layer.
-    pub one_by_one: DenseLayer<CH, CH>,
+    pub(crate) one_by_one: DenseLayer<CH, CH>,
     /// Activation function for this layer (default: Tanh).
-    pub activation: ActivationType,
+    pub(crate) activation: ActivationType,
     /// Pre-allocated scratch buffer for conditioning mixin output
     /// (size: `CH * WAVENET_MAX_NUM_FRAMES`).
-    pub scratch_mixin: AlignedVec<f32>,
+    pub(crate) scratch_mixin: AlignedVec<f32>,
     /// Pre-allocated scratch buffer for Conv1D + mixin intermediate results
     /// (size: `CH * WAVENET_MAX_NUM_FRAMES`).
-    pub scratch_conv: AlignedVec<f32>,
+    pub(crate) scratch_conv: AlignedVec<f32>,
 }
 
 impl<const COND: usize, const CH: usize, const K: usize> WaveNetLayer<COND, CH, K> {
+    /// Constructs a validated static `WaveNetLayer`.
+    ///
+    /// Pre-allocates the scratch buffers and validates all tensor dimensions.
+    ///
+    /// # Errors
+    /// Returns [`NamErrorCode::InvalidModelTopology`] if dimensions or buffer
+    /// invariants fail, or [`NamErrorCode::OutOfMemory`] on allocation failure.
+    pub fn new(
+        conv1d: Conv1d<CH, CH, K>,
+        input_mixin: DenseLayer<COND, CH>,
+        one_by_one: DenseLayer<CH, CH>,
+        activation: ActivationType,
+    ) -> Result<Self, NamErrorCode> {
+        let scratch_size = CH
+            .checked_mul(WAVENET_MAX_NUM_FRAMES)
+            .ok_or(NamErrorCode::InvalidModelTopology)?;
+        let layer = Self {
+            conv1d,
+            input_mixin,
+            one_by_one,
+            activation,
+            scratch_mixin: AlignedVec::new(scratch_size, 0.0f32)?,
+            scratch_conv: AlignedVec::new(scratch_size, 0.0f32)?,
+        };
+        if !layer.is_sound() {
+            return Err(NamErrorCode::InvalidModelTopology);
+        }
+        Ok(layer)
+    }
+
+    /// Returns the dilated causal Conv1D weights.
+    #[inline(always)]
+    pub fn conv1d(&self) -> &Conv1d<CH, CH, K> {
+        &self.conv1d
+    }
+
+    /// Returns the conditional input mixin dense layer.
+    #[inline(always)]
+    pub fn input_mixin(&self) -> &DenseLayer<COND, CH> {
+        &self.input_mixin
+    }
+
+    /// Returns the 1x1 residual projection dense layer.
+    #[inline(always)]
+    pub fn one_by_one(&self) -> &DenseLayer<CH, CH> {
+        &self.one_by_one
+    }
+
+    /// Returns the layer activation type.
+    #[inline(always)]
+    pub fn activation(&self) -> &ActivationType {
+        &self.activation
+    }
     /// Returns whether this layer still satisfies the geometry and buffer
     /// contract of [`Self::process_block_internal`].
     #[inline]

@@ -11,7 +11,7 @@ pub fn write_bridge(
     resamp_out_l: &[f32],
     resamp_out_r: &[f32],
     n_pw: usize,
-    bridge: Option<DspBridgeWriter>,
+    bridge: Option<&DspBridgeWriter>,
     process_mono: bool,
 ) {
     if let Some(writer) = bridge {
@@ -26,7 +26,7 @@ pub fn write_bridge_stamped(
     resamp_out_l: &[f32],
     resamp_out_r: &[f32],
     n_pw: usize,
-    bridge: Option<DspBridgeWriter>,
+    bridge: Option<&DspBridgeWriter>,
     process_mono: bool,
     capture_tsc: u64,
 ) {

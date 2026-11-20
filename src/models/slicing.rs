@@ -530,7 +530,7 @@ pub fn slice_wavenet_model_per_array(
 
     let final_head = arrays.last().map(|a| a.head).unwrap_or(model.head);
 
-    Ok(WaveNetModelDyn {
+    let sliced = WaveNetModelDyn {
         ch: arrays[0].ch,
         k: model.k,
         head: final_head,
@@ -546,7 +546,12 @@ pub fn slice_wavenet_model_per_array(
         slimmable_capable: model.slimmable_capable,
         allowed_channels: model.allowed_channels.clone(),
         pending_slim_channel: None,
-    })
+    };
+    debug_assert!(
+        sliced.validate_state(),
+        "slice_wavenet_model_per_array produced invalid WaveNetModelDyn"
+    );
+    Ok(sliced)
 }
 
 /// Creates a new `WaveNetModelDyn` with uniform channel reduction on all slimmable arrays.

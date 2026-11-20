@@ -523,3 +523,18 @@ fn f64_oracle_ir_2048() {
 fn f64_oracle_ir_4096() {
     run_f64_oracle_test(4096, 256, 8192);
 }
+
+#[test]
+fn oversized_partition_size_returns_structured_error_without_panic() {
+    let ir = [1.0f32, 0.5];
+    let high_bit = (1usize << (usize::BITS - 1)) + 1;
+    for bad_partition in [usize::MAX, usize::MAX / 2 + 1, high_bit] {
+        let result = std::panic::catch_unwind(|| ConvEngine::new(&ir, bad_partition));
+        match result {
+            Ok(Err(NamErrorCode::InvalidCabsimPartitionSize)) => {}
+            Ok(Ok(_)) => panic!("partition_size={bad_partition} must be rejected"),
+            Ok(Err(other)) => panic!("unexpected error code for {bad_partition}: {other:?}"),
+            Err(_) => panic!("ConvEngine::new(partition_size={bad_partition}) must not panic"),
+        }
+    }
+}

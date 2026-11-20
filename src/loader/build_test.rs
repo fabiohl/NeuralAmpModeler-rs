@@ -563,4 +563,51 @@ mod tests {
 
         std::fs::remove_file(&temp_path).ok();
     }
+
+    #[cfg(feature = "dual-mono")]
+    #[test]
+    fn test_dual_mono_load_and_reset_lr_bit_exact_determinism() {
+        use crate::models::NamModel;
+
+        let sys = SystemSnapshot::capture();
+        let probe: Vec<f32> = (0..256).map(|i| (i as f32 * 0.05).sin() * 0.3).collect();
+
+        for fixture in ["slimmable_container.nam", "wavenet_a2_lite.nam"] {
+            let path = model_path(fixture);
+            let mut pair = load_and_build_model(&path, &sys, true, LoadOptions::default())
+                .unwrap_or_else(|e| panic!("failed to load {fixture} in dual-mono: {e}"));
+
+            let mut l = pair.model_l.take().expect("model_l must exist");
+            let mut r = pair.model_r.take().expect("model_r must exist");
+
+            let mut out_l = vec![0.0f32; probe.len()];
+            let mut out_r = vec![0.0f32; probe.len()];
+            l.process(&probe, &mut out_l);
+            r.process(&probe, &mut out_r);
+            for (i, (&a, &b)) in out_l.iter().zip(out_r.iter()).enumerate() {
+                assert_eq!(
+                    a.to_bits(),
+                    b.to_bits(),
+                    "{fixture}: post-load L/R diverged at sample {i}: {a} vs {b}"
+                );
+            }
+
+            // Asymmetric excitation on L only, then reset both and re-verify parity.
+            let mut dirty = vec![0.0f32; 64];
+            let spike = vec![0.85f32; 64];
+            l.process(&spike, &mut dirty);
+
+            l.reset(pair.sample_rate, 8192).expect("reset L");
+            r.reset(pair.sample_rate, 8192).expect("reset R");
+            l.process(&probe, &mut out_l);
+            r.process(&probe, &mut out_r);
+            for (i, (&a, &b)) in out_l.iter().zip(out_r.iter()).enumerate() {
+                assert_eq!(
+                    a.to_bits(),
+                    b.to_bits(),
+                    "{fixture}: post-reset L/R diverged at sample {i}: {a} vs {b}"
+                );
+            }
+        }
+    }
 }

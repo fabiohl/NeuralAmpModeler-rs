@@ -21,32 +21,31 @@ use super::block::ConvNetBlock;
 #[repr(align(64))]
 pub struct ConvNetModel {
     /// Sequential ConvNet blocks.
-    pub blocks: Vec<ConvNetBlock>,
+    pub(crate) blocks: Vec<ConvNetBlock>,
     /// Final voltage compensation scale (Target Output Scale).
-    pub head_scale: f32,
+    pub(crate) head_scale: f32,
     /// Total receptive field (sum of all block RFs + head RF contribution).
-    pub receptive_field_size: usize,
+    pub(crate) receptive_field_size: usize,
     /// Optional post-stack head sub-object (Conv1D + activation).
-    pub post_stack_head: Option<PostStackHead>,
+    pub(crate) post_stack_head: Option<PostStackHead>,
     /// Scratch buffer for post-stack head output.
-    pub head_output_scratch: AlignedVec<f32>,
+    pub(crate) head_output_scratch: AlignedVec<f32>,
     /// Ping-pong scratch buffers for block-to-block signal relay.
     pub(crate) scratch_a: AlignedVec<f32>,
     pub(crate) scratch_b: AlignedVec<f32>,
     /// Whether to execute prewarm during `reset()`. Default: `true`.
-    pub prewarm_on_reset: bool,
-    /// Deferred-stabilization pending unit armed by the split flow
-    /// ([`NamModel::prewarm_reset`](crate::models::NamModel::prewarm_reset)).
-    /// This family's stabilization is a single one-shot feed (no separate
-    /// zero phase), so the pending unit is boolean. Always `false` for
-    /// freshly built models; the integral
+    pub(crate) prewarm_on_reset: bool,
+    /// Deferred-stabilization pending latch (`true` while `prewarm_remaining > 0`).
+    /// Always `false` for freshly built models; the integral
     /// [`Self::prewarm`](crate::models::NamModel::prewarm) completes it by
     /// construction and never consults it otherwise.
-    pub prewarm_pending: bool,
+    pub(crate) prewarm_pending: bool,
+    /// Remaining zero-feed samples armed by [`Self::prewarm_reset`].
+    prewarm_remaining: usize,
     /// Optional C++ flat-format linear head weights (no activation).
     /// Used when `post_stack_head` is `None` but the model has a separate
     /// linear projection from `in_ch → out_ch`.
-    pub linear_head: Option<LinearHead>,
+    pub(crate) linear_head: Option<LinearHead>,
 }
 
 /// Simple linear projection head for C++ flat ConvNet format.
@@ -61,16 +60,114 @@ pub struct ConvNetModel {
 #[repr(align(64))]
 pub struct LinearHead {
     /// Column-major weight matrix: `weights[in_c * out_ch + out_c]`.
-    pub weight: AlignedVec<f32>,
+    pub(crate) weight: AlignedVec<f32>,
     /// Bias vector: out_ch.
-    pub bias: AlignedVec<f32>,
+    pub(crate) bias: AlignedVec<f32>,
     /// Number of input channels.
-    pub in_ch: usize,
+    pub(crate) in_ch: usize,
     /// Number of output channels.
-    pub out_ch: usize,
+    pub(crate) out_ch: usize,
+}
+
+impl LinearHead {
+    /// Returns the column-major weight matrix (`[in_ch * out_ch]`).
+    #[inline(always)]
+    pub fn weight(&self) -> &[f32] {
+        &self.weight
+    }
+
+    /// Returns the bias vector (`[out_ch]`).
+    #[inline(always)]
+    pub fn bias(&self) -> &[f32] {
+        &self.bias
+    }
+
+    /// Returns the number of input channels.
+    #[inline(always)]
+    pub fn in_ch(&self) -> usize {
+        self.in_ch
+    }
+
+    /// Returns the number of output channels.
+    #[inline(always)]
+    pub fn out_ch(&self) -> usize {
+        self.out_ch
+    }
 }
 
 impl ConvNetModel {
+    /// Constructs a `ConvNetModel` from pre-validated components and scratch buffers.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "ConvNet loader constructor initializes all preallocated buffers and optional heads"
+    )]
+    pub(crate) fn from_parts(
+        blocks: Vec<ConvNetBlock>,
+        head_scale: f32,
+        receptive_field_size: usize,
+        post_stack_head: Option<PostStackHead>,
+        head_output_scratch: AlignedVec<f32>,
+        scratch_a: AlignedVec<f32>,
+        scratch_b: AlignedVec<f32>,
+        linear_head: Option<LinearHead>,
+    ) -> Self {
+        Self {
+            blocks,
+            head_scale,
+            receptive_field_size,
+            post_stack_head,
+            head_output_scratch,
+            scratch_a,
+            scratch_b,
+            prewarm_on_reset: true,
+            prewarm_pending: false,
+            prewarm_remaining: 0,
+            linear_head,
+        }
+    }
+
+    /// Returns the sequential ConvNet blocks.
+    #[inline(always)]
+    pub fn blocks(&self) -> &[ConvNetBlock] {
+        &self.blocks
+    }
+
+    /// Returns the final voltage compensation scale (`head_scale`).
+    #[inline(always)]
+    pub fn head_scale(&self) -> f32 {
+        self.head_scale
+    }
+
+    /// Returns the total receptive field size in samples.
+    #[inline(always)]
+    pub fn receptive_field_size(&self) -> usize {
+        self.receptive_field_size
+    }
+
+    /// Returns the optional post-stack head.
+    #[inline(always)]
+    pub fn post_stack_head(&self) -> Option<&PostStackHead> {
+        self.post_stack_head.as_ref()
+    }
+
+    /// Returns the optional linear head projection.
+    #[inline(always)]
+    pub fn linear_head(&self) -> Option<&LinearHead> {
+        self.linear_head.as_ref()
+    }
+
+    /// Returns whether prewarm runs during `reset()`.
+    #[inline(always)]
+    pub fn prewarm_on_reset(&self) -> bool {
+        self.prewarm_on_reset
+    }
+
+    /// Returns whether a deferred prewarm pass is currently pending.
+    #[inline(always)]
+    pub fn prewarm_pending(&self) -> bool {
+        self.prewarm_pending
+    }
+
     /// Returns the number of input channels expected by the first block.
     pub fn in_channels(&self) -> usize {
         self.blocks.first().map(|b| b.conv.in_ch).unwrap_or(1)
@@ -247,6 +344,47 @@ impl ConvNetModel {
         }
     }
 
+    /// Zero phase of deferred split stabilization: clears every block's state
+    /// and arms `receptive_field_size + 1` zero-feed samples. Zero-allocation
+    /// and lock-free.
+    pub fn prewarm_reset(&mut self) {
+        self.clear_state();
+        self.prewarm_remaining = self.receptive_field_size + 1;
+        self.prewarm_pending = true;
+    }
+
+    /// Advances the armed stabilization by at most `samples` zeroed samples
+    /// using fixed stack buffers (zero heap allocation, zero logs) and returns
+    /// the remaining sample count (`0` = converged).
+    pub fn prewarm_step(&mut self, samples: usize) -> usize {
+        let n = samples.min(self.prewarm_remaining);
+        if n > 0 {
+            const STACK_FLOATS: usize = 512;
+            let in_ch = self.in_channels().max(1);
+            let out_ch = self.out_channels().max(1);
+            let width = in_ch.max(out_ch);
+            if width <= STACK_FLOATS {
+                let max_chunk_frames = (STACK_FLOATS / width).clamp(1, WAVENET_MAX_NUM_FRAMES);
+                let zeros = [0.0f32; STACK_FLOATS];
+                let mut sink = [0.0f32; STACK_FLOATS];
+                let mut fed = 0usize;
+                while fed < n {
+                    let nf = (n - fed).min(max_chunk_frames);
+                    self.process(&zeros[..nf * in_ch], &mut sink[..nf * out_ch]);
+                    fed += nf;
+                }
+            }
+            self.prewarm_remaining -= n;
+            self.prewarm_pending = self.prewarm_remaining > 0;
+        }
+        self.prewarm_remaining
+    }
+
+    /// Returns `true` when no split stabilization samples remain pending.
+    pub fn prewarm_complete(&self) -> bool {
+        self.prewarm_remaining == 0
+    }
+
     /// Stabilizes the model by processing silence (Zero Input) for pre-warm.
     ///
     /// Replicates `nam::DSP::prewarm()` semantics from NAMcore (`dsp.cpp:67-96`):
@@ -254,13 +392,10 @@ impl ConvNetModel {
     /// entire network, leaving internal states at the zero-input fixed point.
     #[cold]
     pub fn prewarm(&mut self) {
-        let n = self.receptive_field_size + 1;
-        let in_ch = self.in_channels().max(1);
-        let zeros = vec![0.0f32; n * in_ch];
-        let mut sink = vec![0.0f32; n * self.out_channels()];
-        self.process(&zeros, &mut sink);
-        // The integral one-shot pass completes any armed deferred unit.
-        self.prewarm_pending = false;
+        self.prewarm_reset();
+        while !self.prewarm_complete() {
+            self.prewarm_step(WAVENET_MAX_NUM_FRAMES);
+        }
     }
 
     /// Clears every block's causal delay-line state (and the optional

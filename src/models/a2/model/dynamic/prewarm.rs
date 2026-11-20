@@ -14,18 +14,18 @@
 //! `prewarm_pending == 0`. Any chunking reproduces the integral result
 //! bit-exactly (the feed is an exact sequence of per-frame `process()` calls).
 
+use crate::models::NamModel;
 use crate::models::wavenet::common::WAVENET_MAX_NUM_FRAMES;
 
 use super::super::a2_prewarm_common;
 use super::WaveNetA2Dyn;
-use crate::models::NamModel;
 
 impl WaveNetA2Dyn {
     /// Zero phase of the deferred split stabilization: clears every buffer in
-    /// place and primes the condition sub-model (the integral pass's
-    /// preamble), arming the pending RF zero-feed without running it.
-    /// Zero-allocation and lock-free; real-time consumers amortize the feed
-    /// via [`WaveNetA2Dyn::prewarm_step`].
+    /// place and resets the condition sub-model via `prewarm_reset()` (never
+    /// running synchronous integral prewarm on the RT thread), arming the
+    /// pending RF zero-feed. Zero-allocation, zero-log, and lock-free;
+    /// real-time consumers amortize the feed via [`WaveNetA2Dyn::prewarm_step`].
     pub fn prewarm_reset(&mut self) {
         a2_prewarm_common(
             self.num_layers,
@@ -41,7 +41,7 @@ impl WaveNetA2Dyn {
         if self.has_weights()
             && let Some(ref mut cond_dsp) = self.condition_dsp
         {
-            crate::models::NamModel::prewarm(&mut **cond_dsp, 0);
+            cond_dsp.prewarm_reset();
         }
 
         self.prewarm_pending = if self.has_weights() {
@@ -75,32 +75,60 @@ impl WaveNetA2Dyn {
     }
 
     /// Advances the armed stabilization by at most `samples` zeroed samples
-    /// and returns the work still pending (0 = converged). Zero-allocation
-    /// and lock-free, sharing the same per-frame kernels as [`Self::process`].
+    /// and returns the work still pending (0 = converged). Zero-allocation,
+    /// zero-log, and lock-free, sharing the same per-frame kernels as
+    /// [`Self::process`].
     pub fn prewarm_step(&mut self, samples: usize) -> usize {
+        if samples == 0 {
+            let cond_rem = self
+                .condition_dsp
+                .as_mut()
+                .filter(|c| !c.prewarm_complete())
+                .map_or(0, |c| c.prewarm_step(0).max(1));
+            return self.prewarm_pending.saturating_add(cond_rem);
+        }
+
+        if self.has_weights()
+            && let Some(ref mut cond_dsp) = self.condition_dsp
+            && !cond_dsp.prewarm_complete()
+        {
+            let cond_rem = cond_dsp.prewarm_step(samples);
+            if !cond_dsp.prewarm_complete() {
+                return self.prewarm_pending.saturating_add(cond_rem.max(1));
+            }
+            return self.prewarm_pending;
+        }
+
         let n = samples.min(self.prewarm_pending);
         if n > 0 {
+            const STACK_FLOATS: usize = 512;
             let in_ch = self.input_channels.max(1);
             let out_ch = self.head_size.max(1);
             let width = in_ch.max(out_ch);
-            if width <= WAVENET_MAX_NUM_FRAMES {
-                let max_chunk_frames = (WAVENET_MAX_NUM_FRAMES / width).max(1);
-                let zeros = [0.0f32; WAVENET_MAX_NUM_FRAMES];
-                let mut discard = [0.0f32; WAVENET_MAX_NUM_FRAMES];
+            if width <= STACK_FLOATS {
+                let max_chunk_frames = (STACK_FLOATS / width).clamp(1, WAVENET_MAX_NUM_FRAMES);
+                let zeros = [0.0f32; STACK_FLOATS];
+                let mut discard = [0.0f32; STACK_FLOATS];
                 let mut fed = 0usize;
                 while fed < n {
                     let nf = (n - fed).min(max_chunk_frames);
                     self.process(&zeros[..nf * in_ch], &mut discard[..nf * out_ch]);
                     fed += nf;
                 }
-            } else {
-                log::warn!(
-                    "[WaveNetA2Dyn::prewarm_step] Channel width {width} exceeds WAVENET_MAX_NUM_FRAMES ({WAVENET_MAX_NUM_FRAMES}); skipping zero-alloc incremental feed"
-                );
             }
             self.prewarm_pending -= n;
         }
         self.prewarm_pending
+    }
+
+    /// Returns `true` when both the outer array and any nested `condition_dsp`
+    /// have finished their armed prewarm pass.
+    pub fn prewarm_complete(&self) -> bool {
+        self.prewarm_pending == 0
+            && self
+                .condition_dsp
+                .as_ref()
+                .is_none_or(|c| c.prewarm_complete())
     }
 
     /// Pending stabilization units (for cascade-chained accounting).
@@ -124,8 +152,8 @@ impl WaveNetA2Dyn {
     #[cold]
     pub fn prewarm(&mut self) {
         self.prewarm_reset();
-        while self.prewarm_pending > 0 {
-            let take = self.prewarm_pending;
+        while !self.prewarm_complete() {
+            let take = self.prewarm_pending.max(WAVENET_MAX_NUM_FRAMES);
             self.prewarm_step(take);
         }
     }

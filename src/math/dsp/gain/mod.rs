@@ -169,6 +169,35 @@ pub fn crossfade_blend_mono_simd(out: &mut [f32], pending: &[f32], t: f32) {
     // SAFETY: out and pending have the same length by the check above.
     unsafe { crossfade_blend_mono(out, pending, t) };
 }
+
+/// Ramped crossfade blend: `out[i] = fma(pending[i] - out[i], t_start + i * t_step, out[i])`.
+///
+/// # Safety
+/// Buffers must be valid and have at least `min(out.len(), pending.len())` elements.
+pub unsafe fn crossfade_blend_ramp_mono(
+    out: &mut [f32],
+    pending: &[f32],
+    t_start: f32,
+    t_step: f32,
+) {
+    crate::math::common::dispatch_simd!(crossfade_blend_ramp_mono(out, pending, t_start, t_step))
+}
+
+/// Safe wrapper for per-sample ramped crossfade blend:
+/// `out[i] = fma(pending[i] - out[i], t_start + i * t_step, out[i])`.
+///
+/// Handles mismatched buffer lengths by blending only the overlapping prefix,
+/// and delegates to [`crossfade_blend_mono_simd`] when `t_step == 0.0`.
+#[inline]
+pub fn crossfade_blend_ramp_mono_simd(out: &mut [f32], pending: &[f32], t_start: f32, t_step: f32) {
+    if t_step == 0.0 {
+        crossfade_blend_mono_simd(out, pending, t_start);
+        return;
+    }
+    let n = out.len().min(pending.len());
+    // SAFETY: `n` is the safe intersection of both valid slices.
+    unsafe { crossfade_blend_ramp_mono(&mut out[..n], &pending[..n], t_start, t_step) };
+}
 /// Safe wrapper for dither offset addition via SIMD broadcast + vector add.
 ///
 /// Injects a subnormal-safe DC offset (typically `DENORMAL_DITHER_OFFSET` or its

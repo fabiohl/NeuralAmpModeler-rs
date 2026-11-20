@@ -30,6 +30,66 @@ pub enum A2ConvCh {
     Ch8(A2Conv1dCh<8>),
 }
 
+impl A2ConvCh {
+    /// Constructs a CH-specialized convolution wrapper from a standard `A2Conv1d`
+    /// when the geometry matches the CH=3 or CH=8 fast-path (`groups == 1`,
+    /// `in_ch == out_ch ∈ {3, 8}`, `kernel ∈ {6, 15}`, `do_bias`, `interleave_width == 4`).
+    pub fn try_from_conv(conv: &A2Conv1d) -> Option<Self> {
+        let A2Conv1d::Standard(c) = conv else {
+            return None;
+        };
+        if !c.do_bias || c.interleave_width != 4 || c.in_ch != c.out_ch {
+            return None;
+        }
+        if c.kernel != 6 && c.kernel != 15 {
+            return None;
+        }
+        match c.out_ch {
+            3 => Some(Self::Ch3(deinterleave_4wide_to_ch::<3>(c)?)),
+            8 => Some(Self::Ch8(deinterleave_4wide_to_ch::<8>(c)?)),
+            _ => None,
+        }
+    }
+}
+
+fn deinterleave_4wide_to_ch<const CH: usize>(
+    c: &crate::models::wavenet::conv1d_dyn::Conv1dDyn,
+) -> Option<A2Conv1dCh<CH>> {
+    let ch_pad = super::conv1d_ch::ch_pad::<CH>();
+    let num_blocks = CH.div_ceil(4);
+    let expected_w = num_blocks
+        .checked_mul(4)?
+        .checked_mul(CH)?
+        .checked_mul(c.kernel)?;
+    if c.weights.len() < expected_w || c.bias.len() < CH {
+        return None;
+    }
+    let stride = ch_pad * ch_pad;
+    let mut weights = AlignedVec::new(c.kernel * stride, 0.0f32).ok()?;
+    for b in 0..num_blocks {
+        for k in 0..c.kernel {
+            for in_c in 0..CH {
+                for lane in 0..4 {
+                    let out_c = b * 4 + lane;
+                    if out_c < CH {
+                        let src = b * (c.kernel * CH * 4) + k * (CH * 4) + in_c * 4 + lane;
+                        let dst = k * stride + in_c * ch_pad + out_c;
+                        weights[dst] = c.weights[src];
+                    }
+                }
+            }
+        }
+    }
+    let mut bias = AlignedVec::new(ch_pad, 0.0f32).ok()?;
+    bias[..CH].copy_from_slice(&c.bias[..CH]);
+    Some(A2Conv1dCh {
+        weights,
+        bias,
+        dilation: c.dilation,
+        kernel: c.kernel,
+    })
+}
+
 /// Single A2 WaveNet layer.
 ///
 /// Holds the weights for: dilated conv (via `A2Conv1d`), input mixin (`Conv1x1 condition→CH`, no bias),
@@ -41,49 +101,49 @@ pub enum A2ConvCh {
 /// FiLM layers (8 insertion points) are `Some` only when the JSON config marks them `active: true`.
 pub struct A2Layer {
     /// Dilated causal Conv1D (kernel ∈ {6, 15}). Standard (groups=1) or Grouped (groups>1).
-    pub conv: A2Conv1d,
+    pub(crate) conv: A2Conv1d,
     /// CH-optimized conv (col-major-per-tap f32). `Some` when CH ∈ {3, 8}.
-    pub conv_ch: Option<A2ConvCh>,
+    pub(crate) conv_ch: Option<A2ConvCh>,
     /// Input mixin weights (cond_size=1: `CH` elements; cond_size>1: `CH × cond_size` row-major).
     /// For grouped mixin (groups>1): compact `[out_ch × in_per_group]` row-major; group
     /// membership is determined by output channel index.
-    pub mixin_w: AlignedVec<f32>,
+    pub(crate) mixin_w: AlignedVec<f32>,
     /// Number of groups for the input mixin projection (C++ `groups_input_mixin`).
     /// Default: 1 (dense).
-    pub mixin_groups: u32,
+    pub(crate) mixin_groups: u32,
     /// Layer1x1 weights (groups=1: `bottleneck × channels` col-major `[bottleneck][out]`);
     /// groups>1: compact `[channels × in_per_group]` row-major per output channel.
-    pub l1x1_w: AlignedVec<f32>,
+    pub(crate) l1x1_w: AlignedVec<f32>,
     /// Layer1x1 bias (`CH` elements, f32). Bias is always dense (no grouping).
-    pub l1x1_b: AlignedVec<f32>,
+    pub(crate) l1x1_b: AlignedVec<f32>,
     /// Number of groups for the layer1x1 projection (C++ `layer1x1.groups`).
     /// Default: 1 (dense).
-    pub l1x1_groups: u32,
+    pub(crate) l1x1_groups: u32,
     /// FiLM before dilated convolution — modulates `layer_in` new frames in history buffer.
-    pub conv_pre_film: Option<FiLMLayer>,
+    pub(crate) conv_pre_film: Option<FiLMLayer>,
     /// FiLM after dilated convolution — modulates `z_buf` before mixin.
-    pub conv_post_film: Option<FiLMLayer>,
+    pub(crate) conv_post_film: Option<FiLMLayer>,
     /// FiLM before input mixin (same insertion point as `conv_post_film`).
-    pub input_mixin_pre_film: Option<FiLMLayer>,
+    pub(crate) input_mixin_pre_film: Option<FiLMLayer>,
     /// FiLM after input mixin — modulates `z_buf` after mixin, before activation.
-    pub input_mixin_post_film: Option<FiLMLayer>,
+    pub(crate) input_mixin_post_film: Option<FiLMLayer>,
     /// FiLM before activation (same insertion point as `input_mixin_post_film`).
-    pub activation_pre_film: Option<FiLMLayer>,
+    pub(crate) activation_pre_film: Option<FiLMLayer>,
     /// FiLM after activation — modulates `z_buf` after LeakyReLU.
-    pub activation_post_film: Option<FiLMLayer>,
+    pub(crate) activation_post_film: Option<FiLMLayer>,
     /// FiLM after layer 1x1 residual — modulates `layer_in` after l1x1 accumulation.
-    pub layer1x1_post_film: Option<FiLMLayer>,
+    pub(crate) layer1x1_post_film: Option<FiLMLayer>,
     /// FiLM after head 1x1 (reserved for future general A2 engine).
-    pub head1x1_post_film: Option<FiLMLayer>,
+    pub(crate) head1x1_post_film: Option<FiLMLayer>,
     /// Whether the per-layer head1x1 projection (`bottleneck → channels`) is active.
     /// Mirrors C++ `Layer::_head1x1` (model.cpp:273-297).
-    pub head1x1_active: bool,
+    pub(crate) head1x1_active: bool,
     /// Head1x1 projection weights — `[head_accum_size][bottleneck]` row-major
     /// after transposition. Empty when `head1x1_active` is false.
-    pub head1x1_w: AlignedVec<f32>,
+    pub(crate) head1x1_w: AlignedVec<f32>,
     /// Head1x1 projection bias — `head_accum_size` elements.
     /// Empty when `head1x1_active` is false.
-    pub head1x1_b: AlignedVec<f32>,
+    pub(crate) head1x1_b: AlignedVec<f32>,
 }
 
 impl A2Layer {
@@ -199,11 +259,16 @@ impl A2Layer {
         l1x1_w: AlignedVec<f32>,
         l1x1_b: AlignedVec<f32>,
         l1x1_out_ch: usize,
-        _bottleneck: usize,
-        _condition_size: usize,
+        bottleneck: usize,
+        condition_size: usize,
     ) -> Self {
         debug_assert_eq!(l1x1_b.len(), l1x1_out_ch);
-        Self::new_base(conv, None, mixin_w, 1, l1x1_w, l1x1_b, 1)
+        let conv_ch = if l1x1_out_ch == bottleneck && condition_size == 1 {
+            A2ConvCh::try_from_conv(&conv)
+        } else {
+            None
+        };
+        Self::new_base(conv, conv_ch, mixin_w, 1, l1x1_w, l1x1_b, 1)
     }
 
     /// Channel count (bottleneck == channels in A2 fast-path).
@@ -234,6 +299,114 @@ impl A2Layer {
     #[inline(always)]
     pub fn dilation(&self) -> usize {
         self.conv.dilation()
+    }
+
+    /// Returns the dilated causal Conv1D of this layer.
+    #[inline(always)]
+    pub fn conv(&self) -> &A2Conv1d {
+        &self.conv
+    }
+
+    /// Returns the optional CH-optimized convolution wrapper (`CH ∈ {3, 8}`).
+    #[inline(always)]
+    pub fn conv_ch(&self) -> Option<&A2ConvCh> {
+        self.conv_ch.as_ref()
+    }
+
+    /// Returns the input mixin weight slice.
+    #[inline(always)]
+    pub fn mixin_w(&self) -> &[f32] {
+        &self.mixin_w
+    }
+
+    /// Returns the number of groups for the input mixin projection.
+    #[inline(always)]
+    pub fn mixin_groups(&self) -> u32 {
+        self.mixin_groups
+    }
+
+    /// Returns the layer1x1 weight slice.
+    #[inline(always)]
+    pub fn l1x1_w(&self) -> &[f32] {
+        &self.l1x1_w
+    }
+
+    /// Returns the layer1x1 bias slice.
+    #[inline(always)]
+    pub fn l1x1_b(&self) -> &[f32] {
+        &self.l1x1_b
+    }
+
+    /// Returns the number of groups for the layer1x1 projection.
+    #[inline(always)]
+    pub fn l1x1_groups(&self) -> u32 {
+        self.l1x1_groups
+    }
+
+    /// Returns the optional FiLM layer applied before dilated convolution.
+    #[inline(always)]
+    pub fn conv_pre_film(&self) -> Option<&FiLMLayer> {
+        self.conv_pre_film.as_ref()
+    }
+
+    /// Returns the optional FiLM layer applied after dilated convolution.
+    #[inline(always)]
+    pub fn conv_post_film(&self) -> Option<&FiLMLayer> {
+        self.conv_post_film.as_ref()
+    }
+
+    /// Returns the optional FiLM layer applied before input mixin.
+    #[inline(always)]
+    pub fn input_mixin_pre_film(&self) -> Option<&FiLMLayer> {
+        self.input_mixin_pre_film.as_ref()
+    }
+
+    /// Returns the optional FiLM layer applied after input mixin.
+    #[inline(always)]
+    pub fn input_mixin_post_film(&self) -> Option<&FiLMLayer> {
+        self.input_mixin_post_film.as_ref()
+    }
+
+    /// Returns the optional FiLM layer applied before activation.
+    #[inline(always)]
+    pub fn activation_pre_film(&self) -> Option<&FiLMLayer> {
+        self.activation_pre_film.as_ref()
+    }
+
+    /// Returns the optional FiLM layer applied after activation.
+    #[inline(always)]
+    pub fn activation_post_film(&self) -> Option<&FiLMLayer> {
+        self.activation_post_film.as_ref()
+    }
+
+    /// Returns the optional FiLM layer applied after layer1x1 residual.
+    #[inline(always)]
+    pub fn layer1x1_post_film(&self) -> Option<&FiLMLayer> {
+        self.layer1x1_post_film.as_ref()
+    }
+
+    /// Returns the optional FiLM layer applied after head1x1 projection.
+    #[inline(always)]
+    pub fn head1x1_post_film(&self) -> Option<&FiLMLayer> {
+        self.head1x1_post_film.as_ref()
+    }
+
+    /// Returns whether per-layer head1x1 projection is active.
+    #[inline(always)]
+    pub fn head1x1_active(&self) -> bool {
+        self.head1x1_active
+    }
+
+    /// Returns the per-layer head1x1 weight slice.
+    #[inline(always)]
+    pub fn head1x1_w(&self) -> &[f32] {
+        &self.head1x1_w
+    }
+
+    /// Returns the per-layer head1x1 bias slice.
+    #[inline(always)]
+    pub fn head1x1_b(&self) -> &[f32] {
+        &self.head1x1_b
     }
 
     /// Processes a single frame through this layer.

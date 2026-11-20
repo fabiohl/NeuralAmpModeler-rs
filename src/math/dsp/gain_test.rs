@@ -184,3 +184,32 @@ fn test_apply_ramp_simd() {
         );
     }
 }
+
+/// Validates SIMD per-sample ramped crossfade against a scalar reference across tail lengths.
+#[test]
+fn test_crossfade_blend_ramp_mono_simd() {
+    let len = 37; // 4 AVX2 lanes (32) + 5 scalar tail
+    let mut out_simd: Vec<f32> = (0..len).map(|i| (i as f32) * 0.03 - 0.5).collect();
+    let pending: Vec<f32> = (0..len).map(|i| 1.0 - (i as f32) * 0.02).collect();
+    let mut out_scalar = out_simd.clone();
+
+    let t_start = 0.25f32;
+    let t_end = 0.75f32;
+    let t_step = (t_end - t_start) / len as f32;
+
+    for i in 0..len {
+        let t_i = t_start + (i as f32) * t_step;
+        out_scalar[i] = f32::mul_add(pending[i] - out_scalar[i], t_i, out_scalar[i]);
+    }
+
+    crossfade_blend_ramp_mono_simd(&mut out_simd, &pending, t_start, t_step);
+
+    for i in 0..len {
+        assert!(
+            (out_simd[i] - out_scalar[i]).abs() < 1e-6,
+            "Crossfade ramp mismatch at index {i}: simd={} scalar={}",
+            out_simd[i],
+            out_scalar[i]
+        );
+    }
+}

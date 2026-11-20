@@ -285,6 +285,52 @@ pub unsafe fn crossfade_blend_mono_avx2(out: &mut [f32], pending: &[f32], t: f32
     }
 }
 
+/// Crossfade blend (mono, per-sample linear ramp):
+/// `out[i] = fma(pending[i] - out[i], t_i, out[i])`, where `t_i = t_start + i * t_step`.
+///
+/// # Safety
+/// Same obligations as [`crossfade_blend_mono_avx2`]: runtime AVX2+FMA dispatch
+/// by the caller; buffers valid for the call duration; `t_start` and `t_step`
+/// finite; elementwise over `min(out.len(), pending.len())` elements with no
+/// alignment requirement.
+#[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+#[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
+pub unsafe fn crossfade_blend_ramp_mono_avx2(
+    out: &mut [f32],
+    pending: &[f32],
+    t_start: f32,
+    t_step: f32,
+) {
+    let n = core::cmp::min(out.len(), pending.len());
+    let mut i = 0;
+    let mut vt = _mm256_set_ps(
+        t_start + 7.0 * t_step,
+        t_start + 6.0 * t_step,
+        t_start + 5.0 * t_step,
+        t_start + 4.0 * t_step,
+        t_start + 3.0 * t_step,
+        t_start + 2.0 * t_step,
+        t_start + 1.0 * t_step,
+        t_start,
+    );
+    let v_step_8 = _mm256_set1_ps(8.0 * t_step);
+    gain_simd_avx2!(i, n, {
+        let v_out = _mm256_loadu_ps(out.as_ptr().add(i));
+        let v_pending = _mm256_loadu_ps(pending.as_ptr().add(i));
+        let v_diff = _mm256_sub_ps(v_pending, v_out);
+        _mm256_storeu_ps(out.as_mut_ptr().add(i), _mm256_fmadd_ps(v_diff, vt, v_out));
+        vt = _mm256_add_ps(vt, v_step_8);
+    });
+    let mut t = t_start + (i as f32) * t_step;
+    while i < n {
+        let o = *out.get_unchecked(i);
+        let p = *pending.get_unchecked(i);
+        *out.get_unchecked_mut(i) = f32::mul_add(p - o, t, o);
+        t += t_step;
+        i += 1;
+    }
+}
+
 /// Applies linear gain ramp to a mono buffer via AVX2.
 ///
 /// # Safety

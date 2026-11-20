@@ -37,16 +37,9 @@ pub struct WaveNetA2Cascade {
     pub condition_size: usize,
     /// Whether to prewarm on reset.
     pub prewarm_on_reset: bool,
-    /// Cascade residual buffer: stores array N's layer_in output for array N+1.
-    /// Size: `max_channels * WAVENET_MAX_NUM_FRAMES`.
-    cascade_residual: AlignedVec<f32>,
     /// Intermediate head output buffer: stores array N's post-rechannel head
-    /// output to seed array N+1's head_accum. Size: `max_head_size * max_buffer_size`.
+    /// output to seed array N+1's head_accum. Size: `max_head_size * WAVENET_MAX_NUM_FRAMES`.
     intermediate_head_output: AlignedVec<f32>,
-    /// Largest per-array channel count (for cascade scratch sizing).
-    max_channels: usize,
-    /// Largest per-array head_size (for intermediate head output sizing).
-    max_head_size: usize,
     /// Maximum frames per processing block.
     max_buffer_size: usize,
     /// Model-level head scale multiplier applied to final output (C++ NAMCore `WaveNet::_head_scale`).
@@ -77,7 +70,6 @@ impl WaveNetA2Cascade {
             .map(|a| a.receptive_field_size)
             .max()
             .unwrap_or(0);
-        let max_ch = arrays.iter().map(|a| a.channels).max().unwrap_or(1);
         let max_hs = arrays.iter().map(|a| a.head_size).max().unwrap_or(1);
         let cond_buf_size = if condition_dsp.is_some() {
             condition_size
@@ -105,10 +97,7 @@ impl WaveNetA2Cascade {
             condition_dsp_output: AlignedVec::new(cond_buf_size, 0.0f32)?,
             condition_size,
             prewarm_on_reset: true,
-            cascade_residual: AlignedVec::new(max_ch * WAVENET_MAX_NUM_FRAMES, 0.0f32)?,
             intermediate_head_output: AlignedVec::new(max_hs * WAVENET_MAX_NUM_FRAMES, 0.0f32)?,
-            max_channels: max_ch,
-            max_head_size: max_hs,
             max_buffer_size: WAVENET_MAX_NUM_FRAMES,
             head_scale: 1.0f32,
             prewarm_pending: 0,
@@ -146,18 +135,12 @@ impl WaveNetA2Cascade {
         }
 
         output[..total * out_per_frame].fill(0.0);
-        debug_assert!(
-            total <= self.max_buffer_size,
-            "process: input ({total}) > max_buffer_size ({})",
-            self.max_buffer_size
-        );
-        let nf_total = total.min(self.max_buffer_size);
 
         let cond_size = self.condition_size;
 
         let mut pos = 0;
-        while pos < nf_total {
-            let nf = (nf_total - pos).min(WAVENET_MAX_NUM_FRAMES);
+        while pos < total {
+            let nf = (total - pos).min(WAVENET_MAX_NUM_FRAMES);
 
             // Pre-process condition_dsp at cascade level.
             if let Some(cond_dsp) = self.condition_dsp.as_mut() {
@@ -209,22 +192,20 @@ impl WaveNetA2Cascade {
                     true,
                 );
 
-                // Save residual and compute head output for next array.
-                let ch0 = arr0.channels;
-                self.cascade_residual[0..nf * ch0].copy_from_slice(&arr0.layer_in[0..nf * ch0]);
+                // Compute head output for next array; residual stays in `arr0.layer_in`.
                 if num_arrays > 1 {
                     let hs = arr0.head_size;
                     arr0.cascade_head_finalize(nf, &mut self.intermediate_head_output[0..nf * hs]);
                 }
             }
 
-            // Arrays 1..N-1: residual from previous, head seed from
-            // previous array's post-rechannel head output.
+            // Arrays 1..N-1: residual directly from previous array's `layer_in`,
+            // head seed from previous array's post-rechannel head output.
             for ai in 1..num_arrays {
-                let prev_ch = self.arrays[ai - 1].channels;
-                let prev_hs = self.arrays[ai - 1].head_size;
-
-                let (_left, right) = self.arrays.split_at_mut(ai);
+                let (left, right) = self.arrays.split_at_mut(ai);
+                let prev = &left[ai - 1];
+                let prev_ch = prev.channels;
+                let prev_hs = prev.head_size;
                 let curr = &mut right[0];
 
                 // Seed head_accum from previous array's post-rechannel head output.
@@ -234,8 +215,8 @@ impl WaveNetA2Cascade {
                     prev_hs,
                 );
 
-                // Write residual input.
-                curr.cascade_write_residual_input(&self.cascade_residual, nf, prev_ch);
+                // Write residual input directly from the previous array's `layer_in`.
+                curr.cascade_write_residual_input(&prev.layer_in[0..nf * prev_ch], nf, prev_ch);
                 curr.cascade_set_condition(cond_slice, nf, curr.condition_size);
                 curr.cascade_layer_loop::<M>(
                     nf,
@@ -246,10 +227,7 @@ impl WaveNetA2Cascade {
                     false,
                 );
 
-                // Save residual and compute head output for next array (if not last).
-                let curr_ch = curr.channels;
-                self.cascade_residual[0..nf * curr_ch]
-                    .copy_from_slice(&curr.layer_in[0..nf * curr_ch]);
+                // Compute head output for next array (if not last).
                 if ai < num_arrays - 1 {
                     let curr_hs = curr.head_size;
                     curr.cascade_head_finalize(
@@ -275,22 +253,20 @@ impl WaveNetA2Cascade {
         }
     }
 
-    /// Reallocates internal buffers.
+    /// Resets internal state without inflating scratch or subarray ring buffers
+    /// beyond `WAVENET_MAX_NUM_FRAMES` (64), propagating the capped block size
+    /// to `condition_dsp` if present.
     pub fn set_max_buffer_size(&mut self, max_buf: usize) -> anyhow::Result<()> {
-        if max_buf <= self.max_buffer_size {
-            for arr in &mut self.arrays {
-                arr.set_max_buffer_size(max_buf)?;
-            }
-            return Ok(());
-        }
-        self.max_buffer_size = max_buf;
         for arr in &mut self.arrays {
             arr.set_max_buffer_size(max_buf)?;
         }
-        let cond_output_size = self.condition_size * max_buf;
-        self.condition_dsp_output = AlignedVec::new(cond_output_size, 0.0f32)?;
-        self.cascade_residual = AlignedVec::new(self.max_channels * max_buf, 0.0f32)?;
-        self.intermediate_head_output = AlignedVec::new(self.max_head_size * max_buf, 0.0f32)?;
+        if let Some(ref mut cond_dsp) = self.condition_dsp {
+            cond_dsp.set_max_buffer_size(max_buf.min(WAVENET_MAX_NUM_FRAMES))?;
+        }
+        if max_buf >= self.max_buffer_size {
+            self.condition_dsp_output.fill(0.0);
+            self.intermediate_head_output.fill(0.0);
+        }
         Ok(())
     }
 
@@ -316,9 +292,8 @@ impl WaveNetA2Cascade {
     /// real-time consumer may call it on its audio thread and amortize
     /// [`WaveNetA2Cascade::prewarm_step`] within per-callback budgets.
     ///
-    /// The cascade-level scratch (`condition_dsp_output`, `cascade_residual`,
-    /// `intermediate_head_output`) and the nested `condition_dsp` temporal
-    /// state are **not** zeroed by the per-subarray `set_max_buffer_size`
+    /// The cascade-level scratch (`condition_dsp_output`, `intermediate_head_output`)
+    /// and the nested `condition_dsp` temporal state are **not** zeroed by the
     /// below — that call early-returns as a no-op when the size is unchanged —
     /// so a split reset after a dirty run must clear them explicitly here to
     /// match the integral `reset` path bit-for-bit.
@@ -372,7 +347,6 @@ impl WaveNetA2Cascade {
             arr.clear_state();
         }
         self.condition_dsp_output.fill(0.0);
-        self.cascade_residual.fill(0.0);
         self.intermediate_head_output.fill(0.0);
         if let Some(ref mut cond_dsp) = self.condition_dsp {
             cond_dsp.clear_state();
@@ -440,7 +414,7 @@ impl WaveNetA2Cascade {
     pub fn prewarm(&mut self) {
         self.prewarm_reset();
         while !self.prewarm_complete() {
-            let take = self.prewarm_pending;
+            let take = self.prewarm_pending.max(1);
             self.prewarm_step(take);
         }
     }

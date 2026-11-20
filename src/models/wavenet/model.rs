@@ -3,6 +3,7 @@
 
 use super::common::WAVENET_MAX_NUM_FRAMES;
 use super::layer_array::WaveNetLayerArray;
+use crate::common::diagnostics::NamErrorCode;
 use crate::math::common::SimdMath;
 
 /// Complete WaveNet Model containing Two Heterogeneous Layer Array Blocks.
@@ -18,25 +19,88 @@ use crate::math::common::SimdMath;
 #[derive(Clone)]
 pub struct WaveNetModel<const CH: usize, const K: usize, const HEAD: usize> {
     /// Inner array 01: IN=1, COND=1, CH channels, HEAD outputs, no HeadBias.
-    pub array1: WaveNetLayerArray<1, 1, CH, K, HEAD>,
+    pub(crate) array1: WaveNetLayerArray<1, 1, CH, K, HEAD>,
     /// Inner array 02: IN=CH, COND=1, HEAD channels, 1 output, with HeadBias.
-    pub array2: WaveNetLayerArray<CH, 1, HEAD, K, 1>,
+    pub(crate) array2: WaveNetLayerArray<CH, 1, HEAD, K, 1>,
     /// Final voltage compensation scale (Target Output Scale).
-    pub head_scale: f32,
+    pub(crate) head_scale: f32,
     /// Largest circular buffer required at the Kernel's temporal root.
-    pub receptive_field_size: usize,
+    pub(crate) receptive_field_size: usize,
     /// Whether to execute prewarm during `reset()`. Default: `true`.
-    pub prewarm_on_reset: bool,
+    pub(crate) prewarm_on_reset: bool,
     /// Pending deferred-stabilization unit armed by
     /// [`Self::prewarm_reset`](super::NamModel::prewarm_reset) (this family's
     /// stabilization is a single one-shot backfill pass). Always `false` for
     /// freshly built models; the integral
     /// [`Self::prewarm`](super::NamModel::prewarm) completes it by
     /// construction.
-    pub prewarm_pending: bool,
+    pub(crate) prewarm_pending: bool,
 }
 
 impl<const CH: usize, const K: usize, const HEAD: usize> WaveNetModel<CH, K, HEAD> {
+    /// Constructs a validated `WaveNetModel` from two layer arrays.
+    ///
+    /// Runs [`Self::validate_state`] once at construction so the real-time
+    /// hot path can dispatch directly without per-callback validation.
+    ///
+    /// # Errors
+    /// Returns [`NamErrorCode::InvalidModelTopology`] if `validate_state()` fails.
+    pub fn from_parts(
+        array1: WaveNetLayerArray<1, 1, CH, K, HEAD>,
+        array2: WaveNetLayerArray<CH, 1, HEAD, K, 1>,
+        head_scale: f32,
+        receptive_field_size: usize,
+    ) -> Result<Self, NamErrorCode> {
+        let model = Self {
+            array1,
+            array2,
+            head_scale,
+            receptive_field_size,
+            prewarm_on_reset: true,
+            prewarm_pending: false,
+        };
+        if !model.validate_state() {
+            return Err(NamErrorCode::InvalidModelTopology);
+        }
+        Ok(model)
+    }
+
+    /// Returns a reference to the first layer array.
+    #[inline(always)]
+    pub fn array1(&self) -> &WaveNetLayerArray<1, 1, CH, K, HEAD> {
+        &self.array1
+    }
+
+    /// Returns a reference to the second layer array.
+    #[inline(always)]
+    pub fn array2(&self) -> &WaveNetLayerArray<CH, 1, HEAD, K, 1> {
+        &self.array2
+    }
+
+    /// Returns the final voltage compensation scale (`head_scale`).
+    #[inline(always)]
+    pub fn head_scale(&self) -> f32 {
+        self.head_scale
+    }
+
+    /// Returns the receptive field size in samples.
+    #[inline(always)]
+    pub fn receptive_field_size(&self) -> usize {
+        self.receptive_field_size
+    }
+
+    /// Returns whether prewarm runs during `reset()`.
+    #[inline(always)]
+    pub fn prewarm_on_reset(&self) -> bool {
+        self.prewarm_on_reset
+    }
+
+    /// Returns whether a deferred prewarm pass is pending.
+    #[inline(always)]
+    pub fn prewarm_pending(&self) -> bool {
+        self.prewarm_pending
+    }
+
     /// Creates a dedicated exact structural clone of the WaveNet model,
     /// duplicating arrays, weights, topology, and state buffers without invoking
     /// channel slicing.
@@ -44,14 +108,10 @@ impl<const CH: usize, const K: usize, const HEAD: usize> WaveNetModel<CH, K, HEA
     pub fn clone_exact(&self) -> Self {
         self.clone()
     }
-    /// Returns whether both layer arrays can safely reach their unchecked
-    /// kernels.
+    /// Returns whether both layer arrays satisfy the unchecked kernel invariants.
     ///
-    /// Every field of the arrays and of their layers is public, so a consumer
-    /// can invalidate construction-time invariants from safe Rust. The safe
-    /// entry points ([`Self::process`], [`Self::prewarm`]) consult this
-    /// predicate before dispatching; while it reports `false`, processing
-    /// produces silence instead of dereferencing the corrupted state.
+    /// Enforced once at construction (`from_parts`) and asserted in debug builds
+    /// on the real-time path.
     pub fn validate_state(&self) -> bool {
         self.array1.is_sound() && self.array2.is_sound()
     }
@@ -139,11 +199,10 @@ impl<const CH: usize, const K: usize, const HEAD: usize> WaveNetModel<CH, K, HEA
     /// Production policy is the AVX2 backend; the AVX-512 match arm is not a
     /// promoted product path (see `docs/architecture.md` §1.2).
     pub fn process(&mut self, input: &[f32], output: &mut [f32]) {
-        if !self.validate_state() {
-            let frames = input.len().min(output.len());
-            output[..frames].fill(0.0);
-            return;
-        }
+        debug_assert!(
+            self.validate_state(),
+            "WaveNetModel::process called with invalid internal state"
+        );
         // SAFETY: `dispatch_simd!` expands to a call of `process_internal::<M>` selected by
         // `effective_instruction_set()`. The x86-64-v3 baseline (AVX2/FMA) is a compile-time
         // guarantee (`src/lib.rs`): on a pre-v3 host the binary raises SIGILL and no runtime
@@ -222,9 +281,10 @@ impl<const CH: usize, const K: usize, const HEAD: usize> WaveNetModel<CH, K, HEA
     /// policy is AVX2; the AVX-512 arm is not a promoted product path.
     #[cold]
     pub fn prewarm(&mut self) {
-        if !self.validate_state() {
-            return;
-        }
+        debug_assert!(
+            self.validate_state(),
+            "WaveNetModel::prewarm called with invalid internal state"
+        );
         // SAFETY: `dispatch_simd!` dispatches on runtime CPUID feature checks to a matching
         // `#[target_feature]` backend `M`; `prewarm_internal` only touches the model's own
         // pre-allocated buffers.
@@ -257,9 +317,10 @@ impl<const CH: usize, const K: usize, const HEAD: usize> WaveNetModel<CH, K, HEA
     #[target_feature(enable = "avx512f,avx512vl")]
     #[cold]
     pub unsafe fn prewarm_avx512(&mut self) {
-        if !self.validate_state() {
-            return;
-        }
+        debug_assert!(
+            self.validate_state(),
+            "WaveNetModel::prewarm_avx512 called with invalid internal state"
+        );
         // SAFETY: this body runs under `#[target_feature(enable = "avx512f,avx512vl")]` and the fn
         // is documented to require a supported AVX-512 processor, so the `Avx512Math` kernel
         // instructions are available; `prewarm_internal` only touches the model's own
@@ -273,9 +334,10 @@ impl<const CH: usize, const K: usize, const HEAD: usize> WaveNetModel<CH, K, HEA
     /// Requires an x86-64-v3 (AVX2) processor.
     #[cold]
     pub unsafe fn prewarm_avx2(&mut self) {
-        if !self.validate_state() {
-            return;
-        }
+        debug_assert!(
+            self.validate_state(),
+            "WaveNetModel::prewarm_avx2 called with invalid internal state"
+        );
         // SAFETY: `prewarm_avx2` is documented to require an x86-64-v3 (AVX2) host and
         // `Avx2Math` is selected only on such hosts, so its instructions are available;
         // `prewarm_internal` only touches the model's own pre-allocated buffers.

@@ -192,6 +192,23 @@ macro_rules! impl_avx512_dsp {
         }
 
         #[inline(always)]
+        // SAFETY: out and pending are valid f32 slices; t_start/t_step are finite f32;
+        // AVX-512 implies AVX2. Delegates to AVX2 kernel.
+        unsafe fn crossfade_blend_ramp_mono(
+            out: &mut [f32],
+            pending: &[f32],
+            t_start: f32,
+            t_step: f32,
+        ) {
+            // SAFETY: out, pending, t_start, and t_step satisfy function invariants.
+            unsafe {
+                crate::math::dsp::gain::crossfade_blend_ramp_mono_avx2(
+                    out, pending, t_start, t_step,
+                )
+            }
+        }
+
+        #[inline(always)]
         // SAFETY: all 6 slices are valid f32 slices of equal length n; AVX-512 implies AVX2.
         // Delegates to Avx2Math complex MAC routine for deduplication.
         unsafe fn complex_mac_overwrite(

@@ -218,7 +218,7 @@ impl Conv1dDyn {
     ) {
         let in_ch = self.in_ch;
         let kernel = self.kernel;
-        let mut tap_ptrs = [core::ptr::null::<f32>(); MAX_KERNEL];
+        let mut tap_ptrs = [core::mem::MaybeUninit::<*const f32>::uninit(); MAX_KERNEL];
         let k_limit = kernel.min(MAX_KERNEL);
 
         for (k, tap) in tap_ptrs.iter_mut().enumerate().take(k_limit) {
@@ -236,32 +236,37 @@ impl Conv1dDyn {
             // sized so the `in_ch`-wide tap at that offset is in bounds; the prefetch calls
             // only touch the address, not the memory contents.
             unsafe {
-                *tap = layer_buffer.as_ptr().add(in_start);
+                let ptr = layer_buffer.as_ptr().add(in_start);
+                tap.write(ptr);
                 if self.dilation >= 128 {
-                    prefetch_strategy_2stage(*tap, self.dilation * in_ch, k, kernel, self.dilation);
+                    prefetch_strategy_2stage(ptr, self.dilation * in_ch, k, kernel, self.dilation);
                 } else {
-                    prefetch_strategy_simple(*tap, self.dilation * in_ch, k, kernel, self.dilation);
+                    prefetch_strategy_simple(ptr, self.dilation * in_ch, k, kernel, self.dilation);
                 }
             }
         }
 
+        // SAFETY: `tap_ptrs[0..k_limit]` were all initialized in the loop above.
+        let tap_ptrs =
+            unsafe { core::slice::from_raw_parts(tap_ptrs.as_ptr() as *const *const f32, k_limit) };
+
         // SAFETY: the `process_blocks_*_nocopy` helpers are `unsafe fn`s reached only under the
         // preconditions of `process_single_frame` (valid `out_frame` of `out_ch` lanes, tap
-        // pointers set above from the in-bounds `layer_buffer`, `kernel <= MAX_KERNEL`), and `M`
-        // is selected by the runtime CPUID dispatch matching its `#[target_feature]` backend.
+        // pointers set above from the in-bounds `layer_buffer`, `k_limit <= MAX_KERNEL`), and the
+        // x86-64-v3 / aarch64 NEON baseline guarantees AVX2+FMA / NEON availability.
         unsafe {
             match self.interleave_width {
-                16 => {
-                    self.process_blocks_16_nocopy::<M>(out_frame, kernel, &tap_ptrs, in_ch, mixin)
-                }
-                8 => self.process_blocks_8_nocopy::<M>(out_frame, kernel, &tap_ptrs, in_ch, mixin),
-                _ => self.process_blocks_4_nocopy::<M>(out_frame, kernel, &tap_ptrs, in_ch, mixin),
+                16 => self.process_blocks_16_nocopy(out_frame, k_limit, tap_ptrs, in_ch, mixin),
+                8 => self.process_blocks_8_nocopy(out_frame, k_limit, tap_ptrs, in_ch, mixin),
+                _ => self.process_blocks_4_nocopy(out_frame, k_limit, tap_ptrs, in_ch, mixin),
             }
         }
     }
 
-    #[inline(always)]
-    unsafe fn process_blocks_4_nocopy<M: SimdMath>(
+    #[inline]
+    #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+    #[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
+    unsafe fn process_blocks_4_nocopy(
         &self,
         out_frame: &mut [f32],
         kernel: usize,
@@ -269,91 +274,91 @@ impl Conv1dDyn {
         in_ch: usize,
         mixin: Option<&[f32]>,
     ) {
+        use crate::arch::simd::*;
+
         let num_blocks = self.out_ch.div_ceil(4);
+        let w_stride = kernel * in_ch * 4;
+        let k_stride = in_ch * 4;
         for b in 0..num_blocks {
             let out_c = b * 4;
             let w = 4.min(self.out_ch - out_c);
-            let (mu0, mu1, mu2, mu3) =
-                // SAFETY: `load_mixin_4` internally guards every lane access with
-                // `out_c + i < m.len()` before dereferencing, so `get_unchecked` stays in bounds
-                // for any `mixin` slice (or returns zeros when `mixin` is `None`).
-                unsafe { Self::load_mixin_4(mixin, out_c) };
-
-            let mut acc = [0.0f32; 4];
-            // SAFETY: `bias.len() == out_ch` and `out_c = b * 4 < out_ch` for
-            // `b < out_ch.div_ceil(4)`, so the `get_unchecked(out_c)` access is in bounds; lanes
-            // `out_c + 1..out_c + 3` are each guarded by `out_c + i < self.out_ch` before
-            // dereferencing.
+            let b_base = b * w_stride;
+            // SAFETY: `bias.len() == out_ch`, `weights.len() >= padded_total`, `tap_ptrs[k]`
+            // covers `in_ch` valid f32s, `out_frame` has `out_ch` lanes, and the x86-64-v3 /
+            // aarch64 NEON baseline guarantees SSE/AVX2/FMA/NEON intrinsics.
             unsafe {
-                if self.do_bias {
-                    acc[0] = *self.bias.get_unchecked(out_c) + mu0;
-                    acc[1] = if out_c + 1 < self.out_ch {
+                let (mu0, mu1, mu2, mu3) = Self::load_mixin_4(mixin, out_c);
+
+                let mut acc0 = if self.do_bias {
+                    let b0 = *self.bias.get_unchecked(out_c) + mu0;
+                    let b1 = if out_c + 1 < self.out_ch {
                         *self.bias.get_unchecked(out_c + 1)
                     } else {
                         0.0
                     } + mu1;
-                    acc[2] = if out_c + 2 < self.out_ch {
+                    let b2 = if out_c + 2 < self.out_ch {
                         *self.bias.get_unchecked(out_c + 2)
                     } else {
                         0.0
                     } + mu2;
-                    acc[3] = if out_c + 3 < self.out_ch {
+                    let b3 = if out_c + 3 < self.out_ch {
                         *self.bias.get_unchecked(out_c + 3)
                     } else {
                         0.0
                     } + mu3;
+                    _mm_setr_ps(b0, b1, b2, b3)
                 } else {
-                    acc[0] = mu0;
-                    acc[1] = mu1;
-                    acc[2] = mu2;
-                    acc[3] = mu3;
-                }
-            }
-
-            for k in 0..kernel {
-                let w_start = b * kernel * in_ch * 4 + k * in_ch * 4;
-                // F-16: the interleaved-4 slice covers `in_ch` taps of `[f32; 4]`;
-                // it must lie within the zero-padded weights buffer.
-                // PROOF (release-stable, R-2): `weights.len() >= padded_total` is enforced by
-                // the validated constructors (`Conv1dDyn::try_from_parts` /
-                // `ConvWeightsOutput::from_parts`) for the stored interleave width, so
-                // `b < num_blocks`, `k < kernel` imply
-                // `w_start + 4 * in_ch <= padded_total <= weights.len()`. The `debug_assert!`
-                // below is a redundant debug-only net.
-                debug_assert!(
-                    w_start + 4 * in_ch <= self.weights.len(),
-                    "conv1d_dyn: interleave-4 weight slice exceeds padded weights buffer"
-                );
-                // SAFETY: the construction-time padding invariant above proves
-                // `w_start + 4 * in_ch` lies within the zero-padded weights buffer, so the
-                // slice of `in_ch` `[f32; 4]` blocks is in bounds; `self.weights` is an
-                // `AlignedVec<f32>` aligned to 64 bytes.
-                let w_slice: &[[f32; 4]] = unsafe {
-                    let ptr = self.weights.as_ptr().add(w_start) as *const [f32; 4];
-                    core::slice::from_raw_parts(ptr, in_ch)
+                    _mm_setr_ps(mu0, mu1, mu2, mu3)
                 };
-                // SAFETY: `k < kernel <= MAX_KERNEL` (loader-enforced, see `MAX_KERNEL_SIZE`), so
-                // `tap_ptrs.get_unchecked(k)` is in bounds, and the tap pointer was set above from
-                // `layer_buffer` covering `in_ch` initialized f32s (caller contract).
-                let tap_slice =
-                    unsafe { core::slice::from_raw_parts(*tap_ptrs.get_unchecked(k), in_ch) };
-                // SAFETY: `w_slice` (`in_ch` `[f32; 4]` blocks), `tap_slice` (`in_ch` f32s) and
-                // `acc` (`[f32; 4]`) match the 4-wide accumulate kernel's lane counts, and `M` is
-                // selected by the runtime CPUID dispatch matching its `#[target_feature]` backend.
-                acc = unsafe { M::dot_product_4x_f32_accumulate(w_slice, tap_slice, &acc) };
-            }
+                let mut acc1 = _mm_setzero_ps();
+                let mut acc2 = _mm_setzero_ps();
+                let mut acc3 = _mm_setzero_ps();
 
-            // SAFETY: the fast path is guarded by `out_c + 3 < self.out_ch`, and the tail path
-            // writes at most `w = 4.min(self.out_ch - out_c)` lanes so `out_c + lane < out_ch`;
-            // `out_frame` has `out_ch` lanes (caller contract).
-            unsafe {
+                for k in 0..kernel {
+                    let w_start = b_base + k * k_stride;
+                    debug_assert!(
+                        w_start + 4 * in_ch <= self.weights.len(),
+                        "conv1d_dyn: interleave-4 weight slice exceeds padded weights buffer"
+                    );
+                    let w_ptr = self.weights.as_ptr().add(w_start);
+                    let tap_ptr = *tap_ptrs.get_unchecked(k);
+                    let mut ic = 0usize;
+                    while ic + 4 <= in_ch {
+                        let w0 = _mm_loadu_ps(w_ptr.add(ic * 4));
+                        let s0 = _mm_set1_ps(*tap_ptr.add(ic));
+                        acc0 = _mm_fmadd_ps(w0, s0, acc0);
+
+                        let w1 = _mm_loadu_ps(w_ptr.add((ic + 1) * 4));
+                        let s1 = _mm_set1_ps(*tap_ptr.add(ic + 1));
+                        acc1 = _mm_fmadd_ps(w1, s1, acc1);
+
+                        let w2 = _mm_loadu_ps(w_ptr.add((ic + 2) * 4));
+                        let s2 = _mm_set1_ps(*tap_ptr.add(ic + 2));
+                        acc2 = _mm_fmadd_ps(w2, s2, acc2);
+
+                        let w3 = _mm_loadu_ps(w_ptr.add((ic + 3) * 4));
+                        let s3 = _mm_set1_ps(*tap_ptr.add(ic + 3));
+                        acc3 = _mm_fmadd_ps(w3, s3, acc3);
+                        ic += 4;
+                    }
+                    while ic < in_ch {
+                        let w0 = _mm_loadu_ps(w_ptr.add(ic * 4));
+                        let s0 = _mm_set1_ps(*tap_ptr.add(ic));
+                        acc0 = _mm_fmadd_ps(w0, s0, acc0);
+                        ic += 1;
+                    }
+                }
+
+                acc0 = _mm_add_ps(acc0, acc1);
+                acc2 = _mm_add_ps(acc2, acc3);
+                acc0 = _mm_add_ps(acc0, acc2);
+
                 if out_c + 3 < self.out_ch {
-                    *out_frame.get_unchecked_mut(out_c) = acc[0];
-                    *out_frame.get_unchecked_mut(out_c + 1) = acc[1];
-                    *out_frame.get_unchecked_mut(out_c + 2) = acc[2];
-                    *out_frame.get_unchecked_mut(out_c + 3) = acc[3];
+                    _mm_storeu_ps(out_frame.as_mut_ptr().add(out_c), acc0);
                 } else {
-                    for (lane, &val) in acc.iter().enumerate().take(w) {
+                    let mut tmp = [0.0f32; 4];
+                    _mm_storeu_ps(tmp.as_mut_ptr(), acc0);
+                    for (lane, &val) in tmp.iter().enumerate().take(w) {
                         *out_frame.get_unchecked_mut(out_c + lane) = val;
                     }
                 }
@@ -361,8 +366,10 @@ impl Conv1dDyn {
         }
     }
 
-    #[inline(always)]
-    unsafe fn process_blocks_8_nocopy<M: SimdMath>(
+    #[inline]
+    #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+    #[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
+    unsafe fn process_blocks_8_nocopy(
         &self,
         out_frame: &mut [f32],
         kernel: usize,
@@ -370,79 +377,102 @@ impl Conv1dDyn {
         in_ch: usize,
         mixin: Option<&[f32]>,
     ) {
+        use crate::arch::simd::*;
+
         let num_blocks = self.out_ch.div_ceil(8);
+        let w_stride = kernel * in_ch * 8;
+        let k_stride = in_ch * 8;
         for b in 0..num_blocks {
             let out_c = b * 8;
             let w = 8.min(self.out_ch - out_c);
-            let mut acc = [0.0f32; 8];
-            // SAFETY: `j < w = 8.min(self.out_ch - out_c)` so `out_c + j < out_ch == bias.len()`
-            // (`bias` is an `AlignedVec` of `out_ch` elements); the mixin lane is additionally
-            // guarded by `out_c + j < m.len()` before dereferencing.
+            let b_base = b * w_stride;
+            // SAFETY: `bias.len() == out_ch`, `weights.len() >= padded_total`, `tap_ptrs[k]`
+            // covers `in_ch` valid f32s, `out_frame` has `out_ch` lanes, and the x86-64-v3 /
+            // aarch64 NEON baseline guarantees AVX2/FMA/NEON intrinsics.
             unsafe {
-                for (j, item) in acc.iter_mut().enumerate().take(w) {
-                    let v_bias = if self.do_bias {
-                        *self.bias.get_unchecked(out_c + j)
-                    } else {
-                        0.0
-                    };
-                    let v_mixin = if let Some(m) = mixin {
-                        if out_c + j < m.len() {
-                            *m.get_unchecked(out_c + j)
+                let mut acc0 = if w == 8 && self.do_bias && mixin.is_none() {
+                    _mm256_loadu_ps(self.bias.as_ptr().add(out_c))
+                } else {
+                    let mut init = [0.0f32; 8];
+                    for (j, item) in init.iter_mut().enumerate().take(w) {
+                        let v_bias = if self.do_bias {
+                            *self.bias.get_unchecked(out_c + j)
                         } else {
                             0.0
-                        }
-                    } else {
-                        0.0
-                    };
-                    *item = v_bias + v_mixin;
-                }
-            }
-
-            for k in 0..kernel {
-                let w_start = b * kernel * in_ch * 8 + k * in_ch * 8;
-                // F-16: the interleaved-8 slice covers `in_ch` taps of `[f32; 8]`;
-                // it must lie within the zero-padded weights buffer.
-                // PROOF (release-stable, R-2): `weights.len() >= padded_total` is enforced by
-                // the validated constructors (`Conv1dDyn::try_from_parts` /
-                // `ConvWeightsOutput::from_parts`) for the stored interleave width, so
-                // `b < num_blocks`, `k < kernel` imply
-                // `w_start + 8 * in_ch <= padded_total <= weights.len()`. The `debug_assert!`
-                // below is a redundant debug-only net.
-                debug_assert!(
-                    w_start + 8 * in_ch <= self.weights.len(),
-                    "conv1d_dyn: interleave-8 weight slice exceeds padded weights buffer"
-                );
-                // SAFETY: the construction-time padding invariant above proves
-                // `w_start + 8 * in_ch` lies within the zero-padded weights buffer, so the
-                // slice of `in_ch` `[f32; 8]` blocks is in bounds; `self.weights` is an
-                // `AlignedVec<f32>` aligned to 64 bytes.
-                let w_slice: &[[f32; 8]] = unsafe {
-                    let ptr = self.weights.as_ptr().add(w_start) as *const [f32; 8];
-                    core::slice::from_raw_parts(ptr, in_ch)
+                        };
+                        let v_mixin = if let Some(m) = mixin {
+                            if out_c + j < m.len() {
+                                *m.get_unchecked(out_c + j)
+                            } else {
+                                0.0
+                            }
+                        } else {
+                            0.0
+                        };
+                        *item = v_bias + v_mixin;
+                    }
+                    _mm256_loadu_ps(init.as_ptr())
                 };
-                // SAFETY: `k < kernel <= MAX_KERNEL` (loader-enforced, see `MAX_KERNEL_SIZE`), so
-                // `tap_ptrs.get_unchecked(k)` is in bounds, and the tap pointer was set above from
-                // `layer_buffer` covering `in_ch` initialized f32s (caller contract).
-                let tap_slice =
-                    unsafe { core::slice::from_raw_parts(*tap_ptrs.get_unchecked(k), in_ch) };
-                // SAFETY: `w_slice` (`in_ch` `[f32; 8]` blocks), `tap_slice` (`in_ch` f32s) and
-                // `acc` (`[f32; 8]`) match the 8-wide accumulate kernel's lane counts, and `M` is
-                // selected by the runtime CPUID dispatch matching its `#[target_feature]` backend.
-                acc = unsafe { M::dot_product_8x_f32_accumulate(w_slice, tap_slice, &acc) };
-            }
+                let mut acc1 = _mm256_setzero_ps();
+                let mut acc2 = _mm256_setzero_ps();
+                let mut acc3 = _mm256_setzero_ps();
 
-            // SAFETY: `j < w = 8.min(self.out_ch - out_c)` so `out_c + j < out_ch`, and
-            // `out_frame` has `out_ch` lanes (caller contract).
-            unsafe {
-                for (j, &item) in acc.iter().enumerate().take(w) {
-                    *out_frame.get_unchecked_mut(out_c + j) = item;
+                for k in 0..kernel {
+                    let w_start = b_base + k * k_stride;
+                    debug_assert!(
+                        w_start + 8 * in_ch <= self.weights.len(),
+                        "conv1d_dyn: interleave-8 weight slice exceeds padded weights buffer"
+                    );
+                    let w_ptr = self.weights.as_ptr().add(w_start);
+                    let tap_ptr = *tap_ptrs.get_unchecked(k);
+                    let mut ic = 0usize;
+                    while ic + 4 <= in_ch {
+                        let w0 = _mm256_loadu_ps(w_ptr.add(ic * 8));
+                        let s0 = _mm256_set1_ps(*tap_ptr.add(ic));
+                        acc0 = _mm256_fmadd_ps(w0, s0, acc0);
+
+                        let w1 = _mm256_loadu_ps(w_ptr.add((ic + 1) * 8));
+                        let s1 = _mm256_set1_ps(*tap_ptr.add(ic + 1));
+                        acc1 = _mm256_fmadd_ps(w1, s1, acc1);
+
+                        let w2 = _mm256_loadu_ps(w_ptr.add((ic + 2) * 8));
+                        let s2 = _mm256_set1_ps(*tap_ptr.add(ic + 2));
+                        acc2 = _mm256_fmadd_ps(w2, s2, acc2);
+
+                        let w3 = _mm256_loadu_ps(w_ptr.add((ic + 3) * 8));
+                        let s3 = _mm256_set1_ps(*tap_ptr.add(ic + 3));
+                        acc3 = _mm256_fmadd_ps(w3, s3, acc3);
+                        ic += 4;
+                    }
+                    while ic < in_ch {
+                        let w0 = _mm256_loadu_ps(w_ptr.add(ic * 8));
+                        let s0 = _mm256_set1_ps(*tap_ptr.add(ic));
+                        acc0 = _mm256_fmadd_ps(w0, s0, acc0);
+                        ic += 1;
+                    }
+                }
+
+                acc0 = _mm256_add_ps(acc0, acc1);
+                acc2 = _mm256_add_ps(acc2, acc3);
+                acc0 = _mm256_add_ps(acc0, acc2);
+
+                if w == 8 {
+                    _mm256_storeu_ps(out_frame.as_mut_ptr().add(out_c), acc0);
+                } else {
+                    let mut tmp = [0.0f32; 8];
+                    _mm256_storeu_ps(tmp.as_mut_ptr(), acc0);
+                    for (j, &item) in tmp.iter().enumerate().take(w) {
+                        *out_frame.get_unchecked_mut(out_c + j) = item;
+                    }
                 }
             }
         }
     }
 
-    #[inline(always)]
-    unsafe fn process_blocks_16_nocopy<M: SimdMath>(
+    #[inline]
+    #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+    #[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
+    unsafe fn process_blocks_16_nocopy(
         &self,
         out_frame: &mut [f32],
         kernel: usize,
@@ -450,73 +480,264 @@ impl Conv1dDyn {
         in_ch: usize,
         mixin: Option<&[f32]>,
     ) {
+        use crate::arch::simd::*;
+
         let num_blocks = self.out_ch.div_ceil(16);
+        let w_stride = kernel * in_ch * 16;
+        let k_stride = in_ch * 16;
         for b in 0..num_blocks {
             let out_c = b * 16;
             let w = 16.min(self.out_ch - out_c);
-            let mut acc = [0.0f32; 16];
-            // SAFETY: `j < w = 16.min(self.out_ch - out_c)` so `out_c + j < out_ch == bias.len()`
-            // (`bias` is an `AlignedVec` of `out_ch` elements); the mixin lane is additionally
-            // guarded by `out_c + j < m.len()` before dereferencing.
+            let b_base = b * w_stride;
+            // SAFETY: `bias.len() == out_ch`, `weights.len() >= padded_total`, `tap_ptrs[k]`
+            // covers `in_ch` valid f32s, `out_frame` has `out_ch` lanes, and the x86-64-v3 /
+            // aarch64 NEON baseline guarantees AVX2/FMA/NEON intrinsics.
             unsafe {
-                for (j, item) in acc.iter_mut().enumerate().take(w) {
-                    let v_bias = if self.do_bias {
-                        *self.bias.get_unchecked(out_c + j)
-                    } else {
-                        0.0
-                    };
-                    let v_mixin = if let Some(m) = mixin {
-                        if out_c + j < m.len() {
-                            *m.get_unchecked(out_c + j)
+                let (mut acc_lo0, mut acc_hi0) = if w == 16 && self.do_bias && mixin.is_none() {
+                    (
+                        _mm256_loadu_ps(self.bias.as_ptr().add(out_c)),
+                        _mm256_loadu_ps(self.bias.as_ptr().add(out_c + 8)),
+                    )
+                } else {
+                    let mut init = [0.0f32; 16];
+                    for (j, item) in init.iter_mut().enumerate().take(w) {
+                        let v_bias = if self.do_bias {
+                            *self.bias.get_unchecked(out_c + j)
                         } else {
                             0.0
-                        }
-                    } else {
-                        0.0
-                    };
-                    *item = v_bias + v_mixin;
+                        };
+                        let v_mixin = if let Some(m) = mixin {
+                            if out_c + j < m.len() {
+                                *m.get_unchecked(out_c + j)
+                            } else {
+                                0.0
+                            }
+                        } else {
+                            0.0
+                        };
+                        *item = v_bias + v_mixin;
+                    }
+                    (
+                        _mm256_loadu_ps(init.as_ptr()),
+                        _mm256_loadu_ps(init.as_ptr().add(8)),
+                    )
+                };
+                let mut acc_lo1 = _mm256_setzero_ps();
+                let mut acc_lo2 = _mm256_setzero_ps();
+                let mut acc_lo3 = _mm256_setzero_ps();
+                let mut acc_hi1 = _mm256_setzero_ps();
+                let mut acc_hi2 = _mm256_setzero_ps();
+                let mut acc_hi3 = _mm256_setzero_ps();
+
+                for k in 0..kernel {
+                    let w_start = b_base + k * k_stride;
+                    debug_assert!(
+                        w_start + 16 * in_ch <= self.weights.len(),
+                        "conv1d_dyn: interleave-16 weight slice exceeds padded weights buffer"
+                    );
+                    let w_ptr = self.weights.as_ptr().add(w_start);
+                    let tap_ptr = *tap_ptrs.get_unchecked(k);
+                    let mut ic = 0usize;
+                    while ic + 4 <= in_ch {
+                        let s0 = _mm256_set1_ps(*tap_ptr.add(ic));
+                        let w0_lo = _mm256_loadu_ps(w_ptr.add(ic * 16));
+                        let w0_hi = _mm256_loadu_ps(w_ptr.add(ic * 16 + 8));
+                        acc_lo0 = _mm256_fmadd_ps(w0_lo, s0, acc_lo0);
+                        acc_hi0 = _mm256_fmadd_ps(w0_hi, s0, acc_hi0);
+
+                        let s1 = _mm256_set1_ps(*tap_ptr.add(ic + 1));
+                        let w1_lo = _mm256_loadu_ps(w_ptr.add((ic + 1) * 16));
+                        let w1_hi = _mm256_loadu_ps(w_ptr.add((ic + 1) * 16 + 8));
+                        acc_lo1 = _mm256_fmadd_ps(w1_lo, s1, acc_lo1);
+                        acc_hi1 = _mm256_fmadd_ps(w1_hi, s1, acc_hi1);
+
+                        let s2 = _mm256_set1_ps(*tap_ptr.add(ic + 2));
+                        let w2_lo = _mm256_loadu_ps(w_ptr.add((ic + 2) * 16));
+                        let w2_hi = _mm256_loadu_ps(w_ptr.add((ic + 2) * 16 + 8));
+                        acc_lo2 = _mm256_fmadd_ps(w2_lo, s2, acc_lo2);
+                        acc_hi2 = _mm256_fmadd_ps(w2_hi, s2, acc_hi2);
+
+                        let s3 = _mm256_set1_ps(*tap_ptr.add(ic + 3));
+                        let w3_lo = _mm256_loadu_ps(w_ptr.add((ic + 3) * 16));
+                        let w3_hi = _mm256_loadu_ps(w_ptr.add((ic + 3) * 16 + 8));
+                        acc_lo3 = _mm256_fmadd_ps(w3_lo, s3, acc_lo3);
+                        acc_hi3 = _mm256_fmadd_ps(w3_hi, s3, acc_hi3);
+                        ic += 4;
+                    }
+                    while ic < in_ch {
+                        let s0 = _mm256_set1_ps(*tap_ptr.add(ic));
+                        let w0_lo = _mm256_loadu_ps(w_ptr.add(ic * 16));
+                        let w0_hi = _mm256_loadu_ps(w_ptr.add(ic * 16 + 8));
+                        acc_lo0 = _mm256_fmadd_ps(w0_lo, s0, acc_lo0);
+                        acc_hi0 = _mm256_fmadd_ps(w0_hi, s0, acc_hi0);
+                        ic += 1;
+                    }
+                }
+
+                acc_lo0 = _mm256_add_ps(acc_lo0, acc_lo1);
+                acc_lo2 = _mm256_add_ps(acc_lo2, acc_lo3);
+                acc_lo0 = _mm256_add_ps(acc_lo0, acc_lo2);
+
+                acc_hi0 = _mm256_add_ps(acc_hi0, acc_hi1);
+                acc_hi2 = _mm256_add_ps(acc_hi2, acc_hi3);
+                acc_hi0 = _mm256_add_ps(acc_hi0, acc_hi2);
+
+                if w == 16 {
+                    _mm256_storeu_ps(out_frame.as_mut_ptr().add(out_c), acc_lo0);
+                    _mm256_storeu_ps(out_frame.as_mut_ptr().add(out_c + 8), acc_hi0);
+                } else {
+                    let mut tmp = [0.0f32; 16];
+                    _mm256_storeu_ps(tmp.as_mut_ptr(), acc_lo0);
+                    _mm256_storeu_ps(tmp.as_mut_ptr().add(8), acc_hi0);
+                    for (j, &item) in tmp.iter().enumerate().take(w) {
+                        *out_frame.get_unchecked_mut(out_c + j) = item;
+                    }
                 }
             }
+        }
+    }
 
-            for k in 0..kernel {
-                let w_start = b * kernel * in_ch * 16 + k * in_ch * 16;
-                // F-16: the interleaved-16 slice covers `in_ch` taps of `[f32; 16]`;
-                // it must lie within the zero-padded weights buffer.
-                // PROOF (release-stable, R-2): `weights.len() >= padded_total` is enforced by
-                // the validated constructors (`Conv1dDyn::try_from_parts` /
-                // `ConvWeightsOutput::from_parts`) for the stored interleave width, so
-                // `b < num_blocks`, `k < kernel` imply
-                // `w_start + 16 * in_ch <= padded_total <= weights.len()`. The `debug_assert!`
-                // below is a redundant debug-only net.
-                debug_assert!(
-                    w_start + 16 * in_ch <= self.weights.len(),
-                    "conv1d_dyn: interleave-16 weight slice exceeds padded weights buffer"
-                );
-                // SAFETY: the construction-time padding invariant above proves
-                // `w_start + 16 * in_ch` lies within the zero-padded weights buffer, so the
-                // slice of `in_ch` `[f32; 16]` blocks is in bounds; `self.weights` is an
-                // `AlignedVec<f32>` aligned to 64 bytes.
-                let w_slice: &[[f32; 16]] = unsafe {
-                    let ptr = self.weights.as_ptr().add(w_start) as *const [f32; 16];
-                    core::slice::from_raw_parts(ptr, in_ch)
-                };
-                // SAFETY: `k < kernel <= MAX_KERNEL` (loader-enforced, see `MAX_KERNEL_SIZE`), so
-                // `tap_ptrs.get_unchecked(k)` is in bounds, and the tap pointer was set above from
-                // `layer_buffer` covering `in_ch` initialized f32s (caller contract).
-                let tap_slice =
-                    unsafe { core::slice::from_raw_parts(*tap_ptrs.get_unchecked(k), in_ch) };
-                // SAFETY: `w_slice` (`in_ch` `[f32; 16]` blocks), `tap_slice` (`in_ch` f32s) and
-                // `acc` (`[f32; 16]`) match the 16-wide accumulate kernel's lane counts, and `M`
-                // is selected by the runtime CPUID dispatch matching its `#[target_feature]`
-                // backend.
-                acc = unsafe { M::dot_product_16x_f32_accumulate(w_slice, tap_slice, &acc) };
-            }
+    /// T=8 frame-tiled 4-wide interleaved Conv1D forward pass (with bias, no mixin).
+    ///
+    /// Processes `num_frames` in tiles of 8 frames, keeping 8 XMM accumulators in
+    /// registers across all `kernel * in_ch` FMAs per 4-channel block to amortize
+    /// weight loads and saturate FMA ports.
+    ///
+    /// # Safety
+    /// - `self.interleave_width == 4` and `self.do_bias` must hold.
+    /// - `frame_start >= (self.kernel - 1) * self.dilation` must hold so every tap
+    ///   address stays non-negative without clamping.
+    /// - `layer_buffer` must cover `(frame_start + num_frames) * self.in_ch` elements.
+    /// - `z_out` must have length `>= num_frames * self.out_ch`.
+    #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
+    #[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
+    pub(crate) unsafe fn process_block_no_mixin_4wide(
+        &self,
+        layer_buffer: &[f32],
+        z_out: &mut [f32],
+        frame_start: usize,
+        num_frames: usize,
+    ) {
+        use crate::arch::simd::*;
 
-            // SAFETY: `j < w = 16.min(self.out_ch - out_c)` so `out_c + j < out_ch`, and
-            // `out_frame` has `out_ch` lanes (caller contract).
+        debug_assert_eq!(self.interleave_width, 4);
+        debug_assert!(self.do_bias);
+        debug_assert!(self.kernel >= 1);
+        debug_assert!(frame_start >= (self.kernel - 1) * self.dilation);
+        debug_assert!(z_out.len() >= num_frames * self.out_ch);
+
+        let in_ch = self.in_ch;
+        let out_ch = self.out_ch;
+        let kernel = self.kernel;
+        let d = self.dilation as isize;
+        let k_i = kernel as isize;
+        let num_blocks = out_ch.div_ceil(4);
+        let w_stride = kernel * in_ch * 4;
+        let k_stride = in_ch * 4;
+        let buf = layer_buffer.as_ptr();
+        let w_base = self.weights.as_ptr();
+        let z_ptr = z_out.as_mut_ptr();
+
+        const T: usize = 8;
+        let n_tiled = (num_frames / T) * T;
+
+        for b in 0..num_blocks {
+            let out_c = b * 4;
+            let w = 4.min(out_ch - out_c);
+            // SAFETY: caller preconditions guarantee `bias`, `weights`, `layer_buffer`, and
+            // `z_out` cover all indexed lanes; `target_feature` enables AVX2+FMA / NEON.
             unsafe {
-                for (j, &item) in acc.iter().enumerate().take(w) {
-                    *out_frame.get_unchecked_mut(out_c + j) = item;
+                let b0 = *self.bias.get_unchecked(out_c);
+                let b1 = if out_c + 1 < out_ch {
+                    *self.bias.get_unchecked(out_c + 1)
+                } else {
+                    0.0
+                };
+                let b2 = if out_c + 2 < out_ch {
+                    *self.bias.get_unchecked(out_c + 2)
+                } else {
+                    0.0
+                };
+                let b3 = if out_c + 3 < out_ch {
+                    *self.bias.get_unchecked(out_c + 3)
+                } else {
+                    0.0
+                };
+                let bias_v = _mm_setr_ps(b0, b1, b2, b3);
+                let bw_ptr = w_base.add(b * w_stride);
+
+                for f in (0..n_tiled).step_by(T) {
+                    let frame0 = (frame_start + f) as isize;
+                    let mut a0 = bias_v;
+                    let mut a1 = bias_v;
+                    let mut a2 = bias_v;
+                    let mut a3 = bias_v;
+                    let mut a4 = bias_v;
+                    let mut a5 = bias_v;
+                    let mut a6 = bias_v;
+                    let mut a7 = bias_v;
+
+                    for k in 0..kernel {
+                        let taps_back = k_i - 1 - k as isize;
+                        let tap0 = (frame0 - d * taps_back) as usize;
+                        let hb = buf.add(tap0 * in_ch);
+                        let kw_ptr = bw_ptr.add(k * k_stride);
+                        for ic in 0..in_ch {
+                            let wv = _mm_loadu_ps(kw_ptr.add(ic * 4));
+                            a0 = _mm_fmadd_ps(wv, _mm_set1_ps(*hb.add(ic)), a0);
+                            a1 = _mm_fmadd_ps(wv, _mm_set1_ps(*hb.add(in_ch + ic)), a1);
+                            a2 = _mm_fmadd_ps(wv, _mm_set1_ps(*hb.add(2 * in_ch + ic)), a2);
+                            a3 = _mm_fmadd_ps(wv, _mm_set1_ps(*hb.add(3 * in_ch + ic)), a3);
+                            a4 = _mm_fmadd_ps(wv, _mm_set1_ps(*hb.add(4 * in_ch + ic)), a4);
+                            a5 = _mm_fmadd_ps(wv, _mm_set1_ps(*hb.add(5 * in_ch + ic)), a5);
+                            a6 = _mm_fmadd_ps(wv, _mm_set1_ps(*hb.add(6 * in_ch + ic)), a6);
+                            a7 = _mm_fmadd_ps(wv, _mm_set1_ps(*hb.add(7 * in_ch + ic)), a7);
+                        }
+                    }
+
+                    if w == 4 {
+                        _mm_storeu_ps(z_ptr.add(f * out_ch + out_c), a0);
+                        _mm_storeu_ps(z_ptr.add((f + 1) * out_ch + out_c), a1);
+                        _mm_storeu_ps(z_ptr.add((f + 2) * out_ch + out_c), a2);
+                        _mm_storeu_ps(z_ptr.add((f + 3) * out_ch + out_c), a3);
+                        _mm_storeu_ps(z_ptr.add((f + 4) * out_ch + out_c), a4);
+                        _mm_storeu_ps(z_ptr.add((f + 5) * out_ch + out_c), a5);
+                        _mm_storeu_ps(z_ptr.add((f + 6) * out_ch + out_c), a6);
+                        _mm_storeu_ps(z_ptr.add((f + 7) * out_ch + out_c), a7);
+                    } else {
+                        let accs = [a0, a1, a2, a3, a4, a5, a6, a7];
+                        for (t, &acc) in accs.iter().enumerate() {
+                            let mut tmp = [0.0f32; 4];
+                            _mm_storeu_ps(tmp.as_mut_ptr(), acc);
+                            for (lane, &val) in tmp.iter().enumerate().take(w) {
+                                *z_ptr.add((f + t) * out_ch + out_c + lane) = val;
+                            }
+                        }
+                    }
+                }
+
+                for f in n_tiled..num_frames {
+                    let frame_idx = (frame_start + f) as isize;
+                    let mut acc = bias_v;
+                    for k in 0..kernel {
+                        let taps_back = k_i - 1 - k as isize;
+                        let tap = (frame_idx - d * taps_back) as usize;
+                        let hb = buf.add(tap * in_ch);
+                        let kw_ptr = bw_ptr.add(k * k_stride);
+                        for ic in 0..in_ch {
+                            let wv = _mm_loadu_ps(kw_ptr.add(ic * 4));
+                            acc = _mm_fmadd_ps(wv, _mm_set1_ps(*hb.add(ic)), acc);
+                        }
+                    }
+                    if w == 4 {
+                        _mm_storeu_ps(z_ptr.add(f * out_ch + out_c), acc);
+                    } else {
+                        let mut tmp = [0.0f32; 4];
+                        _mm_storeu_ps(tmp.as_mut_ptr(), acc);
+                        for (lane, &val) in tmp.iter().enumerate().take(w) {
+                            *z_ptr.add(f * out_ch + out_c + lane) = val;
+                        }
+                    }
                 }
             }
         }

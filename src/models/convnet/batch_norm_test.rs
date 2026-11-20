@@ -299,10 +299,64 @@ fn test_zero_gamma_noop() {
 }
 
 #[test]
-#[should_panic(expected = "negative")]
-fn test_negative_variance_panics() {
-    BatchNorm1D::from_params(1, &[1.0], &[0.0], &[0.0], &[-1.0], 0.0)
-        .expect("construction should succeed for test-sized buffers");
+fn test_negative_or_zero_variance_returns_err_without_panic() {
+    assert_eq!(
+        BatchNorm1D::from_params(1, &[1.0], &[0.0], &[0.0], &[-1.0], 0.0).err(),
+        Some(NamErrorCode::ModelBuildFailed)
+    );
+    assert_eq!(
+        BatchNorm1D::from_params(1, &[1.0], &[0.0], &[0.0], &[0.0], 0.0).err(),
+        Some(NamErrorCode::ModelBuildFailed)
+    );
+    assert_eq!(
+        BatchNorm1D::from_params(1, &[1.0], &[0.0], &[0.0], &[1.0], -0.5).err(),
+        Some(NamErrorCode::ModelBuildFailed)
+    );
+}
+
+#[test]
+fn test_from_params_and_from_fused_reject_mismatches_and_non_finite() {
+    assert_eq!(
+        BatchNorm1D::from_params(2, &[1.0], &[0.0, 0.0], &[0.0, 0.0], &[1.0, 1.0], 1e-5).err(),
+        Some(NamErrorCode::WeightCountMismatch)
+    );
+    assert_eq!(
+        BatchNorm1D::from_params(2, &[1.0, 1.0], &[0.0], &[0.0, 0.0], &[1.0, 1.0], 1e-5).err(),
+        Some(NamErrorCode::WeightCountMismatch)
+    );
+    assert_eq!(
+        BatchNorm1D::from_params(2, &[1.0, 1.0], &[0.0, 0.0], &[0.0], &[1.0, 1.0], 1e-5).err(),
+        Some(NamErrorCode::WeightCountMismatch)
+    );
+    assert_eq!(
+        BatchNorm1D::from_params(2, &[1.0, 1.0], &[0.0, 0.0], &[0.0, 0.0], &[1.0], 1e-5).err(),
+        Some(NamErrorCode::WeightCountMismatch)
+    );
+    assert_eq!(
+        BatchNorm1D::from_params(1, &[1.0], &[0.0], &[0.0], &[1.0], f32::NAN).err(),
+        Some(NamErrorCode::NamJsonWeightNotFinite)
+    );
+    assert_eq!(
+        BatchNorm1D::from_params(1, &[f32::INFINITY], &[0.0], &[0.0], &[1.0], 1e-5).err(),
+        Some(NamErrorCode::NamJsonWeightNotFinite)
+    );
+
+    assert_eq!(
+        BatchNorm1D::from_fused(2, &[1.0], &[0.0, 0.0]).err(),
+        Some(NamErrorCode::WeightCountMismatch)
+    );
+    assert_eq!(
+        BatchNorm1D::from_fused(2, &[1.0, 1.0], &[0.0]).err(),
+        Some(NamErrorCode::WeightCountMismatch)
+    );
+    assert_eq!(
+        BatchNorm1D::from_fused(1, &[f32::NAN], &[0.0]).err(),
+        Some(NamErrorCode::NamJsonWeightNotFinite)
+    );
+    assert_eq!(
+        BatchNorm1D::from_fused(1, &[1.0], &[f32::NEG_INFINITY]).err(),
+        Some(NamErrorCode::NamJsonWeightNotFinite)
+    );
 }
 
 #[test]

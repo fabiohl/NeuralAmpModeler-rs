@@ -87,9 +87,15 @@ macro_rules! define_lstm_process_impl {
     ) => {
         $(#[$target_meta])+
         pub(crate) unsafe fn $fn_name(&mut self, input: &[f32]) {
+            assert!(
+                input.len() >= I,
+                "LstmLayer::process_sample: input slice too short ({} < {})",
+                input.len(),
+                I
+            );
             // SAFETY: this `unsafe fn` is `#[target_feature]`-annotated via
             // `$target_meta`; callers guarantee the SIMD features and
-            // `input.len() >= I`. `state[..I]`/`input[..I]` obey that contract;
+            // `input.len() >= I` (also enforced by the assert above). `state[..I]`/`input[..I]` obey that contract;
             // the loop guard `i + $step <= H` keeps every `$load`/`$store`
             // offset in-bounds (the tail stages `H - i` lanes in `$step`-lane
             // stack buffers first); `$gemv_4gate`/`$fused_gates` share the same

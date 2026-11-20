@@ -16,8 +16,7 @@ use neural_amp_modeler_rs::math::common::AlignedVec;
 use neural_amp_modeler_rs::models::NamModel;
 use neural_amp_modeler_rs::models::a2::activations::ActivationType;
 use neural_amp_modeler_rs::models::wavenet::{
-    Conv1d, DenseLayer, WAVENET_MAX_NUM_FRAMES, WaveNetLayer, WaveNetLayerArray, WaveNetLayerState,
-    WaveNetModel,
+    Conv1d, DenseLayer, WaveNetLayer, WaveNetLayerArray, WaveNetLayerState, WaveNetModel,
 };
 
 use super::common;
@@ -43,34 +42,31 @@ fn build_large_rf_wavenet() -> WaveNetModel<4, 3, 2> {
             outer,
             k,
         );
-        WaveNetLayer {
-            conv1d: Conv1d {
+        WaveNetLayer::new(
+            Conv1d {
                 weights,
                 bias: AlignedVec::from_vec(vec![0.0; 4])
                     .expect("allocation should succeed for test-sized buffers"),
                 do_bias: false,
                 dilation,
             },
-            input_mixin: DenseLayer {
+            DenseLayer {
                 weights: AlignedVec::from_vec(vec![0.01f32; 4])
                     .expect("allocation should succeed for test-sized buffers"),
                 bias: AlignedVec::from_vec(vec![0.0; 4])
                     .expect("allocation should succeed for test-sized buffers"),
                 do_bias: false,
             },
-            one_by_one: DenseLayer {
+            DenseLayer {
                 weights: AlignedVec::from_vec(vec![0.01f32; 4 * 4])
                     .expect("allocation should succeed for test-sized buffers"),
                 bias: AlignedVec::from_vec(vec![0.0; 4])
                     .expect("allocation should succeed for test-sized buffers"),
                 do_bias: false,
             },
-            activation: ActivationType::Tanh,
-            scratch_mixin: AlignedVec::new(4 * WAVENET_MAX_NUM_FRAMES, 0.0f32)
-                .expect("scratch alloc"),
-            scratch_conv: AlignedVec::new(4 * WAVENET_MAX_NUM_FRAMES, 0.0f32)
-                .expect("scratch alloc"),
-        }
+            ActivationType::Tanh,
+        )
+        .expect("large_rf array1 layer")
     };
 
     let make_layer_a2 = |dilation: usize| -> WaveNetLayer<1, 2, 3> {
@@ -88,34 +84,31 @@ fn build_large_rf_wavenet() -> WaveNetModel<4, 3, 2> {
             outer,
             k,
         );
-        WaveNetLayer {
-            conv1d: Conv1d {
+        WaveNetLayer::new(
+            Conv1d {
                 weights,
                 bias: AlignedVec::from_vec(vec![0.0; 2])
                     .expect("allocation should succeed for test-sized buffers"),
                 do_bias: false,
                 dilation,
             },
-            input_mixin: DenseLayer {
+            DenseLayer {
                 weights: AlignedVec::from_vec(vec![0.01f32; 2])
                     .expect("allocation should succeed for test-sized buffers"),
                 bias: AlignedVec::from_vec(vec![0.0; 2])
                     .expect("allocation should succeed for test-sized buffers"),
                 do_bias: false,
             },
-            one_by_one: DenseLayer {
+            DenseLayer {
                 weights: AlignedVec::from_vec(vec![0.01f32; 2 * 2])
                     .expect("allocation should succeed for test-sized buffers"),
                 bias: AlignedVec::from_vec(vec![0.0; 2])
                     .expect("allocation should succeed for test-sized buffers"),
                 do_bias: false,
             },
-            activation: ActivationType::Tanh,
-            scratch_mixin: AlignedVec::new(2 * WAVENET_MAX_NUM_FRAMES, 0.0f32)
-                .expect("scratch alloc"),
-            scratch_conv: AlignedVec::new(2 * WAVENET_MAX_NUM_FRAMES, 0.0f32)
-                .expect("scratch alloc"),
-        }
+            ActivationType::Tanh,
+        )
+        .expect("large_rf array2 layer")
     };
 
     // 10 dilations: [1, 2, 4, 8, 16, 32, 64, 128, 256, 512]
@@ -132,35 +125,26 @@ fn build_large_rf_wavenet() -> WaveNetModel<4, 3, 2> {
         .map(|i| WaveNetLayerState::new(4, rf1, i).expect("Failed to create WaveNetLayerState"))
         .collect();
 
-    let array1 = WaveNetLayerArray::<1, 1, 4, 3, 2> {
-        layers: layers_1,
-        states: states_1,
-        rechannel: DenseLayer {
+    let array1 = WaveNetLayerArray::<1, 1, 4, 3, 2>::from_parts(
+        layers_1,
+        states_1,
+        DenseLayer {
             weights: AlignedVec::from_vec(vec![0.01f32; 4])
                 .expect("allocation should succeed for test-sized buffers"),
             bias: AlignedVec::from_vec(vec![0.0; 4])
                 .expect("allocation should succeed for test-sized buffers"),
             do_bias: false,
         },
-        head_rechannel: DenseLayer {
+        DenseLayer {
             weights: AlignedVec::from_vec(vec![0.01f32; 2 * 4])
                 .expect("allocation should succeed for test-sized buffers"),
             bias: AlignedVec::from_vec(vec![0.0; 2])
                 .expect("allocation should succeed for test-sized buffers"),
             do_bias: false,
         },
-        array_outputs: AlignedVec::from_vec(vec![0.0; 4 * WAVENET_MAX_NUM_FRAMES])
-            .expect("allocation should succeed for test-sized buffers"),
-        head_accum: AlignedVec::from_vec(vec![0.0; 4 * WAVENET_MAX_NUM_FRAMES])
-            .expect("allocation should succeed for test-sized buffers"),
-        head_outputs: AlignedVec::from_vec(vec![0.0; 2 * WAVENET_MAX_NUM_FRAMES])
-            .expect("allocation should succeed for test-sized buffers"),
-        receptive_field_size: rf1,
-        block_size: 4,
-        block_buffer: AlignedVec::from_vec(vec![0.0; 4 * WAVENET_MAX_NUM_FRAMES])
-            .expect("allocation should succeed for test-sized buffers"),
-        effective_layers: dilations_1.len(),
-    };
+        rf1,
+    )
+    .expect("large_rf array1");
 
     let layers_2: Vec<WaveNetLayer<1, 2, 3>> =
         dilations_2.iter().map(|&d| make_layer_a2(d)).collect();
@@ -168,44 +152,28 @@ fn build_large_rf_wavenet() -> WaveNetModel<4, 3, 2> {
         .map(|i| WaveNetLayerState::new(2, rf2, i).expect("Failed to create WaveNetLayerState"))
         .collect();
 
-    let array2 = WaveNetLayerArray::<4, 1, 2, 3, 1> {
-        layers: layers_2,
-        states: states_2,
-        rechannel: DenseLayer {
+    let array2 = WaveNetLayerArray::<4, 1, 2, 3, 1>::from_parts(
+        layers_2,
+        states_2,
+        DenseLayer {
             weights: AlignedVec::from_vec(vec![0.01f32; 4 * 2])
                 .expect("allocation should succeed for test-sized buffers"),
             bias: AlignedVec::from_vec(vec![0.0; 2])
                 .expect("allocation should succeed for test-sized buffers"),
             do_bias: false,
         },
-        head_rechannel: DenseLayer {
+        DenseLayer {
             weights: AlignedVec::from_vec(vec![0.01f32; 2])
                 .expect("allocation should succeed for test-sized buffers"),
             bias: AlignedVec::from_vec(vec![0.0; 1])
                 .expect("allocation should succeed for test-sized buffers"),
             do_bias: true,
         },
-        array_outputs: AlignedVec::from_vec(vec![0.0; 2 * WAVENET_MAX_NUM_FRAMES])
-            .expect("allocation should succeed for test-sized buffers"),
-        head_accum: AlignedVec::from_vec(vec![0.0; 2 * WAVENET_MAX_NUM_FRAMES])
-            .expect("allocation should succeed for test-sized buffers"),
-        head_outputs: AlignedVec::from_vec(vec![0.0; WAVENET_MAX_NUM_FRAMES])
-            .expect("allocation should succeed for test-sized buffers"),
-        receptive_field_size: rf2,
-        block_size: 2,
-        block_buffer: AlignedVec::from_vec(vec![0.0; 2 * WAVENET_MAX_NUM_FRAMES])
-            .expect("allocation should succeed for test-sized buffers"),
-        effective_layers: dilations_2.len(),
-    };
+        rf2,
+    )
+    .expect("large_rf array2");
 
-    WaveNetModel {
-        array1,
-        array2,
-        head_scale: 0.02,
-        receptive_field_size: rf1.max(rf2),
-        prewarm_on_reset: true,
-        prewarm_pending: false,
-    }
+    WaveNetModel::from_parts(array1, array2, 0.02, rf1.max(rf2)).expect("large_rf wavenet")
 }
 
 // =============================================================================
@@ -221,21 +189,21 @@ fn test_prewarm_large_rf_no_undeflow() {
     model.prewarm();
 
     // Verify no NaN/Inf in internal buffers after prewarm.
-    for state in &model.array1.states {
+    for state in model.array1().states() {
         for &v in state.layer_buffer.iter() {
             assert!(
                 v.is_finite(),
                 "NaN/Inf in array1 after prewarm (RF={})",
-                model.receptive_field_size
+                model.receptive_field_size()
             );
         }
     }
-    for state in &model.array2.states {
+    for state in model.array2().states() {
         for &v in state.layer_buffer.iter() {
             assert!(
                 v.is_finite(),
                 "NaN/Inf in array2 after prewarm (RF={})",
-                model.receptive_field_size
+                model.receptive_field_size()
             );
         }
     }
@@ -334,14 +302,14 @@ fn test_prewarm_large_rf_multiblock() {
     }
 }
 
-/// RF=0 edge case: model with no dilation layers (RF=0) — prewarm should be a no-op.
+/// RF=0 edge case: model with pointwise kernel (`K=1`, RF=0) — prewarm should be a no-op.
 #[test]
 fn test_prewarm_zero_rf() {
-    let make_layer = |dilation: usize| -> WaveNetLayer<1, 1, 3> {
-        let raw_weights = vec![0.01f32; 3];
+    let make_layer = |dilation: usize| -> WaveNetLayer<1, 1, 1> {
+        let raw_weights = vec![0.01f32; 1];
         let inner = 1usize;
         let outer = 1usize;
-        let k = 3;
+        let k = 1;
         let padded_total = outer.div_ceil(4) * 4 * inner * k;
         let mut weights = AlignedVec::new(padded_total, 0.0f32)
             .expect("allocation should succeed for test-sized buffers");
@@ -352,113 +320,88 @@ fn test_prewarm_zero_rf() {
             outer,
             k,
         );
-        WaveNetLayer {
-            conv1d: Conv1d {
+        WaveNetLayer::new(
+            Conv1d {
                 weights,
                 bias: AlignedVec::from_vec(vec![0.0; 1])
                     .expect("allocation should succeed for test-sized buffers"),
                 do_bias: false,
                 dilation,
             },
-            input_mixin: DenseLayer {
+            DenseLayer {
                 weights: AlignedVec::from_vec(vec![0.0f32; 1])
                     .expect("allocation should succeed for test-sized buffers"),
                 bias: AlignedVec::from_vec(vec![0.0; 1])
                     .expect("allocation should succeed for test-sized buffers"),
                 do_bias: false,
             },
-            one_by_one: DenseLayer {
+            DenseLayer {
                 weights: AlignedVec::from_vec(vec![0.0f32; 1])
                     .expect("allocation should succeed for test-sized buffers"),
                 bias: AlignedVec::from_vec(vec![0.0; 1])
                     .expect("allocation should succeed for test-sized buffers"),
                 do_bias: false,
             },
-            activation: ActivationType::Tanh,
-            scratch_mixin: AlignedVec::new(WAVENET_MAX_NUM_FRAMES, 0.0f32).expect("scratch alloc"),
-            scratch_conv: AlignedVec::new(WAVENET_MAX_NUM_FRAMES, 0.0f32).expect("scratch alloc"),
-        }
+            ActivationType::Tanh,
+        )
+        .expect("zero_rf layer")
     };
 
     let rf = 0;
-    let layers1: Vec<WaveNetLayer<1, 1, 3>> = vec![make_layer(1)];
+    let layers1: Vec<WaveNetLayer<1, 1, 1>> = vec![make_layer(1)];
     let states1: Vec<WaveNetLayerState> = (0..layers1.len())
         .map(|i| WaveNetLayerState::new(1, rf, i).expect("Failed to create WaveNetLayerState"))
         .collect();
 
-    let array1 = WaveNetLayerArray::<1, 1, 1, 3, 1> {
-        layers: layers1,
-        states: states1,
-        rechannel: DenseLayer {
+    let array1 = WaveNetLayerArray::<1, 1, 1, 1, 1>::from_parts(
+        layers1,
+        states1,
+        DenseLayer {
             weights: AlignedVec::from_vec(vec![0.0f32; 1])
                 .expect("allocation should succeed for test-sized buffers"),
             bias: AlignedVec::from_vec(vec![0.0; 1])
                 .expect("allocation should succeed for test-sized buffers"),
             do_bias: false,
         },
-        head_rechannel: DenseLayer {
+        DenseLayer {
             weights: AlignedVec::from_vec(vec![0.0f32; 1])
                 .expect("allocation should succeed for test-sized buffers"),
             bias: AlignedVec::from_vec(vec![0.0; 1])
                 .expect("allocation should succeed for test-sized buffers"),
             do_bias: false,
         },
-        array_outputs: AlignedVec::from_vec(vec![0.0; WAVENET_MAX_NUM_FRAMES])
-            .expect("allocation should succeed for test-sized buffers"),
-        head_accum: AlignedVec::from_vec(vec![0.0; WAVENET_MAX_NUM_FRAMES])
-            .expect("allocation should succeed for test-sized buffers"),
-        head_outputs: AlignedVec::from_vec(vec![0.0; WAVENET_MAX_NUM_FRAMES])
-            .expect("allocation should succeed for test-sized buffers"),
-        receptive_field_size: rf,
-        block_size: 1,
-        block_buffer: AlignedVec::from_vec(vec![0.0; WAVENET_MAX_NUM_FRAMES])
-            .expect("allocation should succeed for test-sized buffers"),
-        effective_layers: 1,
-    };
+        rf,
+    )
+    .expect("zero_rf array1");
 
-    let layers2: Vec<WaveNetLayer<1, 1, 3>> = vec![make_layer(1)];
+    let layers2: Vec<WaveNetLayer<1, 1, 1>> = vec![make_layer(1)];
     let states2: Vec<WaveNetLayerState> = (0..layers2.len())
         .map(|i| WaveNetLayerState::new(1, rf, i).expect("Failed to create WaveNetLayerState"))
         .collect();
 
-    let array2 = WaveNetLayerArray::<1, 1, 1, 3, 1> {
-        layers: layers2,
-        states: states2,
-        rechannel: DenseLayer {
+    let array2 = WaveNetLayerArray::<1, 1, 1, 1, 1>::from_parts(
+        layers2,
+        states2,
+        DenseLayer {
             weights: AlignedVec::from_vec(vec![0.0f32; 1])
                 .expect("allocation should succeed for test-sized buffers"),
             bias: AlignedVec::from_vec(vec![0.0; 1])
                 .expect("allocation should succeed for test-sized buffers"),
             do_bias: false,
         },
-        head_rechannel: DenseLayer {
+        DenseLayer {
             weights: AlignedVec::from_vec(vec![0.0f32; 1])
                 .expect("allocation should succeed for test-sized buffers"),
             bias: AlignedVec::from_vec(vec![0.0; 1])
                 .expect("allocation should succeed for test-sized buffers"),
             do_bias: false,
         },
-        array_outputs: AlignedVec::from_vec(vec![0.0; WAVENET_MAX_NUM_FRAMES])
-            .expect("allocation should succeed for test-sized buffers"),
-        head_accum: AlignedVec::from_vec(vec![0.0; WAVENET_MAX_NUM_FRAMES])
-            .expect("allocation should succeed for test-sized buffers"),
-        head_outputs: AlignedVec::from_vec(vec![0.0; WAVENET_MAX_NUM_FRAMES])
-            .expect("allocation should succeed for test-sized buffers"),
-        receptive_field_size: rf,
-        block_size: 1,
-        block_buffer: AlignedVec::from_vec(vec![0.0; WAVENET_MAX_NUM_FRAMES])
-            .expect("allocation should succeed for test-sized buffers"),
-        effective_layers: 1,
-    };
+        rf,
+    )
+    .expect("zero_rf array2");
 
-    let mut model = WaveNetModel::<1, 3, 1> {
-        array1,
-        array2,
-        head_scale: 0.02,
-        receptive_field_size: rf,
-        prewarm_on_reset: true,
-        prewarm_pending: false,
-    };
+    let mut model =
+        WaveNetModel::<1, 1, 1>::from_parts(array1, array2, 0.02, rf).expect("zero_rf wavenet");
 
     model.prewarm();
 
@@ -485,21 +428,21 @@ fn test_prewarm_k5_large_rf_no_undeflow() {
 
     model.prewarm();
 
-    for state in &model.array1.states {
+    for state in model.array1().states() {
         for &v in state.layer_buffer.iter() {
             assert!(
                 v.is_finite(),
                 "NaN/Inf in array1 after K=5 prewarm (RF={})",
-                model.receptive_field_size
+                model.receptive_field_size()
             );
         }
     }
-    for state in &model.array2.states {
+    for state in model.array2().states() {
         for &v in state.layer_buffer.iter() {
             assert!(
                 v.is_finite(),
                 "NaN/Inf in array2 after K=5 prewarm (RF={})",
-                model.receptive_field_size
+                model.receptive_field_size()
             );
         }
     }
@@ -628,7 +571,7 @@ fn test_a2_full_prewarm_no_undeflow() {
 
     let rf = a2_rf();
     // Verify no NaN/Inf in internal buffers after prewarm.
-    for buf in &model.layer_buffers {
+    for buf in model.layer_buffers() {
         let len = buf.size();
         for &v in buf[..len].iter() {
             assert!(
@@ -638,7 +581,7 @@ fn test_a2_full_prewarm_no_undeflow() {
             );
         }
     }
-    for &v in model.head_accum.iter() {
+    for &v in model.head_accum().iter() {
         assert!(
             v.is_finite(),
             "NaN/Inf in A2-Full head_accum after prewarm (RF={})",
@@ -654,7 +597,7 @@ fn test_a2_lite_prewarm_no_undeflow() {
     model.prewarm();
 
     let rf = a2_rf();
-    for buf in &model.layer_buffers {
+    for buf in model.layer_buffers() {
         let len = buf.size();
         for &v in buf[..len].iter() {
             assert!(
@@ -664,7 +607,7 @@ fn test_a2_lite_prewarm_no_undeflow() {
             );
         }
     }
-    for &v in model.head_accum.iter() {
+    for &v in model.head_accum().iter() {
         assert!(
             v.is_finite(),
             "NaN/Inf in A2-Lite head_accum after prewarm (RF={})",
@@ -882,13 +825,14 @@ fn test_a2_full_receptive_field_canonical() {
     let model = build_synth_a2::<8>(0.01);
     let expected_rf = a2_rf();
     assert_eq!(
-        model.receptive_field_size, expected_rf,
+        model.receptive_field_size(),
+        expected_rf,
         "A2-Full receptive field mismatch"
     );
     assert!(
-        model.receptive_field_size > 6000,
+        model.receptive_field_size() > 6000,
         "A2-Full RF too small: {}",
-        model.receptive_field_size
+        model.receptive_field_size()
     );
 }
 
@@ -898,12 +842,13 @@ fn test_a2_lite_receptive_field_canonical() {
     let model = build_synth_a2::<3>(0.01);
     let expected_rf = a2_rf();
     assert_eq!(
-        model.receptive_field_size, expected_rf,
+        model.receptive_field_size(),
+        expected_rf,
         "A2-Lite receptive field mismatch"
     );
     assert!(
-        model.receptive_field_size > 6000,
+        model.receptive_field_size() > 6000,
         "A2-Lite RF too small: {}",
-        model.receptive_field_size
+        model.receptive_field_size()
     );
 }

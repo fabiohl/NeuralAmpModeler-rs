@@ -255,6 +255,10 @@ pub fn set_cpu_affinity_with<C: ThreadConfigurator>(
             .store(target_cpu as i32, Ordering::Relaxed);
         return Err(ret);
     }
+    rt_status
+        .rt_target_cpu
+        .store(target_cpu as i32, Ordering::Relaxed);
+    rt_status.rt_affinity_err.store(0, Ordering::Relaxed);
     Ok(())
 }
 

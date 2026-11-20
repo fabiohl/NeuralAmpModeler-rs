@@ -533,3 +533,51 @@ fn test_a2_layer_zero_weights_deterministic() {
     assert!((layer_in[1] - 3.5).abs() < 1e-5);
     assert!((layer_in[2] - 3.5).abs() < 1e-5);
 }
+
+#[test]
+fn test_a2_layer_new_dyn_populates_conv_ch_for_standard_ch3_and_ch8() {
+    for &ch in &[3usize, 8usize] {
+        for &kernel in &[6usize, 15usize] {
+            let (conv_w, conv_bias) = make_conv_weights(ch, kernel, 42 + ch as u32);
+            let conv = A2Conv1d::new(conv_w, conv_bias, true, 7, ch, ch, kernel);
+            let layer = A2Layer::new_dyn(
+                conv,
+                make_f32_vec(ch, 10),
+                make_f32_vec(ch * ch, 20),
+                make_f32_vec(ch, 30),
+                ch,
+                ch,
+                1,
+            );
+            assert!(
+                layer.conv_ch().is_some(),
+                "expected conv_ch populated for ch={ch}, kernel={kernel}"
+            );
+        }
+    }
+
+    // Gated / bottleneck != channels or cond_size > 1 must leave conv_ch as None.
+    let (conv_w_gated, conv_b_gated) = make_conv_weights(8, 6, 99);
+    let conv_gated = A2Conv1d::new(conv_w_gated, conv_b_gated, true, 1, 8, 8, 6);
+    let layer_bn = A2Layer::new_dyn(
+        conv_gated.clone(),
+        make_f32_vec(8, 10),
+        make_f32_vec(32, 20),
+        make_f32_vec(8, 30),
+        8,
+        4,
+        1,
+    );
+    assert!(layer_bn.conv_ch().is_none());
+
+    let layer_cond2 = A2Layer::new_dyn(
+        conv_gated,
+        make_f32_vec(16, 10),
+        make_f32_vec(64, 20),
+        make_f32_vec(8, 30),
+        8,
+        8,
+        2,
+    );
+    assert!(layer_cond2.conv_ch().is_none());
+}

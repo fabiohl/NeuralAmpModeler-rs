@@ -10,6 +10,27 @@ use crate::math::common::SimdMath;
 
 use super::input::DENORMAL_DITHER_OFFSET;
 
+#[inline(always)]
+fn clamp_output_len(
+    resamp_out_l: &[f32],
+    resamp_out_r: &[f32],
+    n_pw: usize,
+    process_mono: bool,
+    rt_status: &RtStatusFlags,
+) -> usize {
+    let max_len = if process_mono {
+        resamp_out_l.len()
+    } else {
+        resamp_out_l.len().min(resamp_out_r.len())
+    };
+    if crate::common::unlikely(n_pw > max_len) {
+        rt_status.set_flag(crate::common::spsc::RT_STATUS_HOST_CONTRACT_VIOLATION);
+        max_len
+    } else {
+        n_pw
+    }
+}
+
 /// Stage 3 with opt-in non-finite output sanitization.
 ///
 /// Applies output gain, gate fading, clipping detection, and additionally sanitizes
@@ -31,6 +52,7 @@ pub fn apply_output_stage_sanitized(
     adaptive: &mut AdaptiveCompute,
     sample_rate: u32,
 ) {
+    let n_pw = clamp_output_len(resamp_out_l, resamp_out_r, n_pw, process_mono, rt_status);
     apply_output_stage(
         resamp_out_l,
         resamp_out_r,
@@ -156,6 +178,7 @@ pub(crate) unsafe fn apply_output_stage_inner<M: SimdMath>(
     adaptive: &mut AdaptiveCompute,
     sample_rate: u32,
 ) {
+    let n_pw = clamp_output_len(resamp_out_l, resamp_out_r, n_pw, process_mono, rt_status);
     // 1. FINAL VOLUME ADJUSTMENT, CLIPPING PROTECTION, NOISE GATE, AND DENORMAL DITHER COMPENSATION
     // Fused into a single SIMD pass per channel to eliminate separate dither subtraction memory passes.
     if silence_hysteresis.is_steady() {
@@ -282,5 +305,60 @@ mod tests {
         assert_eq!(out_l[3], 0.0);
         assert!(out_r[7].is_finite());
         assert_eq!(out_r[7], 0.0);
+    }
+
+    #[test]
+    fn output_stage_clamps_oversized_n_pw_mono_and_stereo() {
+        use crate::common::spsc::RT_STATUS_HOST_CONTRACT_VIOLATION;
+
+        // Stereo case: n_pw=1024 over 256-sample buffers
+        let mut out_l = vec![0.25f32 + DENORMAL_DITHER_OFFSET; 256];
+        let mut out_r = vec![-0.125f32 + DENORMAL_DITHER_OFFSET; 256];
+        let mut hysteresis = DynamicHysteresis::new();
+        let rt_status = RtStatusFlags::default();
+        let mut adaptive = AdaptiveCompute::new(crate::common::params::AdaptiveComputeMode::Off);
+
+        apply_output_stage(
+            &mut out_l,
+            &mut out_r,
+            1024,
+            2.0,
+            &mut hysteresis,
+            &rt_status,
+            false,
+            &mut adaptive,
+            48_000,
+        );
+        assert!(rt_status.check_flag(RT_STATUS_HOST_CONTRACT_VIOLATION));
+        for &s in &out_l {
+            assert!((s - 0.5).abs() < 1e-6);
+        }
+        for &s in &out_r {
+            assert!((s + 0.25).abs() < 1e-6);
+        }
+
+        // Mono case with empty R slice and sanitized entry
+        let mut out_mono_l = vec![0.25f32 + DENORMAL_DITHER_OFFSET; 256];
+        out_mono_l[17] = f32::NAN;
+        let mut empty_r: [f32; 0] = [];
+        let rt_status_mono = RtStatusFlags::default();
+        apply_output_stage_sanitized(
+            &mut out_mono_l,
+            &mut empty_r,
+            1024,
+            2.0,
+            &mut hysteresis,
+            &rt_status_mono,
+            true,
+            &mut adaptive,
+            48_000,
+        );
+        assert!(rt_status_mono.check_flag(RT_STATUS_HOST_CONTRACT_VIOLATION));
+        assert_eq!(out_mono_l[17], 0.0);
+        for (idx, &s) in out_mono_l.iter().enumerate() {
+            if idx != 17 {
+                assert!((s - 0.5).abs() < 1e-6);
+            }
+        }
     }
 }

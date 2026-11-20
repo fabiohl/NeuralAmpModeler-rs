@@ -28,11 +28,53 @@ use crate::math::common::{AlignedVec, SimdMath};
 #[repr(align(64))]
 pub struct BatchNorm1D {
     /// Number of channels.
-    pub num_channels: usize,
+    pub(crate) num_channels: usize,
     /// Fused multiplicative factor per channel.
-    pub scale: AlignedVec<f32>,
+    pub(crate) scale: AlignedVec<f32>,
     /// Fused additive factor per channel.
-    pub offset: AlignedVec<f32>,
+    pub(crate) offset: AlignedVec<f32>,
+}
+
+/// Validates raw training parameters for `BatchNorm1D` before affine fusion.
+///
+/// Rejects slice length mismatches (`WeightCountMismatch`), non-finite inputs
+/// (`NamJsonWeightNotFinite`), and negative `eps`, negative `running_var`, or
+/// non-positive `running_var + eps` (`ModelBuildFailed`).
+pub(crate) fn validate_raw_batchnorm_params(
+    num_channels: usize,
+    gamma: &[f32],
+    beta: &[f32],
+    running_mean: &[f32],
+    running_var: &[f32],
+    eps: f32,
+) -> Result<(), NamErrorCode> {
+    if gamma.len() != num_channels
+        || beta.len() != num_channels
+        || running_mean.len() != num_channels
+        || running_var.len() != num_channels
+    {
+        return Err(NamErrorCode::WeightCountMismatch);
+    }
+    if !eps.is_finite() {
+        return Err(NamErrorCode::NamJsonWeightNotFinite);
+    }
+    if eps < 0.0 {
+        return Err(NamErrorCode::ModelBuildFailed);
+    }
+    for c in 0..num_channels {
+        let g = gamma[c];
+        let b = beta[c];
+        let mean = running_mean[c];
+        let var = running_var[c];
+        if !g.is_finite() || !b.is_finite() || !mean.is_finite() || !var.is_finite() {
+            return Err(NamErrorCode::NamJsonWeightNotFinite);
+        }
+        let denom = var + eps;
+        if var < 0.0 || !denom.is_finite() || denom <= 0.0 {
+            return Err(NamErrorCode::ModelBuildFailed);
+        }
+    }
+    Ok(())
 }
 
 impl BatchNorm1D {
@@ -46,8 +88,12 @@ impl BatchNorm1D {
     /// - `running_var`: EMA of activation variances (length `num_channels`).
     /// - `eps`: small constant for numerical stability (e.g. 1e-5).
     ///
-    /// # Panics
-    /// Panics if any variance is negative.
+    /// # Errors
+    /// Returns [`NamErrorCode::WeightCountMismatch`] on slice length mismatch,
+    /// [`NamErrorCode::NamJsonWeightNotFinite`] on non-finite parameters,
+    /// [`NamErrorCode::ModelBuildFailed`] if `eps < 0.0`, `running_var[c] < 0.0`,
+    /// `(running_var[c] + eps) <= 0.0`, or any fused coefficient is non-finite,
+    /// and [`NamErrorCode::OutOfMemory`] if allocation fails.
     pub fn from_params(
         num_channels: usize,
         gamma: &[f32],
@@ -56,20 +102,18 @@ impl BatchNorm1D {
         running_var: &[f32],
         eps: f32,
     ) -> Result<Self, NamErrorCode> {
-        assert_eq!(gamma.len(), num_channels);
-        assert_eq!(beta.len(), num_channels);
-        assert_eq!(running_mean.len(), num_channels);
-        assert_eq!(running_var.len(), num_channels);
+        validate_raw_batchnorm_params(num_channels, gamma, beta, running_mean, running_var, eps)?;
 
         let mut scale = AlignedVec::new(num_channels, 0.0f32)?;
         let mut offset = AlignedVec::new(num_channels, 0.0f32)?;
 
         for c in 0..num_channels {
-            let var = running_var[c];
-            assert!(var >= 0.0, "running_var[{c}] = {var} is negative");
-            let inv_std = 1.0 / (var + eps).sqrt();
+            let inv_std = 1.0 / (running_var[c] + eps).sqrt();
             scale[c] = gamma[c] * inv_std;
             offset[c] = beta[c] - running_mean[c] * scale[c];
+            if !scale[c].is_finite() || !offset[c].is_finite() {
+                return Err(NamErrorCode::ModelBuildFailed);
+            }
         }
 
         Ok(Self {
@@ -83,13 +127,22 @@ impl BatchNorm1D {
     ///
     /// Useful when the fused scale/offset are provided directly by the
     /// model loader (e.g. from a `.namb` blob prepared by the training script).
+    ///
+    /// # Errors
+    /// Returns [`NamErrorCode::WeightCountMismatch`] on slice length mismatch,
+    /// [`NamErrorCode::NamJsonWeightNotFinite`] on non-finite values, and
+    /// [`NamErrorCode::OutOfMemory`] if allocation fails.
     pub fn from_fused(
         num_channels: usize,
         scale: &[f32],
         offset: &[f32],
     ) -> Result<Self, NamErrorCode> {
-        assert_eq!(scale.len(), num_channels);
-        assert_eq!(offset.len(), num_channels);
+        if scale.len() != num_channels || offset.len() != num_channels {
+            return Err(NamErrorCode::WeightCountMismatch);
+        }
+        if scale.iter().chain(offset.iter()).any(|v| !v.is_finite()) {
+            return Err(NamErrorCode::NamJsonWeightNotFinite);
+        }
 
         let mut s = AlignedVec::new(num_channels, 0.0f32)?;
         let mut o = AlignedVec::new(num_channels, 0.0f32)?;
@@ -103,18 +156,43 @@ impl BatchNorm1D {
         })
     }
 
+    /// Returns the number of channels.
+    #[inline(always)]
+    pub fn num_channels(&self) -> usize {
+        self.num_channels
+    }
+
+    /// Returns the per-channel fused multiplicative scale vector.
+    #[inline(always)]
+    pub fn scale(&self) -> &[f32] {
+        &self.scale
+    }
+
+    /// Returns the per-channel fused additive offset vector.
+    #[inline(always)]
+    pub fn offset(&self) -> &[f32] {
+        &self.offset
+    }
+
     /// Applies the batch normalization affine transform in-place, via SIMD dispatch.
     ///
     /// `data` layout: `[f0_c0, f0_c1, ..., f0_c{n_ch-1}, f1_c0, ...]`.
-    /// `data.len()` must be `num_frames * num_channels`.
+    /// `data.len()` must be at least `num_frames * num_channels`.
     ///
     /// # Safety
-    /// The caller must ensure `data.len() == num_frames * num_channels`.
-    /// # Safety
-    /// `data.len() == num_frames * self.num_channels`.
+    /// The caller must ensure `data.len() >= num_frames * num_channels` and that
+    /// the slice holds valid initialized frame data.
     #[inline(always)]
     pub unsafe fn process(&self, data: &mut [f32], num_frames: usize) {
-        debug_assert_eq!(data.len(), num_frames * self.num_channels);
+        let needed = num_frames
+            .checked_mul(self.num_channels)
+            .expect("BatchNorm1D::process frame*channel count overflow");
+        assert!(
+            data.len() >= needed,
+            "BatchNorm1D::process: data slice too short ({} < {})",
+            data.len(),
+            needed
+        );
         // SAFETY: caller guarantees `data.len()` matches the frame×channel
         // layout. The dispatch macro selects an ISA-specific `process_simd`
         // implementation whose safety contract is the same.
@@ -127,12 +205,20 @@ impl BatchNorm1D {
     /// dispatch with no dynamic ISA lookup.
     ///
     /// # Safety
-    /// `data.len() == num_frames * self.num_channels`.
+    /// `data.len() >= num_frames * self.num_channels`.
     #[inline(always)]
     pub unsafe fn process_simd<M: SimdMath>(&self, data: &mut [f32], num_frames: usize) {
-        debug_assert_eq!(data.len(), num_frames * self.num_channels);
+        let needed = num_frames
+            .checked_mul(self.num_channels)
+            .expect("BatchNorm1D::process_simd frame*channel count overflow");
+        assert!(
+            data.len() >= needed,
+            "BatchNorm1D::process_simd: data slice too short ({} < {})",
+            data.len(),
+            needed
+        );
         // SAFETY: caller guarantees the frame×channel layout invariant
-        // (data.len == num_frames * num_channels). scale and offset each
+        // (data.len >= num_frames * num_channels). scale and offset each
         // have `num_channels` elements, validated at construction time.
         // `M::batch_norm_process` uses these pre-validated buffers without
         // additional bounds checks.
@@ -150,9 +236,18 @@ impl BatchNorm1D {
     /// Scalar reference implementation — always available, used for testing parity.
     ///
     /// # Safety
-    /// `data.len()` must equal `num_frames * self.num_channels`.
+    /// `data.len()` must be at least `num_frames * self.num_channels`.
     #[inline(always)]
     pub unsafe fn process_scalar(&self, data: &mut [f32], num_frames: usize) {
+        let needed = num_frames
+            .checked_mul(self.num_channels)
+            .expect("BatchNorm1D::process_scalar frame*channel count overflow");
+        assert!(
+            data.len() >= needed,
+            "BatchNorm1D::process_scalar: data slice too short ({} < {})",
+            data.len(),
+            needed
+        );
         // SAFETY: caller guarantees the frame×channel layout invariant.
         // scale and offset each have `num_channels` elements (validated at
         // construction). `process_scalar_ref` iterates within these bounds.

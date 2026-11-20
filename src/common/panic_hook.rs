@@ -109,6 +109,9 @@ impl FmtWrite for LimitWriter<'_> {
 /// Maximum number of crash report files retained in `~/.cache/neural-amp-modeler-rs/`.
 const MAX_CRASH_FILES: usize = 10;
 
+/// Stack buffer size for zero-alloc crash report formatting (keeps hook frame well below 16 KiB).
+const PANIC_REPORT_BUF_SIZE: usize = 4096;
+
 /// Prunes old crash files from `~/.cache/neural-amp-modeler-rs/` if the total exceeds
 /// [`MAX_CRASH_FILES`]. Crash files are identified by the `crash-*.txt` pattern
 /// and sorted by modification time (oldest first, excluding `.tmp` files).
@@ -446,7 +449,7 @@ pub fn install_panic_hook(component: &'static str) {
             std::str::from_utf8(&location_buf[..len]).unwrap_or("<invalid utf-8>")
         };
 
-        let mut report_buf = [0u8; 16384];
+        let mut report_buf = [0u8; PANIC_REPORT_BUF_SIZE];
         let written = write_panic_report(
             &mut report_buf,
             component,

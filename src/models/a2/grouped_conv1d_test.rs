@@ -1572,3 +1572,70 @@ fn test_grouped_conv1d_bit_exact_vs_legacy_tree_depthwise_wide() {
     let expected = old_depthwise_tree(&conv, &layer_buffer, frame_idx, None);
     assert_bits_eq("depthwise ch=16", &actual, &expected);
 }
+
+#[test]
+fn new_rejects_zero_channels_and_invalid_dilation() {
+    let cases = [
+        ("in_ch=0", 0usize, 4usize, 1usize, 1usize),
+        ("out_ch=0", 4, 0, 1, 1),
+        ("dilation=0", 4, 4, 0, 2),
+        (
+            "dilation>MAX_DILATION",
+            4,
+            4,
+            crate::loader::nam_json::MAX_DILATION + 1,
+            2,
+        ),
+        ("dilation=usize::MAX", 4, 4, usize::MAX, 2),
+    ];
+
+    for (label, in_ch, out_ch, dilation, groups) in cases {
+        let res = A2GroupedConv1d::new(&[], &[], false, dilation, in_ch, out_ch, 3, groups);
+        assert_eq!(
+            res.err(),
+            Some(NamErrorCode::InvalidModelTopology),
+            "{label} must return Err(InvalidModelTopology)"
+        );
+    }
+}
+
+#[test]
+#[should_panic(expected = "layer_buffer len")]
+fn should_panic_process_single_frame_partial_last_row_grouped() {
+    let conv = build_conv(8, 4, 3, 2, 2, 11, true);
+    let frame_idx = 10;
+    // Partial row: strictly > frame_idx * in_ch, but < (frame_idx + 1) * in_ch.
+    let layer_buffer = vec![0.0f32; frame_idx * conv.in_ch + 1];
+    let mut out_frame = vec![0.0f32; conv.out_ch];
+    // SAFETY: deliberately partial `layer_buffer` to verify the release-mode
+    // `(frame_idx + 1) * in_ch` boundary check prevents OOB reads.
+    unsafe {
+        conv.process_single_frame(&layer_buffer, &mut out_frame, frame_idx, None);
+    }
+}
+
+#[test]
+#[should_panic(expected = "layer_buffer len")]
+fn should_panic_process_single_frame_partial_last_row_depthwise() {
+    let conv = build_conv(8, 8, 3, 2, 8, 12, true);
+    let frame_idx = 10;
+    let layer_buffer = vec![0.0f32; frame_idx * conv.in_ch + 1];
+    let mut out_frame = vec![0.0f32; conv.out_ch];
+    // SAFETY: deliberately partial `layer_buffer` to verify the release-mode
+    // `(frame_idx + 1) * in_ch` boundary check prevents OOB reads in depthwise.
+    unsafe {
+        conv.process_single_frame(&layer_buffer, &mut out_frame, frame_idx, None);
+    }
+}
+
+#[test]
+#[should_panic(expected = "frame_idx overflow")]
+fn should_panic_process_single_frame_idx_overflow() {
+    let conv = build_conv(8, 4, 3, 2, 2, 13, true);
+    let layer_buffer = vec![0.0f32; 64];
+    let mut out_frame = vec![0.0f32; conv.out_ch];
+    // SAFETY: deliberately passing `usize::MAX` to verify checked arithmetic.
+    unsafe {
+        conv.process_single_frame(&layer_buffer, &mut out_frame, usize::MAX, None);
+    }
+}

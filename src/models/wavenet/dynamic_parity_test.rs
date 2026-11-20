@@ -584,27 +584,36 @@ fn test_dynamic_wavenet_multi_condition_without_condition_dsp() {
 // ── Safe-boundary rejection (AI-16 / T-1.1) ──
 
 #[test]
-fn test_invalid_effective_layers_yields_defined_silence() {
+fn test_invalid_effective_layers_rejected_by_validate_state() {
     let mut model = build_dynamic_model(4, 3, 2);
     model.arrays[0].effective_layers = model.arrays[0].layers.len() + 1;
     assert!(!model.validate_state());
-
-    let input = [1.0f32; 32];
-    let mut output = [1.0f32; 32];
-    model.process(&input, &mut output);
-    assert!(output.iter().all(|&s| s == 0.0));
 }
 
 #[test]
-fn test_truncated_layer_weights_yield_defined_silence() {
+fn test_truncated_layer_weights_rejected_at_construction() {
     let mut model = build_dynamic_model(4, 3, 2);
     model.arrays[1].layers[0].conv1d.weights = AlignedVec::new(0, 0.0f32).unwrap();
     assert!(!model.validate_state());
-
-    let input = [1.0f32; 32];
-    let mut output = [1.0f32; 32];
-    model.process(&input, &mut output);
-    assert!(output.iter().all(|&s| s == 0.0));
+    let arrays = std::mem::take(&mut model.arrays);
+    let err = WaveNetModelDyn::from_parts(
+        model.ch,
+        model.k,
+        model.head,
+        arrays,
+        model.head_scale,
+        model.receptive_field_size,
+        None,
+        None,
+        false,
+        None,
+    )
+    .err()
+    .expect("from_parts must reject truncated layer weights");
+    assert_eq!(
+        err,
+        crate::common::diagnostics::NamErrorCode::InvalidModelTopology
+    );
 }
 
 #[test]
@@ -629,18 +638,28 @@ fn test_restore_buffer_starts_rejects_out_of_bounds_values() {
 }
 
 #[test]
-fn test_empty_arrays_yield_defined_silence() {
+fn test_empty_arrays_rejected_at_construction() {
     let mut model = build_dynamic_model(4, 3, 2);
     model.arrays.clear();
     assert!(!model.validate_state());
-
-    let input = [1.0f32; 32];
-    let mut output = [1.0f32; 32];
-    model.process(&input, &mut output);
-    assert!(output.iter().all(|&s| s == 0.0));
-
-    model.prewarm();
-    model.clear_state();
+    let err = WaveNetModelDyn::from_parts(
+        model.ch,
+        model.k,
+        model.head,
+        vec![],
+        model.head_scale,
+        model.receptive_field_size,
+        None,
+        None,
+        false,
+        None,
+    )
+    .err()
+    .expect("from_parts must reject empty arrays");
+    assert_eq!(
+        err,
+        crate::common::diagnostics::NamErrorCode::InvalidModelTopology
+    );
 }
 
 #[test]

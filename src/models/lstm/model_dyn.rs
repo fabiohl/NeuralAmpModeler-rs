@@ -22,28 +22,28 @@ use crate::math::common::AlignedVec;
 /// arm on the dynamic LSTM path.
 pub struct LstmModelDyn {
     /// Number of input channels (audio frames are interleaved with this stride).
-    pub in_channels: usize,
+    pub(crate) in_channels: usize,
     /// Number of output channels (audio frames are emitted with this stride).
-    pub out_channels: usize,
+    pub(crate) out_channels: usize,
     /// Dynamically-sized LSTM layers.
     ///
     /// Layer 0 has `input_size=in_channels`, subsequent layers have
     /// `input_size=hidden_size` (stacked recurrent input).
-    pub layers: Vec<LstmLayerDyn>,
+    pub(crate) layers: Vec<LstmLayerDyn>,
     /// Output head (linear projection) weights, shaped `[out_channels × hidden_size]`.
-    pub head_weights_f32: AlignedVec<f32>,
+    pub(crate) head_weights_f32: AlignedVec<f32>,
     /// Output head biases, shaped `[out_channels]`.
-    pub head_bias: AlignedVec<f32>,
+    pub(crate) head_bias: AlignedVec<f32>,
     /// Whether to execute prewarm during `reset()`. Default: `true`.
-    pub prewarm_on_reset: bool,
+    pub(crate) prewarm_on_reset: bool,
     /// Expected sample rate (Hz) for prewarm calculation. Default: `48000.0`.
-    pub expected_sample_rate: f64,
+    pub(crate) expected_sample_rate: f64,
     /// Zeroed-sample stabilization work still pending for the deferred split
     /// pass armed by [`Self::prewarm_reset`](super::NamModel::prewarm_reset).
     /// Always `0` for freshly built models; the integral
     /// [`Self::prewarm`](super::NamModel::prewarm) / [`Self::reset`](super::NamModel::reset)
     /// paths neither consult nor alter it.
-    pub prewarm_pending: usize,
+    pub(crate) prewarm_pending: usize,
 }
 
 use crate::loader::nam_json::validation::{
@@ -100,6 +100,70 @@ impl LstmModelDyn {
     /// Creates a new zero-initialized dynamic LSTM model with mono 1→1 I/O.
     pub fn new(num_layers: usize, hidden_size: usize) -> Result<Self, NamErrorCode> {
         Self::new_io(num_layers, hidden_size, 1, 1)
+    }
+
+    /// Returns the number of input channels.
+    #[inline(always)]
+    pub fn in_channels(&self) -> usize {
+        self.in_channels
+    }
+
+    /// Returns the number of output channels.
+    #[inline(always)]
+    pub fn out_channels(&self) -> usize {
+        self.out_channels
+    }
+
+    /// Returns the stacked LSTM layers.
+    #[inline(always)]
+    pub fn layers(&self) -> &[LstmLayerDyn] {
+        &self.layers
+    }
+
+    /// Returns the output head weights (`[out_channels × hidden_size]`).
+    #[inline(always)]
+    pub fn head_weights_f32(&self) -> &[f32] {
+        &self.head_weights_f32
+    }
+
+    /// Returns the output head biases (`[out_channels]`).
+    #[inline(always)]
+    pub fn head_bias(&self) -> &[f32] {
+        &self.head_bias
+    }
+
+    /// Returns whether prewarm runs during `reset()`.
+    #[inline(always)]
+    pub fn prewarm_on_reset(&self) -> bool {
+        self.prewarm_on_reset
+    }
+
+    /// Returns the expected sample rate (Hz) used for prewarm calculations.
+    #[inline(always)]
+    pub fn expected_sample_rate(&self) -> f64 {
+        self.expected_sample_rate
+    }
+
+    /// Returns the remaining deferred prewarm sample count.
+    #[inline(always)]
+    pub fn prewarm_pending(&self) -> usize {
+        self.prewarm_pending
+    }
+
+    /// Returns a mutable slice over the LSTM layers (whose structural dimensions remain sealed).
+    #[inline(always)]
+    pub fn layers_mut(&mut self) -> &mut [LstmLayerDyn] {
+        &mut self.layers
+    }
+
+    /// Replaces the head linear projection weights and biases after validating exact lengths.
+    pub fn set_head_weights(&mut self, weights: &[f32], bias: &[f32]) -> Result<(), NamErrorCode> {
+        if weights.len() != self.head_weights_f32.len() || bias.len() != self.head_bias.len() {
+            return Err(NamErrorCode::WeightCountMismatch);
+        }
+        self.head_weights_f32.copy_from_slice(weights);
+        self.head_bias.copy_from_slice(bias);
+        Ok(())
     }
 
     // =====================================================================

@@ -23,32 +23,36 @@ use neural_amp_modeler_rs::models::lstm::LstmModelDyn;
 ///
 /// Uses the same pattern as `fill_dyn_layer` in `src/models/lstm/tests.rs`.
 fn fill_model_dyn(model: &mut LstmModelDyn) {
-    let hidden_size = model.layers[0].hidden_size;
-    let num_layers = model.layers.len();
+    let hidden_size = model.layers()[0].hidden_size();
+    let num_layers = model.layers().len();
 
-    for (li, layer) in model.layers.iter_mut().enumerate() {
-        let h = layer.hidden_size;
-        let input_size = layer.input_size;
+    for (li, layer) in model.layers_mut().iter_mut().enumerate() {
+        let h = layer.hidden_size();
+        let input_size = layer.input_size();
         let ih = input_size + h;
 
-        for i in 0..(4 * h) {
-            layer.bias[i] = 0.1 * (1 + ((i + li * 4 * h) % 4)) as f32;
+        let mut bias = vec![0.0f32; 4 * h];
+        for (i, slot) in bias.iter_mut().enumerate() {
+            *slot = 0.1 * (1 + ((i + li * 4 * h) % 4)) as f32;
         }
+        let mut weights = vec![0.0f32; 4 * ih * h];
         for k in 0..4 {
             let w_start = k * ih * h;
             for j in 0..ih {
                 for hi in 0..h {
-                    layer.input_hidden_weights[w_start + j * h + hi] =
-                        0.01 * (j + hi + k + li + 1) as f32;
+                    weights[w_start + j * h + hi] = 0.01 * (j + hi + k + li + 1) as f32;
                 }
             }
         }
+        layer.set_weights(&weights, &bias).unwrap();
     }
 
-    for i in 0..hidden_size {
-        model.head_weights_f32[i] = 0.1 * (i + num_layers) as f32;
-    }
-    model.head_bias[0] = 0.25;
+    let head_w: Vec<f32> = (0..hidden_size)
+        .map(|i| 0.1 * (i + num_layers) as f32)
+        .collect();
+    let mut head_b = model.head_bias().to_vec();
+    head_b[0] = 0.25;
+    model.set_head_weights(&head_w, &head_b).unwrap();
 }
 
 /// Inner: runs the model on the provided input and asserts SIMD vs scalar parity.
@@ -58,23 +62,16 @@ fn assert_model_dyn_parity_inner(num_layers: usize, hidden_size: usize, zero_inp
 
     fill_model_dyn(&mut model_simd);
     for li in 0..num_layers {
-        model_scalar.layers[li]
-            .input_hidden_weights
-            .copy_from_slice(&model_simd.layers[li].input_hidden_weights);
-        model_scalar.layers[li]
-            .bias
-            .copy_from_slice(&model_simd.layers[li].bias);
-        model_scalar.layers[li]
-            .state
-            .copy_from_slice(&model_simd.layers[li].state);
-        model_scalar.layers[li]
-            .cell_state
-            .copy_from_slice(&model_simd.layers[li].cell_state);
+        let w = model_simd.layers()[li].input_hidden_weights().to_vec();
+        let b = model_simd.layers()[li].bias().to_vec();
+        let s = model_simd.layers()[li].state().to_vec();
+        let c = model_simd.layers()[li].cell_state().to_vec();
+        model_scalar.layers_mut()[li].set_weights(&w, &b).unwrap();
+        model_scalar.layers_mut()[li].set_states(&s, &c).unwrap();
     }
     model_scalar
-        .head_weights_f32
-        .copy_from_slice(&model_simd.head_weights_f32);
-    model_scalar.head_bias = model_simd.head_bias.clone();
+        .set_head_weights(model_simd.head_weights_f32(), model_simd.head_bias())
+        .unwrap();
 
     let n_samples = 64;
     let input: Vec<f32> = if zero_input {
@@ -184,23 +181,16 @@ fn test_model_dyn_determinism() {
     fill_model_dyn(&mut model_a);
     // Copy to model_b
     for li in 0..2 {
-        model_b.layers[li]
-            .input_hidden_weights
-            .copy_from_slice(&model_a.layers[li].input_hidden_weights);
-        model_b.layers[li]
-            .bias
-            .copy_from_slice(&model_a.layers[li].bias);
-        model_b.layers[li]
-            .state
-            .copy_from_slice(&model_a.layers[li].state);
-        model_b.layers[li]
-            .cell_state
-            .copy_from_slice(&model_a.layers[li].cell_state);
+        let w = model_a.layers()[li].input_hidden_weights().to_vec();
+        let b = model_a.layers()[li].bias().to_vec();
+        let s = model_a.layers()[li].state().to_vec();
+        let c = model_a.layers()[li].cell_state().to_vec();
+        model_b.layers_mut()[li].set_weights(&w, &b).unwrap();
+        model_b.layers_mut()[li].set_states(&s, &c).unwrap();
     }
     model_b
-        .head_weights_f32
-        .copy_from_slice(&model_a.head_weights_f32);
-    model_b.head_bias = model_a.head_bias.clone();
+        .set_head_weights(model_a.head_weights_f32(), model_a.head_bias())
+        .unwrap();
 
     let input: Vec<f32> = (0..64).map(|i| (i as f32 * 0.13).sin()).collect();
     let mut out_a = vec![0.0f32; 64];
@@ -267,30 +257,31 @@ fn test_model_dyn_reset_states() {
     model.process(&input, &mut out);
 
     // Artificially perturb
-    for layer in &mut model.layers {
-        layer.cell_state.iter_mut().for_each(|c| *c = 5.0);
-        layer.state.iter_mut().for_each(|s| *s = 5.0);
+    for layer in model.layers_mut() {
+        let state = vec![5.0f32; layer.state().len()];
+        let cell_state = vec![5.0f32; layer.cell_state().len()];
+        layer.set_states(&state, &cell_state).unwrap();
     }
 
     // Verify non-zero
-    assert_ne!(model.layers[0].cell_state[0], 0.0);
+    assert_ne!(model.layers()[0].cell_state()[0], 0.0);
 
     model.reset_states();
 
-    for (li, layer) in model.layers.iter().enumerate() {
-        for (j, &v) in layer.state.iter().enumerate() {
+    for (li, layer) in model.layers().iter().enumerate() {
+        for (j, &v) in layer.state().iter().enumerate() {
             assert_eq!(
                 v, 0.0,
                 "ModelDyn reset: layer[{li}] state[{j}] non-zero: {v}"
             );
         }
-        for (j, &v) in layer.cell_state.iter().enumerate() {
+        for (j, &v) in layer.cell_state().iter().enumerate() {
             assert_eq!(
                 v, 0.0,
                 "ModelDyn reset: layer[{li}] cell_state[{j}] non-zero: {v}"
             );
         }
-        for (j, &v) in layer.gates.iter().enumerate() {
+        for (j, &v) in layer.gates().iter().enumerate() {
             assert_eq!(
                 v, 0.0,
                 "ModelDyn reset: layer[{li}] gates[{j}] non-zero: {v}"
@@ -312,11 +303,15 @@ fn test_model_dyn_reset_input_slots() {
 
     // Capture hidden/cell state snapshot
     let saved_hidden: Vec<Vec<f32>> = model
-        .layers
+        .layers()
         .iter()
         .map(|l| l.get_hidden_state().to_vec())
         .collect();
-    let saved_cell: Vec<Vec<f32>> = model.layers.iter().map(|l| l.cell_state.to_vec()).collect();
+    let saved_cell: Vec<Vec<f32>> = model
+        .layers()
+        .iter()
+        .map(|l| l.cell_state().to_vec())
+        .collect();
 
     // Verify hidden is non-zero
     assert!(
@@ -326,13 +321,14 @@ fn test_model_dyn_reset_input_slots() {
 
     model.reset_input_slots();
 
-    for (li, layer) in model.layers.iter().enumerate() {
+    for (li, layer) in model.layers().iter().enumerate() {
         // Input slot (first input_size entries of state) should be zero
-        for j in 0..layer.input_size {
+        for j in 0..layer.input_size() {
             assert_eq!(
-                layer.state[j], 0.0,
+                layer.state()[j],
+                0.0,
                 "ModelDyn reset_input_slots: layer[{li}] input_slot[{j}] non-zero: {}",
-                layer.state[j],
+                layer.state()[j],
             );
         }
         // Hidden state (after input_size) should be preserved
@@ -345,7 +341,7 @@ fn test_model_dyn_reset_input_slots() {
             );
         }
         // Cell state should be preserved
-        for (j, &v) in layer.cell_state.iter().enumerate() {
+        for (j, &v) in layer.cell_state().iter().enumerate() {
             assert!(
                 (v - saved_cell[li][j]).abs() < 1e-6,
                 "ModelDyn reset_input_slots: layer[{li}] cell[{j}] changed: {} -> {v}",
@@ -365,12 +361,12 @@ fn test_model_dyn_state_evolution() {
     let mut out = [0.0f32; 1];
 
     model.process(&input, &mut out);
-    let hidden_1: Vec<f32> = model.layers[0].get_hidden_state().to_vec();
+    let hidden_1: Vec<f32> = model.layers()[0].get_hidden_state().to_vec();
 
     for _ in 0..9 {
         model.process(&input, &mut out);
     }
-    let hidden_10: Vec<f32> = model.layers[0].get_hidden_state().to_vec();
+    let hidden_10: Vec<f32> = model.layers()[0].get_hidden_state().to_vec();
 
     // State must have evolved
     for j in 0..8 {
@@ -423,29 +419,31 @@ mod proptest_tests {
             // Fill layers with random weights (scaled down for stability)
             for li in 0..num_layers {
                 let h = hidden_size;
-                let input_size = model_simd.layers[li].input_size;
+                let input_size = model_simd.layers()[li].input_size();
                 let ih = input_size + h;
                 let h4 = 4 * h;
                 let w_total = 4 * ih * h;
 
-                for i in 0..w_total {
-                    let w = (-1.5f32 + rng.random::<f32>() * 3.0) / 8.0;
-                    model_simd.layers[li].input_hidden_weights[i] = w;
-                    model_scalar.layers[li].input_hidden_weights[i] = w;
+                let mut weights = vec![0.0f32; w_total];
+                for slot in weights.iter_mut() {
+                    *slot = (-1.5f32 + rng.random::<f32>() * 3.0) / 8.0;
                 }
-                for i in 0..h4 {
-                    let b = (-1.5f32 + rng.random::<f32>() * 3.0) / 8.0;
-                    model_simd.layers[li].bias[i] = b;
-                    model_scalar.layers[li].bias[i] = b;
+                let mut bias = vec![0.0f32; h4];
+                for slot in bias.iter_mut() {
+                    *slot = (-1.5f32 + rng.random::<f32>() * 3.0) / 8.0;
                 }
+                model_simd.layers_mut()[li].set_weights(&weights, &bias).unwrap();
+                model_scalar.layers_mut()[li].set_weights(&weights, &bias).unwrap();
             }
 
             // Random head weights (f32 path)
-            for i in 0..hidden_size {
-                let w = -1.0f32 + rng.random::<f32>() * 2.0;
-                model_simd.head_weights_f32[i] = w;
-                model_scalar.head_weights_f32[i] = w;
+            let mut head_w = vec![0.0f32; hidden_size];
+            for slot in head_w.iter_mut() {
+                *slot = -1.0f32 + rng.random::<f32>() * 2.0;
             }
+            let head_b = model_simd.head_bias().to_vec();
+            model_simd.set_head_weights(&head_w, &head_b).unwrap();
+            model_scalar.set_head_weights(&head_w, &head_b).unwrap();
 
             let mut out_simd = vec![0.0f32; n_samples];
             let mut out_scalar = vec![0.0f32; n_samples];

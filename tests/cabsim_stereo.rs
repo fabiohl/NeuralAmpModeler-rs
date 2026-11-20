@@ -133,9 +133,10 @@ impl CabsimPipeline {
     }
 
     fn process(&mut self, in_l: &mut [f32], in_r: &mut [f32], n: usize, rate: u32) -> usize {
-        // SAFETY: `self.bridge` is owned and outlives the writer's use.
+        // SAFETY: `self.bridge` is owned and outlives the writer's use, and
+        // this harness is the single SPSC producer in the test.
         let bridge_ref = unsafe { BridgeRef::new(&raw mut *self.bridge) };
-        let writer = DspBridgeWriter::from_ref(bridge_ref).expect("bridge non-null");
+        let writer = unsafe { DspBridgeWriter::from_ref(bridge_ref) }.expect("bridge non-null");
         let ctx = DspPipelineContext {
             resampler: &mut self.resampler,
             os_l: &mut self.os_l,

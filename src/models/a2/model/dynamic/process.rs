@@ -53,7 +53,7 @@ impl WaveNetA2Dyn {
     /// according to its per-layer config.
     ///
     /// # Block Size Contract
-    /// Any input size ≤ `max_buffer_size` is safe: processing is internally chunked
+    /// Any input size is processed in full: processing is internally chunked
     /// into sub-blocks of ≤ `WAVENET_MAX_NUM_FRAMES` (64).
     ///
     /// **SIMD Dispatch:** The `dispatch_simd!` macro evaluates the hardware once
@@ -88,25 +88,18 @@ impl WaveNetA2Dyn {
             return;
         }
 
-        debug_assert!(
-            total <= self.max_buffer_size,
-            "process: input ({total}) > max_buffer_size ({})",
-            self.max_buffer_size
-        );
-        let nf_total = total.min(self.max_buffer_size);
-
         #[cfg(any(test, feature = "testing"))]
         {
             if let Some(ref mut dump) = self.diag.dump {
-                dump.total_frames = nf_total;
+                dump.total_frames = total;
             }
         }
 
         let cond_size = self.condition_size;
 
         let mut pos = 0;
-        while pos < nf_total {
-            let nf = (nf_total - pos).min(WAVENET_MAX_NUM_FRAMES);
+        while pos < total {
+            let nf = (total - pos).min(WAVENET_MAX_NUM_FRAMES);
 
             // Pre-process input through condition_dsp if present.
             // The condition_dsp output replaces the raw input as the parameter
@@ -216,8 +209,8 @@ impl WaveNetA2Dyn {
                 && dump.total_frames > 0
                 && self.diag.config.capture_final_output
             {
-                let mut out = AlignedVec::new(nf_total, 0.0f32).expect("diagnostic alloc");
-                out.copy_from_slice(&output[..nf_total]);
+                let mut out = AlignedVec::new(total, 0.0f32).expect("diagnostic alloc");
+                out.copy_from_slice(&output[..total]);
                 dump.final_output = Some(out);
             }
         }
@@ -368,15 +361,168 @@ impl WaveNetA2Dyn {
         }
 
         // Advance buffer start with wrap.
-        if bs + nf * channels + self.max_buffer_size * channels > ring_size * 2 {
+        if bs + nf * channels + WAVENET_MAX_NUM_FRAMES * channels > ring_size * 2 {
             self.layer_buffer_starts[li] = bs + nf * channels - ring_size;
         } else {
             self.layer_buffer_starts[li] = bs + nf * channels;
         }
 
+        debug_assert!(bs >= lookback);
+        debug_assert!(bs + nf * channels <= ring_size * 2);
+
+        if (use_gating || use_blending)
+            && z_out_ch <= 16
+            && matches!(
+                self.layers[li].conv,
+                crate::models::a2::conv1d::A2Conv1d::Standard(ref conv_std)
+                    if conv_std.interleave_width == 4
+                        && conv_std.do_bias
+                        && conv_std.kernel >= 6
+                        && max_lookback_cols >= (conv_std.kernel - 1) * conv_std.dilation
+            )
+        {
+            let cond_input: &[f32] = if use_cond_dsp {
+                &[]
+            } else {
+                let cond_ch = cond_size.max(1);
+                &input[pos * cond_ch..(pos + nf) * cond_ch]
+            };
+            let flags = (is_first as u8)
+                | ((is_last as u8) << 1)
+                | ((use_gating as u8) << 2)
+                | ((use_blending as u8) << 3)
+                | ((use_cond_dsp as u8) << 4);
+            // SAFETY: `self.layers[li].conv` satisfies `interleave_width == 4`, `do_bias`,
+            // `kernel >= 6`, `max_lookback_cols >= (kernel - 1) * dilation`, and `z_out_ch <= 16`.
+            unsafe {
+                self.layer_forward_dyn_block_conv::<M>(li, nf, bs, head_wp, cond_input, flags);
+            }
+            return;
+        }
+
         {
             let history = &self.layer_buffers[li][bs - lookback..bs + nf * channels];
             let layer = &mut self.layers[li];
+
+            let cond_ch = cond_size.max(1);
+            let cond_buf: &[f32] = if use_cond_dsp {
+                &self.condition_dsp_output[..nf * cond_size]
+            } else {
+                &input[pos * cond_ch..(pos + nf) * cond_ch]
+            };
+
+            if !use_gating
+                && !use_blending
+                && channels == bottleneck
+                && cond_size == 1
+                && !layer.head1x1_active
+                && self.head_accum_size == channels
+                && layer.mixin_groups <= 1
+                && layer.l1x1_groups <= 1
+                && matches!(
+                    self.activations[li],
+                    crate::models::a2::activations::ActivationType::LeakyReLU { negative_slope }
+                        if negative_slope == crate::models::a2::params::A2_LEAKY_SLOPE
+                )
+                && let Some(conv_ch) = layer.conv_ch.as_ref()
+            {
+                let mixin_w = &layer.mixin_w;
+                let l1x1_w = &layer.l1x1_w;
+                let l1x1_b = &layer.l1x1_b;
+                let mut film_block = crate::models::a2::film::FilmBlock {
+                    conv_pre_film: layer.conv_pre_film.as_mut(),
+                    conv_post_film: layer.conv_post_film.as_mut(),
+                    input_mixin_pre_film: layer.input_mixin_pre_film.as_mut(),
+                    input_mixin_post_film: layer.input_mixin_post_film.as_mut(),
+                    activation_pre_film: layer.activation_pre_film.as_mut(),
+                    activation_post_film: layer.activation_post_film.as_mut(),
+                    layer1x1_post_film: layer.layer1x1_post_film.as_mut(),
+                    head1x1_post_film: layer.head1x1_post_film.as_mut(),
+                };
+                let input_cond = &cond_buf[..nf];
+                match conv_ch {
+                    crate::models::a2::layer::A2ConvCh::Ch3(ch3_conv) => {
+                        // SAFETY: `layer_forward_ch3_block` requires `nf <= MAX_KERNEL_FRAMES`,
+                        // `history` covering `bs - lookback .. bs + nf * 3` (asserted above),
+                        // `input_cond.len() >= nf`, and `head_accum`/`layer_in` sized for CH=3
+                        // (`head_accum_size == channels == 3`, `advance_head_ring` keeps `head_wp + nf`
+                        // in bounds).
+                        unsafe {
+                            crate::models::a2::conv1d_ch3::layer_forward_ch3_block(
+                                ch3_conv,
+                                mixin_w,
+                                l1x1_w,
+                                l1x1_b,
+                                &mut film_block,
+                                false,
+                                history,
+                                max_lookback_cols,
+                                nf,
+                                input_cond,
+                                &mut self.head_accum,
+                                head_wp,
+                                &mut self.layer_in,
+                                is_first,
+                                is_last,
+                            );
+                        }
+                    }
+                    crate::models::a2::layer::A2ConvCh::Ch8(ch8_conv) => {
+                        // SAFETY: `layer_forward_ch8_block*` require `nf <= MAX_KERNEL_FRAMES`,
+                        // `history` covering `bs - lookback .. bs + nf * 8` (asserted above),
+                        // `input_cond.len() >= nf`, and `head_accum`/`layer_in` sized for CH=8
+                        // (`head_accum_size == channels == 8`, `advance_head_ring` keeps `head_wp + nf`
+                        // in bounds).
+                        unsafe {
+                            #[expect(deprecated)]
+                            match M::ISA {
+                                crate::math::common::InstructionSet::Avx512
+                                | crate::math::common::InstructionSet::Avx512VnniBf16 => {
+                                    crate::models::a2::conv1d_ch8::layer_forward_ch8_block_simdmath::<
+                                        M,
+                                    >(
+                                        ch8_conv,
+                                        mixin_w,
+                                        l1x1_w,
+                                        l1x1_b,
+                                        &mut film_block,
+                                        false,
+                                        history,
+                                        max_lookback_cols,
+                                        nf,
+                                        input_cond,
+                                        &mut self.head_accum,
+                                        head_wp,
+                                        &mut self.layer_in,
+                                        is_first,
+                                        is_last,
+                                    );
+                                }
+                                _ => {
+                                    crate::models::a2::conv1d_ch8::layer_forward_ch8_block(
+                                        ch8_conv,
+                                        mixin_w,
+                                        l1x1_w,
+                                        l1x1_b,
+                                        &mut film_block,
+                                        false,
+                                        history,
+                                        max_lookback_cols,
+                                        nf,
+                                        input_cond,
+                                        &mut self.head_accum,
+                                        head_wp,
+                                        &mut self.layer_in,
+                                        is_first,
+                                        is_last,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+                return;
+            }
 
             let z_scratch = &mut self.z_scratch;
             let mixin_scratch = &mut self.mixin_scratch;
@@ -389,16 +535,10 @@ impl WaveNetA2Dyn {
             let mut blending_config = self.blending_configs[li].as_mut();
             let activation = &self.activations[li];
 
-            let cond_ch = cond_size.max(1);
-            let cond_buf: &[f32] = if use_cond_dsp {
-                &self.condition_dsp_output[..nf * cond_size]
-            } else {
-                &input[pos * cond_ch..(pos + nf) * cond_ch]
-            };
-
             // activation_precision() lida uma vez por bloco para evitar leitura de TLS por frame — padrão adotado do caminho LSTM (layer_kernels.rs:36-42).
             let is_hf = crate::math::activations::activation_precision()
                 == crate::math::activations::ActivationPrecision::Standard;
+
             for f in 0..nf {
                 let bc = blending_config.as_deref_mut();
                 // SAFETY: `process_frame_dyn` is an `unsafe fn`; the caller has verified
@@ -406,7 +546,7 @@ impl WaveNetA2Dyn {
                 // valid data, all scratch/ring buffers sized for the model's topology,
                 // and `M` matches the CPU ISA (top-level `dispatch_simd!`).
                 unsafe {
-                    process_frame_dyn::<M>(
+                    process_frame_dyn::<M, true>(
                         layer,
                         history,
                         f,
@@ -435,6 +575,107 @@ impl WaveNetA2Dyn {
                         is_hf,
                     );
                 }
+            }
+        }
+    }
+
+    /// Out-of-line block-tiled conv1d + post-conv forward pass for non-`conv_ch` layers
+    /// with `kernel >= 6` and `z_out_ch <= 16` (e.g., gated/blended A2 dynamic layers).
+    #[inline(never)]
+    unsafe fn layer_forward_dyn_block_conv<M: SimdMath>(
+        &mut self,
+        li: usize,
+        nf: usize,
+        bs: usize,
+        head_wp: usize,
+        cond_input: &[f32],
+        flags: u8,
+    ) {
+        const Z_BLOCK_MAX_CH: usize = 16;
+        let is_first = (flags & 1) != 0;
+        let is_last = (flags & 2) != 0;
+        let use_gating = (flags & 4) != 0;
+        let use_blending = (flags & 8) != 0;
+        let use_cond_dsp = (flags & 16) != 0;
+        let channels = self.channels;
+        let bottleneck = self.bottleneck;
+        let cond_size = self.condition_size;
+        let cond_buf: &[f32] = if use_cond_dsp {
+            &self.condition_dsp_output[..nf * cond_size]
+        } else {
+            cond_input
+        };
+        let z_out_ch = if use_gating || use_blending {
+            bottleneck * 2
+        } else {
+            bottleneck
+        };
+        let lookback = self.layer_lookbacks[li];
+        let max_lookback_cols = lookback / channels;
+        let history = &self.layer_buffers[li][bs - lookback..bs + nf * channels];
+        let layer = &mut self.layers[li];
+
+        let mut z_block_uninit =
+            [core::mem::MaybeUninit::<f32>::uninit(); WAVENET_MAX_NUM_FRAMES * Z_BLOCK_MAX_CH];
+        let z_block_ptr = z_block_uninit.as_mut_ptr() as *mut f32;
+        if let crate::models::a2::conv1d::A2Conv1d::Standard(ref conv_std) = layer.conv {
+            // SAFETY: `z_block_uninit` holds `WAVENET_MAX_NUM_FRAMES * Z_BLOCK_MAX_CH` elements,
+            // `nf <= WAVENET_MAX_NUM_FRAMES`, `z_out_ch <= Z_BLOCK_MAX_CH`, and
+            // `process_block_no_mixin_4wide` initializes every element of `0..nf * z_out_ch`.
+            unsafe {
+                let z_block = core::slice::from_raw_parts_mut(z_block_ptr, nf * z_out_ch);
+                conv_std.process_block_no_mixin_4wide(history, z_block, max_lookback_cols, nf);
+            }
+        }
+
+        let mixin_scratch = &mut self.mixin_scratch;
+        let l1x1_scratch = &mut self.l1x1_scratch;
+        let head_accum = &mut self.head_accum;
+        let layer_in = &mut self.layer_in;
+        let head1x1_scratch = &mut self.head1x1_scratch;
+        let cond_scratch = &mut self.cond_scratch;
+        let gating_config = self.gating_configs[li].as_ref();
+        let mut blending_config = self.blending_configs[li].as_mut();
+        let activation = &self.activations[li];
+        let is_hf = crate::math::activations::activation_precision()
+            == crate::math::activations::ActivationPrecision::Standard;
+
+        for f in 0..nf {
+            // SAFETY: `process_block_no_mixin_4wide` initialized `0..nf * z_out_ch`.
+            let z_frame =
+                unsafe { core::slice::from_raw_parts_mut(z_block_ptr.add(f * z_out_ch), z_out_ch) };
+            let bc = blending_config.as_deref_mut();
+            // SAFETY: `z_frame` holds the precomputed conv output for frame `f`; remaining
+            // preconditions match `process_frame_dyn::<M, false>`.
+            unsafe {
+                process_frame_dyn::<M, false>(
+                    layer,
+                    &[],
+                    f,
+                    0,
+                    head_wp,
+                    z_out_ch,
+                    use_gating,
+                    use_blending,
+                    is_first,
+                    is_last,
+                    channels,
+                    self.head_accum_size,
+                    bottleneck,
+                    z_frame,
+                    mixin_scratch,
+                    l1x1_scratch,
+                    head_accum,
+                    layer_in,
+                    head1x1_scratch,
+                    cond_scratch,
+                    gating_config,
+                    bc,
+                    activation,
+                    cond_buf,
+                    cond_size,
+                    is_hf,
+                );
             }
         }
     }

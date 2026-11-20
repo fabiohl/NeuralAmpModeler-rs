@@ -94,10 +94,8 @@ fn test_wavenet_a2_reset_reallocates_and_prewarms() {
     let mut model = WaveNetA2::<3>::new().unwrap();
     let orig_rings: Vec<usize> = model.layer_ring_sizes.clone();
     model.reset(48000, 128).unwrap();
-    assert!(model.max_buffer_size == 128);
-    for (i, &size) in model.layer_ring_sizes.iter().enumerate() {
-        assert!(size >= orig_rings[i], "layer ring {} shrank", i);
-    }
+    assert_eq!(model.max_buffer_size, WAVENET_MAX_NUM_FRAMES);
+    assert_eq!(model.layer_ring_sizes, orig_rings);
     for buf in &model.layer_buffers {
         let len = buf.size();
         for &v in buf[..len].iter() {
@@ -116,27 +114,17 @@ fn test_wavenet_a2_set_max_buffer_size_noop_on_smaller() {
 }
 
 #[test]
-fn test_wavenet_a2_set_max_buffer_size_grows() {
+fn test_wavenet_a2_set_max_buffer_size_preserves_ring_capacity_and_clears() {
     let mut model = WaveNetA2::<8>::new().unwrap();
     let orig_sizes: Vec<usize> = model.layer_ring_sizes.clone();
-    model.set_max_buffer_size(256).unwrap();
-    assert!(model.max_buffer_size == 256);
-    assert_eq!(model.layer_ring_sizes.len(), A2_NUM_LAYERS);
-    assert_eq!(model.layer_buffers.len(), A2_NUM_LAYERS);
-    assert_eq!(model.layer_lookbacks.len(), A2_NUM_LAYERS);
-    assert_eq!(model.layer_buffer_starts.len(), A2_NUM_LAYERS);
-    // Every ring must hold its lookback plus the new block (+1). Ring sizes are
-    // rounded up to whole pages (4 KiB on x86_64 Linux, 16 KiB on Apple
-    // Silicon), so a ring may already have had room and not grow; none may shrink.
-    for (i, (&orig, &ring)) in orig_sizes
-        .iter()
-        .zip(model.layer_ring_sizes.iter())
-        .enumerate()
-    {
-        let needed = model.layer_lookbacks[i] + (256 + 1) * 8;
-        assert!(ring >= needed, "layer {i}: ring {ring} < required {needed}");
-        assert!(ring >= orig, "layer {i}: ring shrank from {orig} to {ring}");
-    }
+    model.head_accum.fill(0.5);
+    model.head_write_pos = 123;
+    model.set_max_buffer_size(8192).unwrap();
+    // Buffers stay capped at WAVENET_MAX_NUM_FRAMES (64) without inflating rings.
+    assert_eq!(model.max_buffer_size, WAVENET_MAX_NUM_FRAMES);
+    assert_eq!(model.layer_ring_sizes, orig_sizes);
+    assert_eq!(model.head_write_pos, model.receptive_field_size);
+    assert!(model.head_accum.iter().all(|&v| v == 0.0));
 }
 
 #[test]
@@ -598,6 +586,93 @@ fn test_wavenet_a2_neg_internal_chunking_ch8() {
             a.to_bits(),
             b.to_bits(),
             "A2 CH=8 chunking negative test: sample {i} diverges"
+        );
+    }
+}
+
+#[test]
+fn test_wavenet_a2_processes_512_and_16384_without_set_max_buffer_size() {
+    for num_samples in [512usize, 16384usize] {
+        let count = a2_weight_count::<8>();
+        let weights = make_test_weights(count, 123);
+        let input: Vec<f32> = (0..num_samples)
+            .map(|i| (i as f32 * 0.037).sin() * 0.5)
+            .collect();
+
+        // Direct build without set_max_buffer_size: must process 100% of samples.
+        let mut model_full = WaveNetA2::<8>::new().unwrap();
+        model_full.set_weights(&weights).unwrap();
+        model_full.prewarm();
+        let mut out_full = vec![f32::NAN; num_samples];
+        model_full.process(&input, &mut out_full);
+
+        let mut model_chunked = WaveNetA2::<8>::new().unwrap();
+        model_chunked.set_weights(&weights).unwrap();
+        model_chunked.prewarm();
+        let mut out_chunked = vec![0.0f32; num_samples];
+        for (in_c, out_c) in input.chunks(64).zip(out_chunked.chunks_mut(64)) {
+            model_chunked.process(in_c, out_c);
+        }
+
+        for (i, (&a, &b)) in out_full.iter().zip(out_chunked.iter()).enumerate() {
+            assert_eq!(
+                a.to_bits(),
+                b.to_bits(),
+                "WaveNetA2<8> len={num_samples} diverged at sample {i}: full={a}, chunked={b}"
+            );
+        }
+        assert!(out_full.iter().any(|&v| v != 0.0));
+    }
+}
+
+#[test]
+fn test_wavenet_a2_reset_determinism_with_and_without_prewarm() {
+    let count = a2_weight_count::<3>();
+    let weights = make_test_weights(count, 42);
+    let probe: Vec<f32> = (0..128).map(|i| (i as f32 * 0.07).sin() * 0.4).collect();
+    let dirty_in = vec![0.9f32; 64];
+    let mut scratch = vec![0.0f32; 128];
+
+    // 1. Prewarm enabled: dirty -> reset(48000, 8192) must match fresh prewarmed model bit-for-bit.
+    let mut fresh_warm = WaveNetA2::<3>::new().unwrap();
+    fresh_warm.set_weights(&weights).unwrap();
+    fresh_warm.prewarm();
+
+    let mut reset_warm = WaveNetA2::<3>::new().unwrap();
+    reset_warm.set_weights(&weights).unwrap();
+    reset_warm.prewarm();
+    reset_warm.process(&dirty_in, &mut scratch[..64]);
+    reset_warm.reset(48000, 8192).unwrap();
+
+    let mut out_fresh = vec![0.0f32; probe.len()];
+    let mut out_reset = vec![0.0f32; probe.len()];
+    fresh_warm.process(&probe, &mut out_fresh);
+    reset_warm.process(&probe, &mut out_reset);
+    for (i, (&a, &b)) in out_fresh.iter().zip(out_reset.iter()).enumerate() {
+        assert_eq!(
+            a.to_bits(),
+            b.to_bits(),
+            "WaveNetA2<3> reset(prewarm=true) diverged at sample {i}: {a} vs {b}"
+        );
+    }
+
+    // 2. Prewarm disabled: dirty -> reset(48000, 64) must clear all state to match un-prewarmed model.
+    let mut fresh_cold = WaveNetA2::<3>::new().unwrap();
+    fresh_cold.set_weights(&weights).unwrap();
+
+    let mut reset_cold = WaveNetA2::<3>::new().unwrap();
+    reset_cold.set_weights(&weights).unwrap();
+    reset_cold.process(&dirty_in, &mut scratch[..64]);
+    reset_cold.prewarm_on_reset = false;
+    reset_cold.reset(48000, 64).unwrap();
+
+    fresh_cold.process(&probe, &mut out_fresh);
+    reset_cold.process(&probe, &mut out_reset);
+    for (i, (&a, &b)) in out_fresh.iter().zip(out_reset.iter()).enumerate() {
+        assert_eq!(
+            a.to_bits(),
+            b.to_bits(),
+            "WaveNetA2<3> reset(prewarm=false) diverged at sample {i}: {a} vs {b}"
         );
     }
 }

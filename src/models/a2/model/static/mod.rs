@@ -48,65 +48,65 @@ pub mod process;
 /// `CH` = channel count (3 for Lite/Nano, 8 for Full/Standard).
 pub struct WaveNetA2<const CH: usize> {
     /// 23 A2 layers (one per layer index). Populated by `set_weights`.
-    pub layers: Vec<A2Layer>,
+    pub(crate) layers: Vec<A2Layer>,
 
     /// Input rechannel weights: `Conv1x1(1 → CH)` (no bias).
-    pub rechannel_w_f32: AlignedVec<f32>,
+    pub(crate) rechannel_w_f32: AlignedVec<f32>,
 
     /// Head convolution (K=16 over skip-connection accumulator, bias, head_scale).
-    pub head_conv: Option<A2HeadConv>,
+    pub(crate) head_conv: Option<A2HeadConv>,
 
     /// Head accumulator ring buffer (skip-connection sum, column-major, pow2 size).
-    pub head_accum: AlignedVec<f32>,
+    pub(crate) head_accum: AlignedVec<f32>,
 
     /// Write position in `head_accum` (in columns, wraps via `head_ring_mask`).
-    pub head_write_pos: usize,
+    pub(crate) head_write_pos: usize,
 
     /// Ring mask for `head_accum` (pow2 ring, mask = capacity - 1).
-    pub head_ring_mask: usize,
+    pub(crate) head_ring_mask: usize,
 
     /// Per-layer history buffers: one MirroredBuffer per layer (23 total).
     /// Each buffer provides 2× virtual mapping for branchless ring access.
-    pub layer_buffers: Vec<MirroredBuffer<f32>>,
+    pub(crate) layer_buffers: Vec<MirroredBuffer<f32>>,
 
     /// Per-layer ring sizes in elements (pow2 page-aligned). For rewind: `start -= ring_size`.
-    pub layer_ring_sizes: Vec<usize>,
+    pub(crate) layer_ring_sizes: Vec<usize>,
 
     /// Per-layer maximum dilation lookback = (kernel-1) * dilation.
-    pub layer_lookbacks: Vec<usize>,
+    pub(crate) layer_lookbacks: Vec<usize>,
 
     /// Per-layer buffer starts (advanced with each written frame, rewound near 2× boundary).
-    pub layer_buffer_starts: Vec<usize>,
+    pub(crate) layer_buffer_starts: Vec<usize>,
 
     /// Inter-layer data buffer: `CH × max_buffer_size` f32, reused across layers.
     /// Each layer reads from it, then writes its l1x1 residual back (in-place update).
-    pub layer_in: AlignedVec<f32>,
+    pub(crate) layer_in: AlignedVec<f32>,
 
     /// Total receptive field: sum of `(kernel-1)*dilation` + head kernel - 1.
-    pub receptive_field_size: usize,
+    pub(crate) receptive_field_size: usize,
 
     /// Maximum frames per processing block (= `WAVENET_MAX_NUM_FRAMES`).
-    pub max_buffer_size: usize,
+    pub(crate) max_buffer_size: usize,
 
     /// Raw JSON for the single layer array, preserved for FiLM config parsing.
     /// `None` when the model is constructed directly (not via JSON deserialization).
-    pub layer_raw: Option<Value>,
+    pub(crate) layer_raw: Option<Value>,
 
     /// Per-frame scratch buffer for the fallback conv path (CH f32).
     /// Allocated once at model creation to avoid heap ops on the hot path.
-    pub z_scratch: AlignedVec<f32>,
+    pub(crate) z_scratch: AlignedVec<f32>,
 
     /// `RtStatusFlags` for silent RT→Main telemetry (RF8).
-    pub rt_status: Option<Arc<crate::common::spsc::RtStatusFlags>>,
+    pub(crate) rt_status: Option<Arc<crate::common::spsc::RtStatusFlags>>,
     /// Whether to execute prewarm during `reset()`. Default: `true`.
-    pub prewarm_on_reset: bool,
+    pub(crate) prewarm_on_reset: bool,
     /// Zeroed-sample stabilization work still pending for the deferred split
     /// pass armed by [`Self::prewarm_reset`](super::super::NamModel::prewarm_reset).
     /// Always `0` for freshly built models; the integral
     /// [`Self::prewarm`](super::super::NamModel::prewarm) /
     /// [`Self::reset`](super::super::NamModel::reset) paths complete it by
     /// construction and never consult or alter it otherwise.
-    pub prewarm_pending: usize,
+    pub(crate) prewarm_pending: usize,
 }
 
 impl<const CH: usize> WaveNetA2<CH> {
@@ -177,71 +177,142 @@ impl<const CH: usize> WaveNetA2<CH> {
         self.receptive_field_size
     }
 
-    /// Reallocates internal buffers to support the given maximum block size.
+    /// Returns the total receptive field size in samples.
+    #[inline(always)]
+    pub fn receptive_field_size(&self) -> usize {
+        self.receptive_field_size
+    }
+
+    /// Returns the A2 layers.
+    #[inline(always)]
+    pub fn layers(&self) -> &[A2Layer] {
+        &self.layers
+    }
+
+    /// Returns the input rechannel weight slice.
+    #[inline(always)]
+    pub fn rechannel_w_f32(&self) -> &[f32] {
+        &self.rechannel_w_f32
+    }
+
+    /// Returns the optional head convolution.
+    #[inline(always)]
+    pub fn head_conv(&self) -> Option<&A2HeadConv> {
+        self.head_conv.as_ref()
+    }
+
+    /// Returns the head accumulator ring buffer.
+    #[inline(always)]
+    pub fn head_accum(&self) -> &[f32] {
+        &self.head_accum
+    }
+
+    /// Returns the current head write position in columns.
+    #[inline(always)]
+    pub fn head_write_pos(&self) -> usize {
+        self.head_write_pos
+    }
+
+    /// Returns the power-of-2 ring mask for `head_accum`.
+    #[inline(always)]
+    pub fn head_ring_mask(&self) -> usize {
+        self.head_ring_mask
+    }
+
+    /// Returns the per-layer history mirrored buffers.
+    #[inline(always)]
+    pub fn layer_buffers(&self) -> &[MirroredBuffer<f32>] {
+        &self.layer_buffers
+    }
+
+    /// Returns the per-layer ring sizes in elements.
+    #[inline(always)]
+    pub fn layer_ring_sizes(&self) -> &[usize] {
+        &self.layer_ring_sizes
+    }
+
+    /// Returns the per-layer lookbacks in elements.
+    #[inline(always)]
+    pub fn layer_lookbacks(&self) -> &[usize] {
+        &self.layer_lookbacks
+    }
+
+    /// Returns the per-layer buffer start cursors.
+    #[inline(always)]
+    pub fn layer_buffer_starts(&self) -> &[usize] {
+        &self.layer_buffer_starts
+    }
+
+    /// Returns the inter-layer working buffer.
+    #[inline(always)]
+    pub fn layer_in(&self) -> &[f32] {
+        &self.layer_in
+    }
+
+    /// Returns the configured maximum block size in frames.
+    #[inline(always)]
+    pub fn max_buffer_size(&self) -> usize {
+        self.max_buffer_size
+    }
+
+    /// Returns the optional raw JSON layer metadata.
+    #[inline(always)]
+    pub fn layer_raw(&self) -> Option<&Value> {
+        self.layer_raw.as_ref()
+    }
+
+    /// Returns whether prewarm runs during `reset()`.
+    #[inline(always)]
+    pub fn prewarm_on_reset(&self) -> bool {
+        self.prewarm_on_reset
+    }
+
+    /// Returns whether a deferred prewarm pass is pending.
+    #[inline(always)]
+    pub fn prewarm_pending(&self) -> bool {
+        self.prewarm_pending > 0
+    }
+
+    /// Resets internal state without inflating the ring buffers beyond
+    /// `WAVENET_MAX_NUM_FRAMES` (64).
     ///
-    /// Any block size is accepted: processing is internally chunked into
-    /// sub-blocks of ≤ `WAVENET_MAX_NUM_FRAMES` (64) by [`process`], matching
-    /// the kernel scratch buffer capacity. Call this to inform the model
-    /// of the negotiated host block size so that internal ring
-    /// buffers are sized correctly.
+    /// Any block size is accepted by [`process`]: processing is internally
+    /// chunked into sub-blocks of ≤ `WAVENET_MAX_NUM_FRAMES` (64), so the
+    /// 23 per-layer `MirroredBuffer`s, `layer_in`, and `head_accum` never need
+    /// capacity above `max_lookback + WAVENET_MAX_NUM_FRAMES + 1`.
     ///
-    /// If `max_buf` is smaller than the current capacity, this is a no-op.
-    /// If `max_buf` equals the current capacity, state variables are reset
-    /// and all buffers are zero-filled in-place — avoiding heap allocation
-    /// on the RT thread (F9 / RT-Safety).
+    /// If `max_buf` is smaller than the current `max_buffer_size`, this is a
+    /// no-op. Otherwise state variables are reset and all buffers are
+    /// zero-filled in-place — zero heap allocation (F9 / RT-Safety).
     pub fn set_max_buffer_size(&mut self, max_buf: usize) -> anyhow::Result<()> {
         if max_buf < self.max_buffer_size {
             return Ok(());
         }
-        if max_buf == self.max_buffer_size {
-            let rf = self.receptive_field_size;
-            let ha_len = self.head_accum.len();
-            self.head_accum[..ha_len].fill(0.0);
-            self.head_write_pos = rf;
-            for buf in self.layer_buffers.iter_mut() {
-                buf.fill(0.0);
-            }
-            self.layer_buffer_starts
-                .copy_from_slice(&self.layer_ring_sizes);
-            let li_len = self.layer_in.len();
-            self.layer_in[..li_len].fill(0.0);
-            return Ok(());
-        }
-        self.max_buffer_size = max_buf;
         let rf = self.receptive_field_size;
-
-        self.layer_buffers.clear();
-        self.layer_ring_sizes.clear();
-        self.layer_lookbacks.clear();
-        self.layer_buffer_starts.clear();
-
-        for i in 0..A2_NUM_LAYERS {
-            let max_lookback = (A2_KERNEL_SIZES[i] - 1) * A2_DILATIONS[i];
-            let cap = max_lookback + max_buf + 1;
-            let mb = MirroredBuffer::<f32>::new(cap * CH)?;
-            let ring_size = mb.size();
-            self.layer_buffers.push(mb);
-            self.layer_ring_sizes.push(ring_size);
-            self.layer_lookbacks.push(max_lookback * CH);
-            self.layer_buffer_starts.push(ring_size);
-        }
-
-        self.layer_in = AlignedVec::new(CH * max_buf, 0.0f32)?;
-
-        let head_ring_size = (rf + max_buf + 1).next_power_of_two();
-        self.head_ring_mask = head_ring_size - 1;
-        self.head_accum = AlignedVec::new(head_ring_size * CH, 0.0f32)?;
+        let ha_len = self.head_accum.len();
+        self.head_accum[..ha_len].fill(0.0);
         self.head_write_pos = rf;
-
+        for buf in self.layer_buffers.iter_mut() {
+            buf.fill(0.0);
+        }
+        self.layer_buffer_starts
+            .copy_from_slice(&self.layer_ring_sizes);
+        let li_len = self.layer_in.len();
+        self.layer_in[..li_len].fill(0.0);
         Ok(())
     }
 
     /// Resets internal state for a new sample rate and max buffer size.
-    pub fn reset(&mut self, _sample_rate: u32, max_buffer_size: usize) -> anyhow::Result<()> {
-        self.set_max_buffer_size(max_buffer_size)?;
-        self.clear_state();
+    ///
+    /// Ring and scratch capacities stay capped at `WAVENET_MAX_NUM_FRAMES` (64),
+    /// so `reset()` only needs a single buffer clear: via `prewarm()` (which
+    /// starts with `prewarm_reset()` -> `a2_prewarm_common`) when
+    /// `prewarm_on_reset` is enabled, or `clear_state()` otherwise.
+    pub fn reset(&mut self, _sample_rate: u32, _max_buffer_size: usize) -> anyhow::Result<()> {
         if self.prewarm_on_reset {
             self.prewarm();
+        } else {
+            self.clear_state();
         }
         Ok(())
     }
@@ -255,5 +326,17 @@ impl<const CH: usize> WaveNetA2<CH> {
     /// Stores the raw layer JSON for FiLM config parsing during weight loading.
     pub fn set_layer_raw(&mut self, raw: Option<Value>) {
         self.layer_raw = raw;
+    }
+
+    /// Test-only helper to fill `head_accum`, `layer_buffers`, and `head_write_pos`
+    /// with sentinel values when verifying that `reset()` clears submodel state.
+    #[cfg(feature = "testing")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "testing")))]
+    pub fn poison_state_for_reset_test(&mut self, fill_val: f32, write_pos: usize) {
+        self.head_accum.fill(fill_val);
+        self.head_write_pos = write_pos;
+        for buf in &mut self.layer_buffers {
+            buf.fill(fill_val);
+        }
     }
 }

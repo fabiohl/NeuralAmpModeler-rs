@@ -31,11 +31,10 @@ pub(crate) unsafe fn load_mixin_4(
     out_c: usize,
     out_ch: usize,
 ) -> (f32, f32, f32, f32) {
-    // SAFETY-CRITICAL: this precondition gates unchecked slice access
-    // (`get_unchecked`) below. Must be `assert!`, not `debug_assert!` — the
-    // latter is elided in release builds, turning an out-of-bounds `mixin`
-    // into silent UB (out-of-bounds read) instead of a clean panic.
-    assert!(
+    // Precondition: validated once at the entry boundary by
+    // `A2GroupedConv1d::process_single_frame` and
+    // `grouped_conv1d_single_frame_simd` (`mixin.is_none_or(|m| m.len() >= out_ch)`).
+    debug_assert!(
         mixin.is_none_or(|m| m.len() >= out_ch),
         "load_mixin_4: mixin len {:?} < out_ch {}",
         mixin.map(|m| m.len()),
@@ -146,14 +145,8 @@ pub(crate) unsafe fn process_single_frame_depthwise_avx2(
         conv.in_ch
     );
 
-    // F-RES2-10: the 8-lane loads below read up to element
-    // `(frame_idx + 1) * in_ch - 1` of `layer_buffer` (last tap = current frame
-    // at offset `frame_idx * in_ch`, last lane of the `ch8 = in_ch & !7`
-    // block), while the release `assert!` above only proves the tap *base* is
-    // in bounds. Production callers guarantee the full-row extent by
-    // construction (layer-state buffers are sized as `frames * in_ch` with
-    // `frame_idx < frames`); this debug-only net checks exactly that limit and
-    // is compiled out of release — zero hot-path cost.
+    // F-RES2-10: checked in release at `A2GroupedConv1d::process_single_frame`;
+    // debug net preserved here when called directly.
     debug_assert!(
         layer_buffer.len() >= (frame_idx + 1) * conv.in_ch,
         "depthwise: layer_buffer len {} < (frame_idx {} + 1) * in_ch {} \
@@ -386,13 +379,8 @@ pub unsafe fn grouped_conv1d_single_frame_simd(
         conv.out_ch
     );
 
-    // F-RES2-10: the per-lane reads `*tap.add(group_in_start + ic)` reach up
-    // to element `(frame_idx + 1) * in_ch - 1` of `layer_buffer` (last tap =
-    // current frame, last group's last channel), while the release `assert!`
-    // above only proves the tap *base* is in bounds. Production callers
-    // guarantee the full-row extent by construction (layer-state buffers are
-    // sized as `frames * in_ch` with `frame_idx < frames`); this debug-only
-    // net checks exactly that limit and is compiled out of release.
+    // F-RES2-10: checked in release at `A2GroupedConv1d::process_single_frame`;
+    // debug net preserved here when called directly.
     debug_assert!(
         layer_buffer.len() >= (frame_idx + 1) * conv.in_ch,
         "simd: layer_buffer len {} < (frame_idx {} + 1) * in_ch {} (channel row bound)",

@@ -958,6 +958,21 @@ pub trait SimdMath {
     /// Effective length is `min(out.len(), pending.len())`.
     unsafe fn crossfade_blend_mono(out: &mut [f32], pending: &[f32], t: f32);
 
+    /// Per-sample ramped crossfade blend:
+    /// `out[i] = fma(pending[i] - out[i], t_start + i * t_step, out[i])`.
+    ///
+    /// No alignment required.
+    ///
+    /// # Safety
+    /// `out` and `pending` must be valid slices; `t_start` and `t_step` finite.
+    /// Effective length is `min(out.len(), pending.len())`.
+    unsafe fn crossfade_blend_ramp_mono(
+        out: &mut [f32],
+        pending: &[f32],
+        t_start: f32,
+        t_step: f32,
+    );
+
     /// Applies a linear gain ramp in stereo.
     ///
     /// No alignment required.

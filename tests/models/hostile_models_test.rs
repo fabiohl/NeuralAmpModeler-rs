@@ -899,3 +899,67 @@ fn test_hostile_lstm_direct_constructors_bounded() {
         Some(NamErrorCode::InvalidFeatureTopology)
     );
 }
+
+#[test]
+fn test_hostile_convnet_flat_cpp_non_positive_batchnorm_rejected() {
+    // 1 block, channels=1, kernel=2, batchnorm=true:
+    // conv weights: 2, running_mean: 1, running_var: 1, gamma: 1, beta: 1, eps: 1,
+    // head_weight: 1, head_bias: 1 -> 9 floats total.
+    for (running_var, eps) in [(-1.0f32, 0.0f32), (0.0f32, 0.0f32), (1.0f32, -2.0f32)] {
+        let json = format!(
+            r#"{{
+                "version": "0.5.4",
+                "architecture": "ConvNet",
+                "config": {{
+                    "channels": 1,
+                    "dilations": [1],
+                    "batchnorm": true,
+                    "activation": "Tanh"
+                }},
+                "weights": [0.1, 0.2, 0.0, {running_var}, 1.0, 0.0, {eps}, 1.0, 0.0],
+                "sample_rate": 48000.0
+            }}"#
+        );
+        let parsed = parse_nam_json(&json).expect("JSON syntax and finite floats are valid");
+        let res = build_model(&parsed);
+        assert!(
+            res.is_err(),
+            "FlatCpp ConvNet with running_var={running_var}, eps={eps} must be rejected without panic"
+        );
+    }
+}
+
+#[test]
+fn test_hostile_convnet_layers_multi_dilation_rejected_without_oom() {
+    // Hostile ConvNetFormat::Layers payload with multiple dilations per layer
+    // (previously inflated total_rf without building corresponding blocks).
+    let dils: Vec<usize> = std::iter::repeat_n(4096, 64).collect();
+    let json = serde_json::json!({
+        "version": "0.5.4",
+        "architecture": "ConvNet",
+        "config": {
+            "layers": [{
+                "channels": 1,
+                "kernel_size": 64,
+                "dilations": dils,
+                "activation": "Tanh"
+            }],
+            "head": null,
+            "head_scale": 1.0
+        },
+        // 1 block * (1*1*64 + 3*1) + 1 head_scale = 68 weights
+        "weights": vec![0.0f32; 68],
+        "sample_rate": 48000.0
+    })
+    .to_string();
+
+    let parsed = parse_nam_json(&json).expect("valid JSON syntax");
+    assert!(
+        get_convnet_topology(&parsed).is_err(),
+        "ConvNetFormat::Layers with multiple dilations per layer must return Err"
+    );
+    assert!(
+        build_model(&parsed).is_err(),
+        "build_model must reject ConvNetFormat::Layers with multiple dilations per layer"
+    );
+}

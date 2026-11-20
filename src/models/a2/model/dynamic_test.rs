@@ -243,7 +243,7 @@ fn test_wavenet_a2_dyn_set_max_buffer_size_noop() {
 }
 
 #[test]
-fn test_wavenet_a2_dyn_set_max_buffer_size_grows() {
+fn test_wavenet_a2_dyn_set_max_buffer_size_preserves_rings_and_propagates_cond() {
     let mut model = WaveNetA2Dyn::new(
         1,
         8,
@@ -259,20 +259,29 @@ fn test_wavenet_a2_dyn_set_max_buffer_size_grows() {
         make_standard_secondary(A2_NUM_LAYERS),
     )
     .unwrap();
+    let mut cond = crate::models::a2::WaveNetA2::<3>::new().unwrap();
+    cond.head_accum.fill(0.5);
+    model
+        .set_condition_dsp(
+            Some(Box::new(crate::models::StaticModel::WavenetA2Lite(
+                Box::new(cond),
+            ))),
+            WAVENET_MAX_NUM_FRAMES,
+        )
+        .unwrap();
+
     let orig_sizes: Vec<usize> = model.layer_ring_sizes.clone();
-    model.set_max_buffer_size(256).unwrap();
-    assert!(model.max_buffer_size == 256);
-    // Every ring must hold its lookback plus the new block (+1). Ring sizes are
-    // rounded up to whole pages (4 KiB on x86_64 Linux, 16 KiB on Apple
-    // Silicon), so a ring may already have had room and not grow; none may shrink.
-    for (i, (&orig, &ring)) in orig_sizes
-        .iter()
-        .zip(model.layer_ring_sizes.iter())
-        .enumerate()
+    model.set_max_buffer_size(8192).unwrap();
+    assert_eq!(model.max_buffer_size, WAVENET_MAX_NUM_FRAMES);
+    assert_eq!(model.layer_ring_sizes, orig_sizes);
+
+    if let Some(ref cond_dsp) = model.condition_dsp
+        && let crate::models::StaticModel::WavenetA2Lite(inner) = &**cond_dsp
     {
-        let needed = model.layer_lookbacks[i] + (256 + 1) * model.channels;
-        assert!(ring >= needed, "layer {i}: ring {ring} < required {needed}");
-        assert!(ring >= orig, "layer {i}: ring shrank from {orig} to {ring}");
+        assert_eq!(inner.max_buffer_size, WAVENET_MAX_NUM_FRAMES);
+        assert!(inner.head_accum.iter().all(|&v| v == 0.0));
+    } else {
+        panic!("expected WavenetA2Lite condition_dsp");
     }
 }
 
@@ -1057,4 +1066,223 @@ fn test_wavenet_a2_dyn_new_rejects_prelu_slope_dimension_mismatch() {
             bad_slopes
         );
     }
+}
+
+#[test]
+fn test_wavenet_a2_dyn_processes_512_and_16384_without_set_max_buffer_size() {
+    use crate::math::common::AlignedVec;
+    use crate::models::a2::conv1d::A2Conv1d;
+    use crate::models::a2::head::A2HeadConv;
+    use crate::models::a2::layer::A2Layer;
+
+    let build_dyn = || {
+        let ch = 4usize;
+        let head_k = 4usize;
+        let mut model = WaveNetA2Dyn::new(
+            1,
+            ch,
+            ch,
+            1,
+            ch,
+            ch,
+            head_k,
+            &[3, 3],
+            &[1, 2],
+            make_standard_activations(2),
+            make_standard_gating(2),
+            make_standard_secondary(2),
+        )
+        .unwrap();
+        model.rechannel_w_f32 = AlignedVec::from_vec(vec![0.5, -0.3, 0.8, 0.25]).unwrap();
+        let num_blocks = ch.div_ceil(4);
+        for (li, &dil) in [1usize, 2usize].iter().enumerate() {
+            let total_padded = num_blocks * 4 * 3 * ch;
+            let w_val = if li == 0 { 0.15 } else { -0.12 };
+            let conv = A2Conv1d::new(
+                AlignedVec::from_vec(vec![w_val; total_padded]).unwrap(),
+                AlignedVec::from_vec(vec![0.02; ch]).unwrap(),
+                true,
+                dil,
+                ch,
+                ch,
+                3,
+            );
+            let layer = A2Layer::new(
+                conv,
+                AlignedVec::from_vec(vec![0.4; ch]).unwrap(),
+                AlignedVec::from_vec(vec![0.1; ch * ch]).unwrap(),
+                AlignedVec::from_vec(vec![0.01; ch]).unwrap(),
+            );
+            model.layers.push(layer);
+        }
+        model.head_conv = Some(A2HeadConv::new_with_kernel(
+            AlignedVec::from_vec(vec![0.2f32; ch * head_k]).unwrap(),
+            0.0,
+            1.0,
+            ch,
+            head_k,
+        ));
+        model.prewarm();
+        model
+    };
+
+    for num_samples in [512usize, 16384usize] {
+        let input: Vec<f32> = (0..num_samples)
+            .map(|i| (i as f32 * 0.041).sin() * 0.5)
+            .collect();
+        let mut m_full = build_dyn();
+        let mut out_full = vec![f32::NAN; num_samples];
+        m_full.process(&input, &mut out_full);
+
+        let mut m_chunked = build_dyn();
+        let mut out_chunked = vec![0.0f32; num_samples];
+        for (in_c, out_c) in input.chunks(64).zip(out_chunked.chunks_mut(64)) {
+            m_chunked.process(in_c, out_c);
+        }
+
+        for (i, (&a, &b)) in out_full.iter().zip(out_chunked.iter()).enumerate() {
+            assert_eq!(
+                a.to_bits(),
+                b.to_bits(),
+                "WaveNetA2Dyn len={num_samples} diverged at sample {i}: full={a}, chunked={b}"
+            );
+        }
+        assert!(out_full.iter().any(|&v| v != 0.0));
+    }
+}
+
+#[test]
+fn test_wavenet_a2_dyn_split_prewarm_with_cond_dsp_and_wide_head_progress() {
+    use crate::math::common::AlignedVec;
+    use crate::models::StaticModel;
+    use crate::models::a2::conv1d::A2Conv1d;
+    use crate::models::a2::head::A2HeadConv;
+    use crate::models::a2::layer::A2Layer;
+
+    let build_with_cond = || {
+        let ch = 4usize;
+        let head_k = 4usize;
+        let mut model = WaveNetA2Dyn::new(
+            1,
+            ch,
+            ch,
+            1,
+            ch,
+            ch,
+            head_k,
+            &[3],
+            &[2],
+            make_standard_activations(1),
+            make_standard_gating(1),
+            make_standard_secondary(1),
+        )
+        .unwrap();
+        model.rechannel_w_f32 = AlignedVec::from_vec(vec![0.5, -0.3, 0.8, 0.25]).unwrap();
+        let num_blocks = ch.div_ceil(4);
+        let total_padded = num_blocks * 4 * 3 * ch;
+        let conv = A2Conv1d::new(
+            AlignedVec::from_vec(vec![0.15; total_padded]).unwrap(),
+            AlignedVec::from_vec(vec![0.02; ch]).unwrap(),
+            true,
+            2,
+            ch,
+            ch,
+            3,
+        );
+        let layer = A2Layer::new(
+            conv,
+            AlignedVec::from_vec(vec![0.4; ch]).unwrap(),
+            AlignedVec::from_vec(vec![0.1; ch * ch]).unwrap(),
+            AlignedVec::from_vec(vec![0.01; ch]).unwrap(),
+        );
+        model.layers.push(layer);
+        model.head_conv = Some(A2HeadConv::new_with_kernel(
+            AlignedVec::from_vec(vec![0.2f32; ch * head_k]).unwrap(),
+            0.0,
+            1.0,
+            ch,
+            head_k,
+        ));
+        let mut cond = crate::models::a2::WaveNetA2::<3>::new().unwrap();
+        let w = vec![0.01f32; crate::models::a2::a2_weight_count::<3>()];
+        cond.set_weights(&w).unwrap();
+        model
+            .set_condition_dsp(
+                Some(Box::new(StaticModel::WavenetA2Lite(Box::new(cond)))),
+                WAVENET_MAX_NUM_FRAMES,
+            )
+            .unwrap();
+        model
+    };
+
+    let mut integral = build_with_cond();
+    integral.prewarm();
+    assert!(integral.prewarm_complete());
+
+    let mut split = build_with_cond();
+    split.prewarm_reset();
+    assert!(!split.prewarm_complete());
+    let before_zero = split.prewarm_step(0);
+    assert!(before_zero > 0);
+    let mut prev = before_zero;
+    let mut guard = 0usize;
+    while !split.prewarm_complete() {
+        let rem = split.prewarm_step(64);
+        assert!(rem < prev || rem == 0);
+        prev = rem;
+        guard += 1;
+        assert!(guard < 1000, "split prewarm failed to converge");
+    }
+
+    let probe: Vec<f32> = (0..128).map(|i| (i as f32 * 0.05).sin() * 0.4).collect();
+    let mut out_int = vec![0.0f32; 128];
+    let mut out_spl = vec![0.0f32; 128];
+    integral.process(&probe, &mut out_int);
+    split.process(&probe, &mut out_spl);
+    for (i, (&a, &b)) in out_int.iter().zip(out_spl.iter()).enumerate() {
+        assert_eq!(
+            a.to_bits(),
+            b.to_bits(),
+            "WaveNetA2Dyn+cond_dsp split prewarm diverged at {i}: {a} vs {b}"
+        );
+    }
+
+    // Also check wide head_size (> WAVENET_MAX_NUM_FRAMES=64) makes strict progress.
+    let mut wide = WaveNetA2Dyn::new(
+        1,
+        4,
+        4,
+        70,
+        4,
+        4,
+        1,
+        &[3],
+        &[2],
+        make_standard_activations(1),
+        make_standard_gating(1),
+        make_standard_secondary(1),
+    )
+    .unwrap();
+    let num_blocks = 1usize;
+    let conv = A2Conv1d::new(
+        AlignedVec::from_vec(vec![0.01; num_blocks * 4 * 3 * 4]).unwrap(),
+        AlignedVec::from_vec(vec![0.0; 4]).unwrap(),
+        true,
+        2,
+        4,
+        4,
+        3,
+    );
+    wide.layers.push(A2Layer::new(
+        conv,
+        AlignedVec::from_vec(vec![0.1; 4]).unwrap(),
+        AlignedVec::from_vec(vec![0.05; 16]).unwrap(),
+        AlignedVec::from_vec(vec![0.0; 4]).unwrap(),
+    ));
+    wide.prewarm_reset();
+    let rem1 = wide.prewarm_step(2);
+    assert_eq!(rem1, wide.receptive_field_size - 2);
+    let rem2 = wide.prewarm_step(usize::MAX);
+    assert_eq!(rem2, 0);
+    assert!(wide.prewarm_complete());
 }

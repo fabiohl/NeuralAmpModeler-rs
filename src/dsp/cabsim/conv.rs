@@ -126,7 +126,10 @@ impl ConvEngine {
             return Err(NamErrorCode::InvalidCabsimPartitionSize);
         }
 
-        let fft_size = (2 * partition_size).next_power_of_two();
+        let fft_size = partition_size
+            .checked_mul(2)
+            .and_then(usize::checked_next_power_of_two)
+            .ok_or(NamErrorCode::InvalidCabsimPartitionSize)?;
         let n_bins = fft_size / 2 + 1;
         let output_start = fft_size - partition_size;
 
@@ -137,13 +140,16 @@ impl ConvEngine {
             ir.len().div_ceil(partition_size)
         };
 
+        let fdl_part_len = num_partitions
+            .checked_mul(n_bins)
+            .ok_or(NamErrorCode::InvalidCabsimPartitionSize)?;
+
         // Build native RFFT plan (handles both forward RFFT and inverse IRFFT)
         let mut rfft = RfftPlanner::<f32>::new(fft_size);
 
         // Pre-FFT each kernel partition
-        let h_fdl_part_len = num_partitions * n_bins;
-        let mut h_fdl_re = AlignedVec::new(h_fdl_part_len, 0.0_f32)?;
-        let mut h_fdl_im = AlignedVec::new(h_fdl_part_len, 0.0_f32)?;
+        let mut h_fdl_re = AlignedVec::new(fdl_part_len, 0.0_f32)?;
+        let mut h_fdl_im = AlignedVec::new(fdl_part_len, 0.0_f32)?;
 
         let mut ir_buf = vec![0.0f32; fft_size];
         let mut tmp_re = vec![0.0f32; n_bins];
@@ -168,7 +174,6 @@ impl ConvEngine {
         }
 
         // Pre-allocate FDL (all zeros initially)
-        let fdl_part_len = num_partitions * n_bins;
         let fdl_re = AlignedVec::new(fdl_part_len, 0.0_f32)?;
         let fdl_im = AlignedVec::new(fdl_part_len, 0.0_f32)?;
 
@@ -366,45 +371,42 @@ impl ConvEngine {
         let p_count = self.num_partitions;
         let n_bins = self.n_bins;
 
-        if p_count == 1 {
-            let fdl_start = self.fdl_idx * self.n_bins;
+        // Partition p = 0 initializes `acc_re`/`acc_im` via overwrite,
+        // avoiding two full-slice `.fill(0.0)` sweeps before accumulating `1..p_count`.
+        let mut fdl_p = self.fdl_idx;
+        let fdl_start0 = fdl_p * n_bins;
+        // SAFETY: `p_count >= 1` (early return for `num_partitions == 0` above),
+        // and all `h_fdl_*`/`fdl_*`/`acc_*` slices have length >= `n_bins`.
+        unsafe {
+            Avx2Math::complex_mac_overwrite(
+                &self.h_fdl_re[..n_bins],
+                &self.h_fdl_im[..n_bins],
+                &self.fdl_re[fdl_start0..fdl_start0 + n_bins],
+                &self.fdl_im[fdl_start0..fdl_start0 + n_bins],
+                &mut self.acc_re[..n_bins],
+                &mut self.acc_im[..n_bins],
+            );
+        }
+
+        for p in 1..p_count {
+            if fdl_p == 0 {
+                fdl_p = p_count;
+            }
+            fdl_p -= 1;
+
+            let fdl_start = fdl_p * n_bins;
+            let h_start = p * n_bins;
+
             // SAFETY: all slices have length n_bins, guaranteed by construction.
-            // Baseline x86-64-v3 (Avx2Math) used directly without runtime branching.
             unsafe {
-                Avx2Math::complex_mac_overwrite(
-                    &self.h_fdl_re[..n_bins],
-                    &self.h_fdl_im[..n_bins],
+                Avx2Math::complex_mac_accumulate(
+                    &self.h_fdl_re[h_start..h_start + n_bins],
+                    &self.h_fdl_im[h_start..h_start + n_bins],
                     &self.fdl_re[fdl_start..fdl_start + n_bins],
                     &self.fdl_im[fdl_start..fdl_start + n_bins],
                     &mut self.acc_re[..n_bins],
                     &mut self.acc_im[..n_bins],
                 );
-            }
-        } else {
-            self.acc_re[..n_bins].fill(0.0);
-            self.acc_im[..n_bins].fill(0.0);
-
-            let mut fdl_p = self.fdl_idx;
-            for p in 0..p_count {
-                let fdl_start = fdl_p * self.n_bins;
-                let h_start = p * self.n_bins;
-
-                // SAFETY: all slices have length n_bins, guaranteed by construction.
-                unsafe {
-                    Avx2Math::complex_mac_accumulate(
-                        &self.h_fdl_re[h_start..h_start + n_bins],
-                        &self.h_fdl_im[h_start..h_start + n_bins],
-                        &self.fdl_re[fdl_start..fdl_start + n_bins],
-                        &self.fdl_im[fdl_start..fdl_start + n_bins],
-                        &mut self.acc_re[..n_bins],
-                        &mut self.acc_im[..n_bins],
-                    );
-                }
-
-                if fdl_p == 0 {
-                    fdl_p = p_count;
-                }
-                fdl_p -= 1;
             }
         }
 

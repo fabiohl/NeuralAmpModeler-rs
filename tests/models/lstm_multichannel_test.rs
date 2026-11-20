@@ -50,12 +50,12 @@ fn test_lstm_2to2_h1_f64_oracle_parity() {
         0.1, -0.5, 0.4,
     ];
     let bias_vals = [0.05f32, -0.02, 0.1, -0.05];
-    model.layers[0].input_hidden_weights.copy_from_slice(&w_ih);
-    model.layers[0].bias.copy_from_slice(&bias_vals);
+    model.layers_mut()[0]
+        .set_weights(&w_ih, &bias_vals)
+        .unwrap();
 
     // Head: out_channels * hidden_size = 2 * 1 = 2
-    model.head_weights_f32.copy_from_slice(&[0.7, -0.8]);
-    model.head_bias.copy_from_slice(&[0.1, -0.15]);
+    model.set_head_weights(&[0.7, -0.8], &[0.1, -0.15]).unwrap();
 
     // Test signal: 32 stereo frames (64 samples interleaved)
     let n_frames = 32;
@@ -109,9 +109,9 @@ fn test_lstm_2to2_h1_f64_oracle_parity() {
         h_state = go * c_state.tanh();
 
         expected_output[f * 2] =
-            (model.head_weights_f32[0] as f64) * h_state + (model.head_bias[0] as f64);
+            (model.head_weights_f32()[0] as f64) * h_state + (model.head_bias()[0] as f64);
         expected_output[f * 2 + 1] =
-            (model.head_weights_f32[1] as f64) * h_state + (model.head_bias[1] as f64);
+            (model.head_weights_f32()[1] as f64) * h_state + (model.head_bias()[1] as f64);
     }
 
     // Compare with tolerance for f32 SIMD/Pade approximations vs f64 libm
@@ -129,14 +129,12 @@ fn test_lstm_2to2_h1_f64_oracle_parity() {
     // Test Planar equivalence via NamModel::process_raw
     let mut model_planar =
         LstmModelDyn::new_io(num_layers, hidden_size, in_channels, out_channels).unwrap();
-    model_planar.layers[0]
-        .input_hidden_weights
-        .copy_from_slice(&w_ih);
-    model_planar.layers[0].bias.copy_from_slice(&bias_vals);
+    model_planar.layers_mut()[0]
+        .set_weights(&w_ih, &bias_vals)
+        .unwrap();
     model_planar
-        .head_weights_f32
-        .copy_from_slice(&model.head_weights_f32);
-    model_planar.head_bias.copy_from_slice(&model.head_bias);
+        .set_head_weights(model.head_weights_f32(), model.head_bias())
+        .unwrap();
 
     let in_ch0: Vec<f32> = (0..n_frames).map(|f| input_interleaved[f * 2]).collect();
     let in_ch1: Vec<f32> = (0..n_frames)

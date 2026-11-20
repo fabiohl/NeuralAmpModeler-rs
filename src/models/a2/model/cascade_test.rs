@@ -285,3 +285,87 @@ fn test_cascade_output_buffer_dirty_memory_clearing() {
         );
     }
 }
+
+#[test]
+fn test_cascade_processes_512_and_16384_with_condition_dsp_without_set_max_buffer_size() {
+    use crate::models::StaticModel;
+    use crate::models::linear::LinearModel;
+
+    let build_cascade = || {
+        let mut arr0 = make_test_dyn_array(1, 3, 3, 1);
+        arr0.rechannel_w_f32 = AlignedVec::from_vec(vec![0.5, -0.3, 0.8]).unwrap();
+        let mut arr1 = make_test_dyn_array(3, 4, 8, 1);
+        arr1.rechannel_w_f32 = AlignedVec::from_vec(vec![
+            0.1, 0.2, 0.3, -0.4, 0.5, -0.6, 0.7, -0.8, 0.9, -0.1, 0.2, -0.3,
+        ])
+        .unwrap();
+
+        let linear = LinearModel::new(
+            vec![0.5, -0.25, 0.125, 0.0625],
+            0.05,
+            crate::loader::nam_json::LinearImplementation::Direct,
+        )
+        .expect("linear cond_dsp");
+        let cond_dsp = Some(Box::new(StaticModel::Linear(Box::new(linear))));
+        WaveNetA2Cascade::try_new(vec![arr0, arr1], cond_dsp, 1).expect("cascade creation failed")
+    };
+
+    for num_frames in [512usize, 16384usize] {
+        let input: Vec<f32> = (0..num_frames)
+            .map(|i| (i as f32 * 0.05).sin() * 0.5)
+            .collect();
+
+        let mut c_full = build_cascade();
+        let mut out_full = vec![f32::NAN; num_frames * 8];
+        c_full.process(&input, &mut out_full);
+
+        let mut c_chunked = build_cascade();
+        let mut out_chunked = vec![0.0f32; num_frames * 8];
+        for (in_c, out_c) in input.chunks(64).zip(out_chunked.chunks_mut(64 * 8)) {
+            c_chunked.process(in_c, out_c);
+        }
+
+        for (i, (&a, &b)) in out_full.iter().zip(out_chunked.iter()).enumerate() {
+            assert_eq!(
+                a.to_bits(),
+                b.to_bits(),
+                "WaveNetA2Cascade len={num_frames} diverged at sample {i}: full={a}, chunked={b}"
+            );
+        }
+        assert!(out_full.iter().any(|&v| v != 0.0));
+    }
+}
+
+#[test]
+fn test_cascade_nam_model_trait_prewarm_step_polymorphic() {
+    use crate::models::NamModel;
+
+    let arr0 = make_test_dyn_array(1, 3, 3, 1);
+    let arr1 = make_test_dyn_array(3, 4, 8, 1);
+    let cascade =
+        WaveNetA2Cascade::try_new(vec![arr0, arr1], None, 1).expect("cascade creation failed");
+    let mut boxed: Box<dyn NamModel> = Box::new(cascade);
+
+    assert!(boxed.prewarm_complete());
+    boxed.prewarm_reset();
+    assert!(
+        !boxed.prewarm_complete(),
+        "NamModel::prewarm_reset must arm pending stabilization on WaveNetA2Cascade"
+    );
+
+    let first_rem = boxed.prewarm_step(64);
+    assert!(first_rem > 0);
+    let second_rem = boxed.prewarm_step(64);
+    assert!(
+        second_rem < first_rem,
+        "NamModel::prewarm_step(64) must advance monotonically ({first_rem} -> {second_rem})"
+    );
+
+    let mut steps = 0usize;
+    while !boxed.prewarm_complete() {
+        boxed.prewarm_step(64);
+        steps += 1;
+        assert!(steps < 1000, "prewarm_step failed to converge");
+    }
+    assert!(boxed.prewarm_complete());
+}

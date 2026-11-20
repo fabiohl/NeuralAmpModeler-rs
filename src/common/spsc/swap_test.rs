@@ -837,3 +837,186 @@ fn into_parts_returns_ring_and_parked_payload() {
     );
     assert_eq!(ring.occupied(), 0, "the ring end keeps its drained state");
 }
+
+/// F-RT-04: Strict FIFO causality across structural + scalar payloads under a
+/// tight structural budget, and gapless sequence ack invariant.
+///
+/// Enqueues `[S1(key=K1, seq=1), S2(key=K2, seq=2), Scalar(val=42, seq=3)]`
+/// with `swaps_per_callback = 1`:
+/// - Callback 1 installs `S1` only, parks `S2`, keeps `Scalar` queued in the
+///   ring behind `S2`, and acknowledges `seq == 1` (never `Scalar` nor `S2`).
+/// - Callback 2 installs `S2` **before** `Scalar`, with `seq == 3`.
+#[test]
+fn fifo_causality_across_parked_structural_and_scalar_with_gapless_ack() {
+    #[derive(Debug, PartialEq, Eq)]
+    enum OrderEvent {
+        Structural(u64),
+        Scalar(u64),
+    }
+
+    struct OrderHandler {
+        events: Vec<OrderEvent>,
+        discarded: Vec<u64>,
+    }
+
+    impl RtSwapHandler for OrderHandler {
+        type Payload = TestPayload;
+
+        fn is_structural(&self, payload: &Self::Payload) -> bool {
+            payload.kind != Kind::Scalar
+        }
+
+        fn coalesce_key(&self, payload: &Self::Payload) -> Option<u64> {
+            Some(payload.key)
+        }
+
+        fn current_generation(&self) -> Option<u64> {
+            Some(0)
+        }
+
+        fn generation_of(&self, payload: &Self::Payload) -> Option<u64> {
+            Some(payload.generation)
+        }
+
+        fn install(&mut self, payload: Box<Self::Payload>, _gc: &mut GcSink<'_>) {
+            match payload.kind {
+                Kind::Scalar => self.events.push(OrderEvent::Scalar(payload.id)),
+                Kind::Structural | Kind::Restore => {
+                    self.events.push(OrderEvent::Structural(payload.id))
+                }
+            }
+        }
+
+        fn discard(&mut self, payload: Box<Self::Payload>, _gc: &mut GcSink<'_>) {
+            self.discarded.push(payload.id);
+        }
+    }
+
+    let (mut prod, cons) = RingBuffer::new(8);
+    let log: Rc<RefCell<Vec<SeqEvent>>> = Rc::new(RefCell::new(Vec::new()));
+    let ring = SeqRing {
+        inner: cons,
+        processed: 0,
+        log: Rc::clone(&log),
+    };
+    let mut drain = RtSwapDrain::new(
+        ring,
+        SwapTunables {
+            pops_per_callback: 8,
+            swaps_per_callback: 1,
+            backlog_flag: false,
+        },
+    );
+
+    prod.push(TestPayload::structural(1, 10)).unwrap(); // S1 (key=10, seq=1)
+    prod.push(TestPayload::structural(2, 20)).unwrap(); // S2 (key=20, seq=2)
+    prod.push(TestPayload::scalar(42)).unwrap(); // Scalar (val=42, seq=3)
+
+    let mut parking_lot: [Option<GcItem>; 16] = std::array::from_fn(|_| None);
+    let overflow = GcOverflowBuffer::new(64);
+    let rt_status = RtStatusFlags::new();
+    let (mut gc_prod, gc_cons) = RingBuffer::new(64);
+    let mut handler = OrderHandler {
+        events: Vec::with_capacity(8),
+        discarded: Vec::with_capacity(8),
+    };
+
+    // Callback 1: S1 installs; S2 parks; Scalar stays queued; ack == 1.
+    {
+        let mut budget = SwapBudget::new(1);
+        let mut sink = GcSink {
+            producer: &mut gc_prod,
+            parking_lot: &mut parking_lot,
+            overflow: &overflow,
+            rt_status: &rt_status,
+            parking_lot_dirty: None,
+        };
+        drain.drain(&mut handler, &mut budget, &mut sink);
+    }
+    assert_eq!(handler.events, vec![OrderEvent::Structural(1)]);
+    assert!(drain.has_deferred());
+    assert!(!drain.is_empty(), "Scalar must stay queued behind S2");
+    assert_eq!(ring_net_seq(&log), 1, "ack must cover only S1");
+
+    // Callback 2: S2 installs before Scalar; ack == 3.
+    {
+        let mut budget = SwapBudget::new(1);
+        let mut sink = GcSink {
+            producer: &mut gc_prod,
+            parking_lot: &mut parking_lot,
+            overflow: &overflow,
+            rt_status: &rt_status,
+            parking_lot_dirty: None,
+        };
+        drain.drain(&mut handler, &mut budget, &mut sink);
+    }
+    assert_eq!(
+        handler.events,
+        vec![
+            OrderEvent::Structural(1),
+            OrderEvent::Structural(2),
+            OrderEvent::Scalar(42),
+        ],
+        "S2 must install strictly before Scalar"
+    );
+    assert!(!drain.has_deferred());
+    assert!(drain.is_empty());
+    assert_eq!(ring_net_seq(&log), 3);
+
+    // Also verify `[S1, S2, Stale]` keeps ack == 1 while S2 is parked.
+    let log2: Rc<RefCell<Vec<SeqEvent>>> = Rc::new(RefCell::new(Vec::new()));
+    let (mut prod2, cons2) = RingBuffer::new(8);
+    let mut drain2 = RtSwapDrain::new(
+        SeqRing {
+            inner: cons2,
+            processed: 0,
+            log: Rc::clone(&log2),
+        },
+        SwapTunables {
+            pops_per_callback: 8,
+            swaps_per_callback: 1,
+            backlog_flag: false,
+        },
+    );
+    prod2.push(TestPayload::structural(10, 1)).unwrap();
+    prod2.push(TestPayload::structural(20, 2)).unwrap();
+    prod2.push(TestPayload::stale(30, 3, 99)).unwrap();
+    let mut handler2 = OrderHandler {
+        events: Vec::with_capacity(8),
+        discarded: Vec::with_capacity(8),
+    };
+    {
+        let mut budget = SwapBudget::new(1);
+        let mut sink = GcSink {
+            producer: &mut gc_prod,
+            parking_lot: &mut parking_lot,
+            overflow: &overflow,
+            rt_status: &rt_status,
+            parking_lot_dirty: None,
+        };
+        drain2.drain(&mut handler2, &mut budget, &mut sink);
+    }
+    assert_eq!(handler2.events, vec![OrderEvent::Structural(10)]);
+    assert!(handler2.discarded.is_empty());
+    assert_eq!(ring_net_seq(&log2), 1, "stale tail must not shift ack");
+
+    {
+        let mut budget = SwapBudget::new(1);
+        let mut sink = GcSink {
+            producer: &mut gc_prod,
+            parking_lot: &mut parking_lot,
+            overflow: &overflow,
+            rt_status: &rt_status,
+            parking_lot_dirty: None,
+        };
+        drain2.drain(&mut handler2, &mut budget, &mut sink);
+    }
+    assert_eq!(
+        handler2.events,
+        vec![OrderEvent::Structural(10), OrderEvent::Structural(20)]
+    );
+    assert_eq!(handler2.discarded, vec![30]);
+    assert_eq!(ring_net_seq(&log2), 3);
+
+    drop(gc_cons);
+}

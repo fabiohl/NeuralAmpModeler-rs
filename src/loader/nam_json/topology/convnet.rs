@@ -308,6 +308,16 @@ pub fn get_convnet_topology(data: &NamModelData) -> Result<Option<ConvNetTopolog
     if layers.is_empty() {
         return Ok(None);
     }
+    if layers.len() > MAX_DILATIONS_PER_ARRAY {
+        return Err(TopologyError {
+            code: NamErrorCode::InvalidModelTopology,
+            reason: format!(
+                "ConvNet layers format: {} blocks exceeds maximum {MAX_DILATIONS_PER_ARRAY} \
+                 — OOM/DoS protection",
+                layers.len()
+            ),
+        });
+    }
 
     let mut channels = Vec::with_capacity(layers.len());
     let mut kernel_sizes = Vec::with_capacity(layers.len());
@@ -363,37 +373,34 @@ pub fn get_convnet_topology(data: &NamModelData) -> Result<Option<ConvNetTopolog
             }
         };
         let d = match layer.dilations.as_deref() {
-            Some(d) if !d.is_empty() => {
-                if d.len() > MAX_DILATIONS_PER_ARRAY {
+            Some(d) if d.len() == 1 => {
+                let dil = d[0];
+                if dil == 0 {
+                    return Err(TopologyError {
+                        code: NamErrorCode::InvalidModelTopology,
+                        reason: format!("ConvNet block {i} dilation[0] is 0 — invalid dilation"),
+                    });
+                }
+                if dil > MAX_DILATION {
                     return Err(TopologyError {
                         code: NamErrorCode::InvalidModelTopology,
                         reason: format!(
-                            "ConvNet block {i}: {} dilations exceeds maximum \
-                             {MAX_DILATIONS_PER_ARRAY} — OOM/DoS protection",
-                            d.len()
+                            "ConvNet block {i} dilation[0] ({dil}) exceeds maximum \
+                             {MAX_DILATION} — OOM/DoS protection"
                         ),
                     });
                 }
-                for (j, &dil) in d.iter().enumerate() {
-                    if dil == 0 {
-                        return Err(TopologyError {
-                            code: NamErrorCode::InvalidModelTopology,
-                            reason: format!(
-                                "ConvNet block {i} dilation[{j}] is 0 — invalid dilation"
-                            ),
-                        });
-                    }
-                    if dil > MAX_DILATION {
-                        return Err(TopologyError {
-                            code: NamErrorCode::InvalidModelTopology,
-                            reason: format!(
-                                "ConvNet block {i} dilation[{j}] ({dil}) exceeds maximum \
-                                 {MAX_DILATION} — OOM/DoS protection"
-                            ),
-                        });
-                    }
-                }
-                d.to_vec()
+                vec![dil]
+            }
+            Some(d) if !d.is_empty() => {
+                return Err(TopologyError {
+                    code: NamErrorCode::InvalidModelTopology,
+                    reason: format!(
+                        "ConvNet block {i}: Layers format supports exactly 1 dilation per layer, \
+                         got {} (multi-dilation blocks belong to FlatCpp or per-block layers)",
+                        d.len()
+                    ),
+                });
             }
             _ => {
                 return Err(TopologyError {

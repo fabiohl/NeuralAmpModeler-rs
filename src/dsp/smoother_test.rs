@@ -88,3 +88,39 @@ fn test_smoother_relative_threshold() {
     }
     assert!(converged, "Should converge to 0.001");
 }
+
+#[test]
+fn test_smoother_rejects_non_finite_and_recovers() {
+    for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        let mut s = ParamSmoother::new(bad, 48000.0, 20.0);
+        assert_eq!(s.current_value(), 0.0);
+        assert_eq!(s.target_value(), 0.0);
+        assert!(s.tick().is_finite());
+
+        let mut s_alpha = ParamSmoother::new(1.0, bad, 20.0);
+        assert_eq!(s_alpha.alpha(), 1.0);
+        s_alpha.set_target(0.5);
+        assert_eq!(s_alpha.tick(), 0.5);
+
+        let mut s_cutoff = ParamSmoother::new(1.0, 48000.0, bad);
+        assert_eq!(s_cutoff.alpha(), 1.0);
+        assert!(s_cutoff.tick().is_finite());
+
+        s.set_target(0.75);
+        s.set(0.25);
+        s.set_target(bad);
+        s.set(bad);
+        assert_eq!(s.target_value(), 0.75);
+        assert_eq!(s.current_value(), 0.25);
+        let ticked = s.tick();
+        assert!(ticked.is_finite());
+        assert!(ticked > 0.25 && ticked <= 0.75);
+    }
+
+    // Even if current were corrupted directly (in-crate whitebox test), tick() recovers cleanly.
+    let mut corrupted = ParamSmoother::new(1.0, 48000.0, 20.0);
+    corrupted.current = f32::NAN;
+    let recovered = corrupted.tick();
+    assert_eq!(recovered, 1.0);
+    assert!(corrupted.current_value().is_finite());
+}

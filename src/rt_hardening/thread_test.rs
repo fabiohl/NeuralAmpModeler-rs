@@ -167,6 +167,29 @@ fn test_affinity_out_of_range_records_sentinel() {
 }
 
 #[test]
+fn test_affinity_success_and_error_update_rt_status_telemetry() {
+    let flags = RtStatusFlags::new();
+    flags.rt_affinity_err.store(-1, Ordering::Relaxed);
+    flags.rt_target_cpu.store(-1, Ordering::Relaxed);
+
+    let ok_cfg = MockConfigurator::other();
+    assert!(set_cpu_affinity_with(5, &flags, &ok_cfg).is_ok());
+    assert_eq!(flags.rt_target_cpu.load(Ordering::Relaxed), 5);
+    assert_eq!(flags.rt_affinity_err.load(Ordering::Relaxed), 0);
+
+    let err_cfg = MockConfigurator {
+        policy: libc::SCHED_OTHER,
+        priority: 0,
+        getsched_err: None,
+        setsched_ret: 0,
+        affinity_ret: libc::EPERM,
+    };
+    assert_eq!(set_cpu_affinity_with(7, &flags, &err_cfg), Err(libc::EPERM));
+    assert_eq!(flags.rt_target_cpu.load(Ordering::Relaxed), 7);
+    assert_eq!(flags.rt_affinity_err.load(Ordering::Relaxed), libc::EPERM);
+}
+
+#[test]
 fn test_promote_keeps_fifo_without_elevation() {
     let flags = RtStatusFlags::new();
     let cfg = MockConfigurator {

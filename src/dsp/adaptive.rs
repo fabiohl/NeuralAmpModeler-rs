@@ -671,6 +671,40 @@ impl AdaptiveCompute {
         }
     }
 
+    /// Returns `(t_start, t_end)` for per-sample crossfade ramp interpolation
+    /// over `frame_advance` host-rate samples without mutating the crossfade clock.
+    ///
+    /// During an active crossfade, `t_end` equals the `t_start` of the next
+    /// block when `crossfade_multiplier` advances the clock by `frame_advance`
+    /// at the end of the output stage.
+    #[inline(always)]
+    pub fn crossfade_ramp_bounds(&self, frame_advance: usize) -> (f32, f32) {
+        match self.crossfade {
+            CrossfadePhase::Idle => {
+                if self.state() == AdaptiveState::Full {
+                    (0.0, 0.0)
+                } else {
+                    (1.0, 1.0)
+                }
+            }
+            CrossfadePhase::Active => {
+                let total = self.crossfade_total;
+                if total == 0 {
+                    (1.0, 1.0)
+                } else {
+                    let t_start = (self.crossfade_elapsed as f32 / total as f32).min(1.0);
+                    let t_end = (self
+                        .crossfade_elapsed
+                        .saturating_add(frame_advance)
+                        .min(total) as f32
+                        / total as f32)
+                        .min(1.0);
+                    (t_start, t_end)
+                }
+            }
+        }
+    }
+
     /// Returns the fraction of WaveNet layers to skip for a given state: 0.0 (Full), 0.25 (Reduced), 0.50 (Minimal).
     #[inline(always)]
     pub fn wavenet_skip_fraction_for_state(&self, state: AdaptiveState) -> f32 {

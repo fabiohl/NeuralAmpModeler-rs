@@ -738,4 +738,31 @@ mod tests {
         // Idempotent
         assert_eq!(adaptive.take_slimmable_rebuild(), None);
     }
+
+    #[test]
+    fn crossfade_ramp_bounds_are_continuous_across_blocks() {
+        let flags = rt_flags();
+        let mut adaptive = AdaptiveCompute::new(AdaptiveComputeMode::Conservative);
+        let budget = 1000;
+
+        assert_eq!(adaptive.crossfade_ramp_bounds(256), (0.0, 0.0));
+
+        // Transition Full -> Reduced
+        for _ in 0..3 {
+            adaptive.update(above_threshold(budget, 0.71), budget, 48_000, &flags);
+        }
+        assert!(adaptive.is_crossfading());
+
+        let (s0, e0) = adaptive.crossfade_ramp_bounds(256);
+        assert_eq!(s0, 0.0);
+        assert!(e0 > s0 && e0 < 1.0);
+        // Does not mutate the clock
+        assert_eq!(adaptive.crossfade_ramp_bounds(256), (s0, e0));
+
+        // Advance as output stage does, and check continuity into block 1
+        let _ = adaptive.crossfade_multiplier(48_000, 256);
+        let (s1, e1) = adaptive.crossfade_ramp_bounds(256);
+        assert!((s1 - e0).abs() < 1e-7, "t_end(0)={e0} != t_start(1)={s1}");
+        assert!(e1 > s1);
+    }
 }

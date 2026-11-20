@@ -1086,107 +1086,107 @@ fn test_a2_max_weight_budget_818_1052() {
     };
 
     // --- Per-component checkpoints: rechannel ---
-    let rechannel_expected = wad.input_channels * wad.channels;
+    let rechannel_expected = wad.input_channels() * wad.channels();
     assert_eq!(
-        wad.rechannel_w_f32.len(),
+        wad.rechannel_w_f32().len(),
         rechannel_expected,
         "rechannel weight count mismatch"
     );
 
     // --- Per-component checkpoints: layers ---
-    for (li, layer) in wad.layers.iter().enumerate() {
-        let ch = wad.channels;
-        let bn = wad.bottleneck;
+    for (li, layer) in wad.layers().iter().enumerate() {
+        let ch = wad.channels();
+        let bn = wad.bottleneck();
         let use_gating = matches!(
-            wad.gating_modes[li],
+            wad.gating_modes()[li],
             GatingMode::Gated | GatingMode::Blended
         );
         let conv_out = if use_gating { bn * 2 } else { bn };
         // mixin_w: group-aware compact
-        let mg = wad.mixin_groups.max(1);
-        let mixin_in_pg = wad.condition_size / mg as usize;
+        let mg = wad.mixin_groups().max(1);
+        let mixin_in_pg = wad.condition_size() / mg as usize;
         let mixin_count = conv_out * mixin_in_pg;
         assert_eq!(
-            layer.mixin_w.len(),
+            layer.mixin_w().len(),
             mixin_count,
             "layer[{li}].mixin_w size mismatch"
         );
 
         // l1x1: group-aware compact
-        let lg = wad.l1x1_groups.max(1);
+        let lg = wad.l1x1_groups().max(1);
         let l1x1_in_pg = bn / lg as usize;
         let l1x1_w_count = if lg > 1 { ch * l1x1_in_pg } else { bn * ch };
         assert_eq!(
-            layer.l1x1_w.len(),
+            layer.l1x1_w().len(),
             l1x1_w_count,
             "layer[{li}].l1x1_w size mismatch"
         );
-        assert_eq!(layer.l1x1_b.len(), ch, "layer[{li}].l1x1_b size mismatch");
+        assert_eq!(layer.l1x1_b().len(), ch, "layer[{li}].l1x1_b size mismatch");
 
         // head1x1
-        if wad.head1x1_active {
-            let h1_w_count = wad.head_accum_size * wad.head1x1_h1_in;
+        if wad.head1x1_active() {
+            let h1_w_count = wad.head_accum_size() * wad.head1x1_h1_in();
             assert!(
-                layer.head1x1_w.len() == h1_w_count,
+                layer.head1x1_w().len() == h1_w_count,
                 "layer[{li}].head1x1_w size mismatch: expected {h1_w_count}, got {}",
-                layer.head1x1_w.len()
+                layer.head1x1_w().len()
             );
             assert!(
-                layer.head1x1_b.len() == wad.head_accum_size,
+                layer.head1x1_b().len() == wad.head_accum_size(),
                 "layer[{li}].head1x1_b size mismatch"
             );
         }
 
         // Verify FiLM layers are present where expected
         assert!(
-            layer.conv_pre_film.is_some(),
+            layer.conv_pre_film().is_some(),
             "layer[{li}].conv_pre_film must be loaded"
         );
         assert!(
-            layer.input_mixin_post_film.is_some(),
+            layer.input_mixin_post_film().is_some(),
             "layer[{li}].input_mixin_post_film must be loaded"
         );
         assert!(
-            layer.activation_pre_film.is_some(),
+            layer.activation_pre_film().is_some(),
             "layer[{li}].activation_pre_film must be loaded"
         );
         assert!(
-            layer.layer1x1_post_film.is_some(),
+            layer.layer1x1_post_film().is_some(),
             "layer[{li}].layer1x1_post_film must be loaded"
         );
         assert!(
-            layer.head1x1_post_film.is_some(),
+            layer.head1x1_post_film().is_some(),
             "layer[{li}].head1x1_post_film must be loaded"
         );
 
         // FiLM check: conv_post_film should exist (active in JSON)
         assert!(
-            layer.conv_post_film.is_some(),
+            layer.conv_post_film().is_some(),
             "layer[{li}].conv_post_film must be loaded"
         );
     }
 
     // --- Head budget ---
-    let head_size = wad.head_size;
+    let head_size = wad.head_size();
     if head_size == 1 {
         assert!(
-            wad.head_conv.is_some(),
+            wad.head_conv().is_some(),
             "head_conv must be built for head_size=1"
         );
     } else {
-        let per_oc_w = wad.head_kernel_size * wad.head_accum_size;
+        let per_oc_w = wad.head_kernel_size() * wad.head_accum_size();
         assert_eq!(
-            wad.head_rechannel_w.len(),
+            wad.head_rechannel_w().len(),
             head_size * per_oc_w,
             "head_rechannel_w size mismatch"
         );
         assert_eq!(
-            wad.head_rechannel_b.len(),
+            wad.head_rechannel_b().len(),
             head_size,
             "head_rechannel_b size mismatch"
         );
         assert_eq!(
-            wad.head_rechannel_scale.len(),
+            wad.head_rechannel_scale().len(),
             head_size,
             "head_rechannel_scale size mismatch"
         );
@@ -1194,11 +1194,11 @@ fn test_a2_max_weight_budget_818_1052() {
 
     // --- condition_dsp built and verified bit-exact ---
     assert!(
-        wad.condition_dsp.is_some(),
+        wad.condition_dsp().is_some(),
         "A2 Max condition_dsp must be built"
     );
-    let cond_dsp = wad.condition_dsp.as_ref().unwrap();
-    let cond_cascade = match &**cond_dsp {
+    let cond_dsp = wad.condition_dsp().unwrap();
+    let cond_cascade = match cond_dsp {
         StaticModel::WavenetA2Cascade(casc) => casc,
         _ => panic!("Expected condition_dsp to be WavenetA2Cascade"),
     };
@@ -1214,24 +1214,24 @@ fn test_a2_max_weight_budget_818_1052() {
     );
 
     // Array 0: channels=3, head_size=4, head_bias=false
-    assert_eq!(cond_cascade.arrays[0].channels, 3);
-    assert_eq!(cond_cascade.arrays[0].head_size, 4);
-    assert!(!cond_cascade.arrays[0].head_bias);
+    assert_eq!(cond_cascade.arrays[0].channels(), 3);
+    assert_eq!(cond_cascade.arrays[0].head_size(), 4);
+    assert!(!cond_cascade.arrays[0].head_bias());
     assert_eq!(
-        &cond_cascade.arrays[0].head_rechannel_b[..],
+        cond_cascade.arrays[0].head_rechannel_b(),
         &[0.0, 0.0, 0.0, 0.0]
     );
     assert_eq!(
-        &cond_cascade.arrays[0].head_rechannel_scale[..],
+        cond_cascade.arrays[0].head_rechannel_scale(),
         &[1.0, 1.0, 1.0, 1.0]
     );
 
     // Array 1: channels=4, head_size=8, head_bias=false
-    assert_eq!(cond_cascade.arrays[1].channels, 4);
-    assert_eq!(cond_cascade.arrays[1].head_size, 8);
-    assert!(!cond_cascade.arrays[1].head_bias);
-    assert_eq!(&cond_cascade.arrays[1].head_rechannel_b[..], &[0.0; 8]);
-    assert_eq!(&cond_cascade.arrays[1].head_rechannel_scale[..], &[1.0; 8]);
+    assert_eq!(cond_cascade.arrays[1].channels(), 4);
+    assert_eq!(cond_cascade.arrays[1].head_size(), 8);
+    assert!(!cond_cascade.arrays[1].head_bias());
+    assert_eq!(cond_cascade.arrays[1].head_rechannel_b(), &[0.0; 8]);
+    assert_eq!(cond_cascade.arrays[1].head_rechannel_scale(), &[1.0; 8]);
 }
 
 /// Checkpoints FiLM por slot (H6).
@@ -1266,16 +1266,16 @@ fn test_a2_max_film_slot_budget() {
         _ => panic!("Expected WavenetA2Dyn variant"),
     };
 
-    let ch = wad.channels;
-    let bn = wad.bottleneck;
-    let cond_size = wad.condition_size;
+    let ch = wad.channels();
+    let bn = wad.bottleneck();
+    let cond_size = wad.condition_size();
     let k = wad
-        .layers
+        .layers()
         .first()
-        .map(|l| l.conv.kernel_size())
+        .map(|l| l.conv().kernel_size())
         .unwrap_or(0);
     let conv_out: usize = wad
-        .gating_modes
+        .gating_modes()
         .first()
         .map(|g| match g {
             neural_amp_modeler_rs::models::a2::gating::GatingMode::Gated
@@ -1283,22 +1283,23 @@ fn test_a2_max_film_slot_budget() {
             _ => bn,
         })
         .unwrap_or(bn);
-    let mg = (wad.mixin_groups as usize).max(1);
-    let lg = (wad.l1x1_groups as usize).max(1);
-    let h1_w_count = wad.head_accum_size * wad.head1x1_h1_in;
-    let num_layers = wad.num_layers;
-    let head_k = wad.head_kernel_size;
+    let mg = (wad.mixin_groups() as usize).max(1);
+    let lg = (wad.l1x1_groups() as usize).max(1);
+    let h1_w_count = wad.head_accum_size() * wad.head1x1_h1_in();
+    let num_layers = wad.num_layers();
+    let head_k = wad.head_kernel_size();
 
     println!(
         "// Topology: CH={ch} BN={bn} cond={cond_size} K={k} conv_out={conv_out} layers={num_layers}"
     );
     println!(
         "// mixin_groups={mg} l1x1_groups={lg} head1x1_active={}",
-        wad.head1x1_active
+        wad.head1x1_active()
     );
     println!(
         "// head_accum_size={} head1x1_h1_in={} head_kernel_size={head_k}",
-        wad.head_accum_size, wad.head1x1_h1_in
+        wad.head_accum_size(),
+        wad.head1x1_h1_in()
     );
 
     // ── Helper: FiLM weight/bias formulas (replicated from weights_layout::pub(crate)) ──
@@ -1338,14 +1339,14 @@ fn test_a2_max_film_slot_budget() {
         idx: usize,
     ) -> Option<&neural_amp_modeler_rs::models::a2::film::FiLMLayer> {
         match idx {
-            0 => layer.conv_pre_film.as_ref(),
-            1 => layer.conv_post_film.as_ref(),
-            2 => layer.input_mixin_pre_film.as_ref(),
-            3 => layer.input_mixin_post_film.as_ref(),
-            4 => layer.activation_pre_film.as_ref(),
-            5 => layer.activation_post_film.as_ref(),
-            6 => layer.layer1x1_post_film.as_ref(),
-            7 => layer.head1x1_post_film.as_ref(),
+            0 => layer.conv_pre_film(),
+            1 => layer.conv_post_film(),
+            2 => layer.input_mixin_pre_film(),
+            3 => layer.input_mixin_post_film(),
+            4 => layer.activation_pre_film(),
+            5 => layer.activation_post_film(),
+            6 => layer.layer1x1_post_film(),
+            7 => layer.head1x1_post_film(),
             _ => None,
         }
     }
@@ -1354,7 +1355,7 @@ fn test_a2_max_film_slot_budget() {
     let mut running_sum = 0usize;
 
     // 1) Rechannel
-    let rc_count = wad.input_channels * ch;
+    let rc_count = wad.input_channels() * ch;
     let rc_offset = stream_pos;
     stream_pos += rc_count;
     running_sum += rc_count;
@@ -1367,7 +1368,7 @@ fn test_a2_max_film_slot_budget() {
     let mut total_film_b = 0usize;
 
     for li in 0..num_layers {
-        let layer = &wad.layers[li];
+        let layer = &wad.layers()[li];
 
         // conv_w
         let conv_w_cnt = ch * bn * k;
@@ -1421,7 +1422,7 @@ fn test_a2_max_film_slot_budget() {
         println!("  l{li} head1x1_w     offset={h1_w_off:>4} w={h1_w_count:>4} sum={running_sum}");
 
         // head1x1_b
-        let h1_b_cnt = wad.head_accum_size;
+        let h1_b_cnt = wad.head_accum_size();
         let h1_b_off = stream_pos;
         stream_pos += h1_b_cnt;
         running_sum += h1_b_cnt;
@@ -1430,7 +1431,7 @@ fn test_a2_max_film_slot_budget() {
         // FiLM slots 0-7
         for slot_idx in 0..8 {
             let (slot_name, film_channels) =
-                slot_info(slot_idx, wad.head_accum_size, cond_size, ch);
+                slot_info(slot_idx, wad.head_accum_size(), cond_size, ch);
 
             if let Some(film) = get_film(layer, slot_idx) {
                 let groups = film.config.groups as usize;
@@ -1474,8 +1475,8 @@ fn test_a2_max_film_slot_budget() {
     }
 
     // 3) Head conv + bias + scale
-    if wad.head_size == 1 {
-        let hc = wad.head_conv.as_ref().expect("head_conv must exist");
+    if wad.head_size() == 1 {
+        let hc = wad.head_conv().expect("head_conv must exist");
         let head_w_cnt = hc.head_w.len();
         let head_w_off = stream_pos;
         stream_pos += head_w_cnt;
@@ -1488,14 +1489,14 @@ fn test_a2_max_film_slot_budget() {
         running_sum += head_b_cnt;
         println!("  [head_conv_b]     offset={head_b_off:>4} w={head_b_cnt:>4} sum={running_sum}");
     } else {
-        let per_oc = head_k * wad.head_accum_size;
-        let hw_cnt = wad.head_size * per_oc;
+        let per_oc = head_k * wad.head_accum_size();
+        let hw_cnt = wad.head_size() * per_oc;
         let hw_off = stream_pos;
         stream_pos += hw_cnt;
         running_sum += hw_cnt;
         println!("  [head_rechannel_w] offset={hw_off:>4} w={hw_cnt:>4} sum={running_sum}");
 
-        let hb_cnt = wad.head_size;
+        let hb_cnt = wad.head_size();
         let hb_off = stream_pos;
         stream_pos += hb_cnt;
         running_sum += hb_cnt;
@@ -1542,10 +1543,10 @@ fn test_a2_max_film_slot_budget() {
     // ── Per-slot formula verification ──
     let mut slot_mismatches = 0usize;
     for &(li, _slot_idx, slot_name, _groups, _shift, exp_w, exp_b, _offset) in &film_table {
-        let layer = &wad.layers[li];
+        let layer = &wad.layers()[li];
         let _film_channels = match _slot_idx {
             2 => cond_size,
-            7 => wad.head_accum_size,
+            7 => wad.head_accum_size(),
             _ => ch,
         };
         let film = get_film(layer, _slot_idx);
@@ -1776,7 +1777,7 @@ fn test_slimmable_wavenet_inference_and_breakpoints() {
             StaticModel::WavenetDyn(w) => w.clone_exact(),
             _ => panic!("Expected WavenetDyn"),
         };
-        let mut slim_model = if base_model.ch != target_ch {
+        let mut slim_model = if base_model.ch() != target_ch {
             base_model.slice_channels(target_ch).unwrap_or_else(|e| {
                 panic!("Failed to slice model to CH={target_ch}: {e}");
             })
@@ -1826,13 +1827,13 @@ fn test_slimmable_wavenet_inference_and_breakpoints() {
     };
     let mut model2 = StaticModel::WavenetDyn(model2);
     if let StaticModel::WavenetDyn(w) = &mut model2 {
-        assert!(w.pending_slim_channel.is_none());
-        assert!(w.allowed_channels.is_some());
+        assert!(w.pending_slim_channel().is_none());
+        assert!(w.allowed_channels().is_some());
 
         w.set_slimmable_size(0.0, None);
         assert_eq!(
-            w.pending_slim_channel,
-            Some(vec![1]),
+            w.pending_slim_channel(),
+            Some([1].as_slice()),
             "quality 0.0 should select lowest tier CH=1"
         );
 
@@ -1841,22 +1842,22 @@ fn test_slimmable_wavenet_inference_and_breakpoints() {
         // selected CH=2 here.
         w.set_slimmable_size(0.30, None);
         assert_eq!(
-            w.pending_slim_channel,
-            Some(vec![1]),
+            w.pending_slim_channel(),
+            Some([1].as_slice()),
             "quality 0.30 should select lowest tier CH=1"
         );
 
         w.set_slimmable_size(0.5, None);
         assert_eq!(
-            w.pending_slim_channel,
-            Some(vec![2]),
+            w.pending_slim_channel(),
+            Some([2].as_slice()),
             "quality 0.5 should select middle tier CH=2"
         );
 
         w.set_slimmable_size(1.0, None);
         assert_eq!(
-            w.pending_slim_channel,
-            Some(vec![3]),
+            w.pending_slim_channel(),
+            Some([3].as_slice()),
             "quality 1.0 should select highest tier CH=3"
         );
     } else {
@@ -3684,13 +3685,10 @@ fn test_tr2b2_condition_dsp_contract() {
         other => panic!("Expected WavenetA2Dyn, got {:?}", other.class_label()),
     };
 
-    let cond_dsp = wad
-        .condition_dsp
-        .as_ref()
-        .expect("A2 Max must have condition_dsp");
+    let cond_dsp = wad.condition_dsp().expect("A2 Max must have condition_dsp");
 
     let dsp_ch = cond_dsp.num_output_channels();
-    let cond_size = wad.condition_size;
+    let cond_size = wad.condition_size();
 
     assert_eq!(
         cond_size, 8,
@@ -3701,7 +3699,7 @@ fn test_tr2b2_condition_dsp_contract() {
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // (a) Enum variant of nested condition_dsp
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    let variant_label = match cond_dsp.as_ref() {
+    let variant_label = match cond_dsp {
         StaticModel::WavenetStandard(_) => "WavenetStandard",
         StaticModel::WavenetLite(_) => "WavenetLite",
         StaticModel::WavenetFeather(_) => "WavenetFeather",
@@ -3710,7 +3708,7 @@ fn test_tr2b2_condition_dsp_contract() {
         StaticModel::WavenetA2Lite(_) => "WavenetA2Lite",
         StaticModel::WavenetA2Dyn(_) => "WavenetA2Dyn",
         StaticModel::WavenetA2Cascade(m) => {
-            let inner_head = m.arrays.first().map(|a| a.head_size).unwrap_or(0);
+            let inner_head = m.arrays.first().map(|a| a.head_size()).unwrap_or(0);
             println!(
                 "// Measured: cond_dsp is WavenetA2Cascade ({} arrays, array[0].head_size={})",
                 m.arrays.len(),
@@ -3719,10 +3717,10 @@ fn test_tr2b2_condition_dsp_contract() {
             "WavenetA2Cascade"
         }
         StaticModel::WavenetDyn(m) => {
-            let last_head = m.arrays.last().map(|a| a.head).unwrap_or(0);
+            let last_head = m.arrays().last().map(|a| a.head()).unwrap_or(0);
             println!(
                 "// Measured: cond_dsp is WavenetDyn ({} arrays, last.head={})",
-                m.arrays.len(),
+                m.arrays().len(),
                 last_head
             );
             "WavenetDyn"

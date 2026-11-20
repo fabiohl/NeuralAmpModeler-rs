@@ -158,6 +158,18 @@ macro_rules! impl_avx512vnni_bf16_dsp {
         }
 
         #[inline(always)]
+        // SAFETY: out and pending are valid f32 slices; t_start/t_step are finite f32;
+        // CPU supports AVX-512 VNNI+BF16.
+        unsafe fn crossfade_blend_ramp_mono(
+            out: &mut [f32],
+            pending: &[f32],
+            t_start: f32,
+            t_step: f32,
+        ) {
+            Avx512Math::crossfade_blend_ramp_mono(out, pending, t_start, t_step)
+        }
+
+        #[inline(always)]
         // SAFETY: all 6 slices are valid f32 slices of equal length;
         // CPU supports AVX-512 VNNI+BF16 (verified by dispatch).
         unsafe fn complex_mac_overwrite(

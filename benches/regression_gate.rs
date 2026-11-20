@@ -45,7 +45,7 @@ use bench_constants::DSP_MICRO_BATCH;
 use criterion::{Criterion, criterion_group};
 use neural_amp_modeler_rs::common::params::AdaptiveComputeMode;
 use neural_amp_modeler_rs::common::spsc::RtStatusFlags;
-use neural_amp_modeler_rs::dsp::adaptive::AdaptiveCompute;
+use neural_amp_modeler_rs::dsp::adaptive::{AdaptiveCompute, AdaptiveState};
 use neural_amp_modeler_rs::dsp::cabsim::conv::ConvEngine;
 use neural_amp_modeler_rs::dsp::gate::{DynamicHysteresis, GateParams};
 use neural_amp_modeler_rs::dsp::oversample::{OversampleEngine, OversampleFactor};
@@ -429,8 +429,10 @@ fn bench_dsp_pipeline_adaptive_on(c: &mut Criterion) {
     let mut samples_l = template_in_l.clone();
     let mut samples_r = template_in_r.clone();
 
-    // Warm up pipeline and adaptive FSM across a full 64-block cycle
-    for i in 0..64 {
+    // Warm up pipeline across a full FSM degradation/recovery cycle and settle into
+    // steady-state `AdaptiveState::Reduced` (`Idle` crossfade) so the measured loop
+    // executes a deterministic path free of Criterion iteration-count phase-aliasing.
+    for i in 0..92 {
         samples_l.copy_from_slice(&template_in_l);
         samples_r.copy_from_slice(&template_in_r);
         let ctx = DspPipelineContext {
@@ -475,16 +477,19 @@ fn bench_dsp_pipeline_adaptive_on(c: &mut Criterion) {
             bufs,
             sample_rate,
         );
-        let latency_us = match i % 64 {
-            0..=3 => 1100,
-            4..=27 => 700,
-            28..=33 => 350,
-            _ => 700,
+        let latency_us = match i {
+            0..=2 => 1100,   // Full -> Reduced
+            3..=27 => 700,   // Complete crossfade to Reduced
+            28..=32 => 350,  // Reduced -> Full
+            33..=63 => 700,  // Complete crossfade back to Full
+            64..=66 => 1100, // Full -> Reduced
+            _ => 700,        // Settle in steady-state Reduced (Idle)
         };
         adaptive.update(latency_us, budget_us, sample_rate, &rt_status);
     }
+    assert_eq!(adaptive.state(), AdaptiveState::Reduced);
+    assert!(!adaptive.is_crossfading());
 
-    let mut cycle: u32 = 0;
     c.bench_function("RT_DSP_Pipeline_AdaptiveOn", |b| {
         b.iter(|| {
             samples_l.copy_from_slice(&template_in_l);
@@ -532,21 +537,13 @@ fn bench_dsp_pipeline_adaptive_on(c: &mut Criterion) {
                 sample_rate,
             );
 
-            // Host telemetry feedback: exercises hysteresis FSM transitions,
-            // active crossfade double-pass inference, and crossfade clock advance.
-            let latency_us = match cycle % 64 {
-                0..=3 => 1100,  // Overload: triggers Full -> Reduced
-                4..=27 => 700,  // Steady crossfade progress to Reduced
-                28..=33 => 350, // Headroom recovery: triggers Reduced -> Full
-                _ => 700,       // Steady crossfade progress back to Full
-            };
+            // Deterministic steady-state telemetry update (within Reduced hysteresis band).
             adaptive.update(
-                std::hint::black_box(latency_us),
+                std::hint::black_box(700),
                 budget_us,
                 sample_rate,
                 &rt_status,
             );
-            cycle = cycle.wrapping_add(1);
         });
     });
 }

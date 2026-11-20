@@ -13,8 +13,12 @@ use crate::arch::simd::{
     _mm256_storeu_ps,
 };
 
-/// Per-frame inner core: conv, FiLM, mixin, activation/gating/blending,
-/// head accumulation, and l1x1 residual for a single frame in one layer.
+/// Per-frame inner core: optional dilated conv (`DO_CONV = true`), FiLM, mixin,
+/// activation/gating/blending, head accumulation, and l1x1 residual for a single
+/// frame in one layer.
+///
+/// When `DO_CONV` is `false`, the caller has already populated `z_scratch[..z_out_ch]`
+/// via a block-tiled convolution kernel and only the post-conv pipeline executes.
 ///
 /// `M` is the ISA monomorphization type propagated from the top-level
 /// `dispatch_simd!` in [`WaveNetA2Dyn::process`](super::WaveNetA2Dyn::process).
@@ -24,7 +28,7 @@ use crate::arch::simd::{
     reason = "Audio DSP kernel with many dimension parameters and explicit SIMD indexing — struct consolidation would add indirection overhead in the hot path"
 )]
 #[inline(always)]
-pub(crate) unsafe fn process_frame_dyn<M: SimdMath>(
+pub(crate) unsafe fn process_frame_dyn<M: SimdMath, const DO_CONV: bool>(
     layer: &mut A2Layer,
     history: &[f32],
     f: usize,
@@ -52,7 +56,6 @@ pub(crate) unsafe fn process_frame_dyn<M: SimdMath>(
     cond_size: usize,
     is_hf: bool,
 ) {
-    let frame_idx = max_lookback_cols + f;
     let cond_slice = &cond_buf[f * cond_size..(f + 1) * cond_size];
 
     #[expect(
@@ -61,16 +64,22 @@ pub(crate) unsafe fn process_frame_dyn<M: SimdMath>(
     )]
     let mut z_len = z_out_ch;
 
-    // 1. Dilated conv → z_scratch.
-    // SAFETY: `process_single_frame::<M>` is an `unsafe fn`; its preconditions hold:
-    // `history` spans `bs - lookback .. bs + nf*channels` (buffer start already
-    // advanced with wrap), `z_scratch[..z_out_ch]` has length ≥ the conv's out channels,
-    // `frame_idx = max_lookback_cols + f` allows the kernel lookback taps, and `M`
-    // matches the CPU ISA (top-level `dispatch_simd!`).
-    unsafe {
-        layer
-            .conv
-            .process_single_frame::<M>(history, &mut z_scratch[..z_out_ch], frame_idx, None);
+    if DO_CONV {
+        let frame_idx = max_lookback_cols + f;
+        // 1. Dilated conv → z_scratch.
+        // SAFETY: `process_single_frame::<M>` is an `unsafe fn`; its preconditions hold:
+        // `history` spans `bs - lookback .. bs + nf*channels` (buffer start already
+        // advanced with wrap), `z_scratch[..z_out_ch]` has length ≥ the conv's out channels,
+        // `frame_idx = max_lookback_cols + f` allows the kernel lookback taps, and `M`
+        // matches the CPU ISA (top-level `dispatch_simd!`).
+        unsafe {
+            layer.conv.process_single_frame::<M>(
+                history,
+                &mut z_scratch[..z_out_ch],
+                frame_idx,
+                None,
+            );
+        }
     }
 
     // FiLM post-conv + pre-mixin.
@@ -129,31 +138,123 @@ pub(crate) unsafe fn process_frame_dyn<M: SimdMath>(
         };
         let num_groups = layer.mixin_groups.max(1) as usize;
 
-        if out_per_g >= 8 {
-            for g in 0..num_groups {
-                let group_base = g * out_per_g * in_pg;
-                let in_start = g * in_pg;
-                let out_start = g * out_per_g;
-                // SAFETY: `while oc + 8 <= out_per_g` keeps the 8-lane `loadu`/`storeu`
-                // at `group_base + ic*out_per_g + oc` within `mixin_w` (len
-                // `num_groups*out_per_g*in_pg`) and at `out_start + oc` within
-                // `mixin_scratch` (len ≥ `z_out_ch`); `loadu`/`storeu` need no alignment.
-                unsafe {
-                    let mut oc = 0;
-                    while oc + 8 <= out_per_g {
-                        let mut acc = _mm256_setzero_ps();
-                        for ic in 0..in_pg {
-                            let cond = _mm256_set1_ps(cond_for_mixin[in_start + ic]);
-                            let w = _mm256_loadu_ps(
-                                layer.mixin_w.as_ptr().add(group_base + ic * out_per_g + oc),
+        if layer.input_mixin_post_film.is_none() {
+            // Fast path: no post-mixin FiLM, so accumulate mixin directly into `z_scratch`
+            // without a store/load round-trip through `mixin_scratch`.
+            if cond_size == 1 {
+                let c0 = cond_for_mixin[0];
+                if z_out_ch >= 8 {
+                    // SAFETY: `while oc + 8 <= z_out_ch` keeps 8-lane loads/stores within
+                    // `layer.mixin_w` (`z_out_ch` elems) and `z_scratch` (len ≥ `z_out_ch`).
+                    unsafe {
+                        let cond_v = _mm256_set1_ps(c0);
+                        let mut oc = 0;
+                        while oc + 8 <= z_out_ch {
+                            let w = _mm256_loadu_ps(layer.mixin_w.as_ptr().add(oc));
+                            let z = _mm256_loadu_ps(z_scratch.as_ptr().add(oc));
+                            _mm256_storeu_ps(
+                                z_scratch.as_mut_ptr().add(oc),
+                                _mm256_fmadd_ps(cond_v, w, z),
                             );
-                            acc = _mm256_fmadd_ps(cond, w, acc);
+                            oc += 8;
                         }
-                        _mm256_storeu_ps(mixin_scratch.as_mut_ptr().add(out_start + oc), acc);
-                        oc += 8;
+                        for oc in oc..z_out_ch {
+                            z_scratch[oc] += layer.mixin_w[oc] * c0;
+                        }
                     }
-                    // Scalar tail for remaining output channels in this group.
-                    for oc in oc..out_per_g {
+                } else {
+                    for oc in 0..z_out_ch {
+                        z_scratch[oc] += layer.mixin_w[oc] * c0;
+                    }
+                }
+            } else if out_per_g >= 8 {
+                for g in 0..num_groups {
+                    let group_base = g * out_per_g * in_pg;
+                    let in_start = g * in_pg;
+                    let out_start = g * out_per_g;
+                    // SAFETY: `while oc + 8 <= out_per_g` keeps the 8-lane `loadu`/`storeu`
+                    // within `mixin_w` and `z_scratch` (len ≥ `z_out_ch`).
+                    unsafe {
+                        let mut oc = 0;
+                        while oc + 8 <= out_per_g {
+                            let mut acc = _mm256_loadu_ps(z_scratch.as_ptr().add(out_start + oc));
+                            for ic in 0..in_pg {
+                                let cond = _mm256_set1_ps(cond_for_mixin[in_start + ic]);
+                                let w = _mm256_loadu_ps(
+                                    layer.mixin_w.as_ptr().add(group_base + ic * out_per_g + oc),
+                                );
+                                acc = _mm256_fmadd_ps(cond, w, acc);
+                            }
+                            _mm256_storeu_ps(z_scratch.as_mut_ptr().add(out_start + oc), acc);
+                            oc += 8;
+                        }
+                        for oc in oc..out_per_g {
+                            let mut sum = z_scratch[out_start + oc];
+                            for ic in 0..in_pg {
+                                sum += layer.mixin_w[group_base + ic * out_per_g + oc]
+                                    * cond_for_mixin[in_start + ic];
+                            }
+                            z_scratch[out_start + oc] = sum;
+                        }
+                    }
+                }
+            } else {
+                for g in 0..num_groups {
+                    let group_base = g * out_per_g * in_pg;
+                    let in_start = g * in_pg;
+                    let out_start = g * out_per_g;
+                    for oc in 0..out_per_g {
+                        let mut sum = z_scratch[out_start + oc];
+                        for ic in 0..in_pg {
+                            sum += layer.mixin_w[group_base + ic * out_per_g + oc]
+                                * cond_for_mixin[in_start + ic];
+                        }
+                        z_scratch[out_start + oc] = sum;
+                    }
+                }
+            }
+        } else {
+            if out_per_g >= 8 {
+                for g in 0..num_groups {
+                    let group_base = g * out_per_g * in_pg;
+                    let in_start = g * in_pg;
+                    let out_start = g * out_per_g;
+                    // SAFETY: `while oc + 8 <= out_per_g` keeps the 8-lane `loadu`/`storeu`
+                    // at `group_base + ic*out_per_g + oc` within `mixin_w` (len
+                    // `num_groups*out_per_g*in_pg`) and at `out_start + oc` within
+                    // `mixin_scratch` (len ≥ `z_out_ch`); `loadu`/`storeu` need no alignment.
+                    unsafe {
+                        let mut oc = 0;
+                        while oc + 8 <= out_per_g {
+                            let mut acc = _mm256_setzero_ps();
+                            for ic in 0..in_pg {
+                                let cond = _mm256_set1_ps(cond_for_mixin[in_start + ic]);
+                                let w = _mm256_loadu_ps(
+                                    layer.mixin_w.as_ptr().add(group_base + ic * out_per_g + oc),
+                                );
+                                acc = _mm256_fmadd_ps(cond, w, acc);
+                            }
+                            _mm256_storeu_ps(mixin_scratch.as_mut_ptr().add(out_start + oc), acc);
+                            oc += 8;
+                        }
+                        // Scalar tail for remaining output channels in this group.
+                        for oc in oc..out_per_g {
+                            let mut sum = 0.0;
+                            for ic in 0..in_pg {
+                                sum += layer.mixin_w[group_base + ic * out_per_g + oc]
+                                    * cond_for_mixin[in_start + ic];
+                            }
+                            mixin_scratch[out_start + oc] = sum;
+                        }
+                    }
+                }
+            } else {
+                // Scalar fallback for small groups (out_per_g < 8).
+                for g in 0..num_groups {
+                    let group_base = g * out_per_g * in_pg;
+                    let in_start = g * in_pg;
+                    let out_start = g * out_per_g;
+                    for oc in 0..out_per_g {
                         let mut sum = 0.0;
                         for ic in 0..in_pg {
                             sum += layer.mixin_w[group_base + ic * out_per_g + oc]
@@ -163,56 +264,41 @@ pub(crate) unsafe fn process_frame_dyn<M: SimdMath>(
                     }
                 }
             }
-        } else {
-            // Scalar fallback for small groups (out_per_g < 8).
-            for g in 0..num_groups {
-                let group_base = g * out_per_g * in_pg;
-                let in_start = g * in_pg;
-                let out_start = g * out_per_g;
-                for oc in 0..out_per_g {
-                    let mut sum = 0.0;
-                    for ic in 0..in_pg {
-                        sum += layer.mixin_w[group_base + ic * out_per_g + oc]
-                            * cond_for_mixin[in_start + ic];
-                    }
-                    mixin_scratch[out_start + oc] = sum;
+
+            // FiLM post-mixin + pre-activation.
+            // Apply FiLM on the isolated mixin buffer before summing.
+            if let Some(ref mut film) = layer.input_mixin_post_film {
+                // SAFETY: `cond_slice` has length exactly `cond_size` (matching this FiLM
+                // layer's `cond_size`) and `mixin_scratch[..z_out_ch]` is a valid in-bounds
+                // sub-slice of length ≤ `channels`; both satisfy `film.process`'s
+                // documented preconditions.
+                unsafe {
+                    film.process(&mut mixin_scratch[..z_out_ch], cond_slice);
                 }
             }
-        }
-    }
 
-    // FiLM post-mixin + pre-activation.
-    // Apply FiLM on the isolated mixin buffer before summing.
-    if let Some(ref mut film) = layer.input_mixin_post_film {
-        // SAFETY: `cond_slice` has length exactly `cond_size` (matching this FiLM
-        // layer's `cond_size`) and `mixin_scratch[..z_out_ch]` is a valid in-bounds
-        // sub-slice of length ≤ `channels`; both satisfy `film.process`'s
-        // documented preconditions.
-        unsafe {
-            film.process(&mut mixin_scratch[..z_out_ch], cond_slice);
-        }
-    }
-
-    // Sum mixin output to z_scratch (vectorized 8-wide).
-    if z_out_ch >= 8 {
-        // SAFETY: `while c + 8 <= z_out_ch` keeps the 8-lane `loadu`/`storeu` at
-        // offset `c` within both `mixin_scratch` and `z_scratch` (len ≥ `z_out_ch`);
-        // `loadu`/`storeu` need no alignment.
-        unsafe {
-            let mut c = 0;
-            while c + 8 <= z_out_ch {
-                let src = _mm256_loadu_ps(mixin_scratch.as_ptr().add(c));
-                let dst = _mm256_loadu_ps(z_scratch.as_ptr().add(c));
-                _mm256_storeu_ps(z_scratch.as_mut_ptr().add(c), _mm256_add_ps(dst, src));
-                c += 8;
+            // Sum mixin output to z_scratch (vectorized 8-wide).
+            if z_out_ch >= 8 {
+                // SAFETY: `while c + 8 <= z_out_ch` keeps the 8-lane `loadu`/`storeu` at
+                // offset `c` within both `mixin_scratch` and `z_scratch` (len ≥ `z_out_ch`);
+                // `loadu`/`storeu` need no alignment.
+                unsafe {
+                    let mut c = 0;
+                    while c + 8 <= z_out_ch {
+                        let src = _mm256_loadu_ps(mixin_scratch.as_ptr().add(c));
+                        let dst = _mm256_loadu_ps(z_scratch.as_ptr().add(c));
+                        _mm256_storeu_ps(z_scratch.as_mut_ptr().add(c), _mm256_add_ps(dst, src));
+                        c += 8;
+                    }
+                    for c in c..z_out_ch {
+                        z_scratch[c] += mixin_scratch[c];
+                    }
+                }
+            } else {
+                for c in 0..z_out_ch {
+                    z_scratch[c] += mixin_scratch[c];
+                }
             }
-            for c in c..z_out_ch {
-                z_scratch[c] += mixin_scratch[c];
-            }
-        }
-    } else {
-        for c in 0..z_out_ch {
-            z_scratch[c] += mixin_scratch[c];
         }
     }
 

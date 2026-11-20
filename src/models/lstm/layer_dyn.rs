@@ -16,23 +16,23 @@ use crate::loader::nam_json::validation::{MAX_LSTM_HIDDEN_SIZE, MAX_LSTM_IO_CHAN
 pub struct LstmLayerDyn {
     /// Input dimension (typically 1 for NAM first layer,
     /// or `hidden_size` for subsequent stacked layers).
-    pub input_size: usize,
+    pub(crate) input_size: usize,
     /// Number of LSTM hidden units.
-    pub hidden_size: usize,
+    pub(crate) hidden_size: usize,
     /// Layer weights in Gate-Major layout.
     /// Flat buffer of `4 * (input_size + hidden_size) * hidden_size` elements.
-    pub input_hidden_weights: AlignedVec<f32>,
+    pub(crate) input_hidden_weights: AlignedVec<f32>,
     /// Layer linear biases (4 × hidden_size).
-    pub bias: AlignedVec<f32>,
+    pub(crate) bias: AlignedVec<f32>,
     /// Consolidated state buffer [Input | Hidden].
     /// Length = input_size + hidden_size.
-    pub state: AlignedVec<f32>,
+    pub(crate) state: AlignedVec<f32>,
     /// LSTM cell state (C). Length = hidden_size.
-    pub cell_state: AlignedVec<f32>,
+    pub(crate) cell_state: AlignedVec<f32>,
     /// Kahan compensation shadow state for cell state accumulation.
-    pub cell_error: AlignedVec<f32>,
+    pub(crate) cell_error: AlignedVec<f32>,
     /// Intermediate gate activations (4 × hidden_size).
-    pub gates: AlignedVec<f32>,
+    pub(crate) gates: AlignedVec<f32>,
 }
 
 impl LstmLayerDyn {
@@ -69,6 +69,54 @@ impl LstmLayerDyn {
         })
     }
 
+    /// Returns the input dimension.
+    #[inline(always)]
+    pub fn input_size(&self) -> usize {
+        self.input_size
+    }
+
+    /// Returns the number of hidden units.
+    #[inline(always)]
+    pub fn hidden_size(&self) -> usize {
+        self.hidden_size
+    }
+
+    /// Returns the gate-major weight matrix (`4 * (input_size + hidden_size) * hidden_size`).
+    #[inline(always)]
+    pub fn input_hidden_weights(&self) -> &[f32] {
+        &self.input_hidden_weights
+    }
+
+    /// Returns the gate bias vector (`4 * hidden_size`).
+    #[inline(always)]
+    pub fn bias(&self) -> &[f32] {
+        &self.bias
+    }
+
+    /// Returns the consolidated `[input | hidden]` state buffer.
+    #[inline(always)]
+    pub fn state(&self) -> &[f32] {
+        &self.state
+    }
+
+    /// Returns the LSTM cell state vector (`hidden_size`).
+    #[inline(always)]
+    pub fn cell_state(&self) -> &[f32] {
+        &self.cell_state
+    }
+
+    /// Returns the Kahan compensation shadow error vector (`hidden_size`).
+    #[inline(always)]
+    pub fn cell_error(&self) -> &[f32] {
+        &self.cell_error
+    }
+
+    /// Returns the intermediate gate activation buffer (`4 * hidden_size`).
+    #[inline(always)]
+    pub fn gates(&self) -> &[f32] {
+        &self.gates
+    }
+
     /// Returns a reference to the current hidden state.
     #[inline(always)]
     pub fn get_hidden_state(&self) -> &[f32] {
@@ -91,5 +139,25 @@ impl LstmLayerDyn {
         self.cell_state.fill(0.0);
         self.cell_error.fill(0.0);
         self.gates.fill(0.0);
+    }
+
+    /// Replaces layer weights and biases after validating exact buffer lengths.
+    pub fn set_weights(&mut self, weights: &[f32], bias: &[f32]) -> Result<(), NamErrorCode> {
+        if weights.len() != self.input_hidden_weights.len() || bias.len() != self.bias.len() {
+            return Err(NamErrorCode::WeightCountMismatch);
+        }
+        self.input_hidden_weights.copy_from_slice(weights);
+        self.bias.copy_from_slice(bias);
+        Ok(())
+    }
+
+    /// Replaces `[input | hidden]` and cell state buffers after validating exact lengths.
+    pub fn set_states(&mut self, state: &[f32], cell_state: &[f32]) -> Result<(), NamErrorCode> {
+        if state.len() != self.state.len() || cell_state.len() != self.cell_state.len() {
+            return Err(NamErrorCode::WeightCountMismatch);
+        }
+        self.state.copy_from_slice(state);
+        self.cell_state.copy_from_slice(cell_state);
+        Ok(())
     }
 }

@@ -205,6 +205,12 @@ pub struct RtStatusFlags {
     /// the per-callback structural budget was exhausted (F-RT-007). Monotonic
     /// telemetry counter — never reset; accompanies `RT_STATUS_STRUCTURAL_DEFERRED`.
     pub structural_deferred_total: AtomicU32,
+    /// Total count of deferred structural commands superseded by a newer
+    /// same-kind command and discarded off-RT via the GC cascade (command
+    /// coalescing). Written on the RT thread (`RtSwapDrain::flag_superseded`),
+    /// so kept in Line 0 to avoid false sharing with Main-owned fields.
+    /// Accompanies `RT_STATUS_STRUCTURAL_SUPERSEDED`.
+    pub structural_superseded_total: AtomicU32,
     /// Total count of GC items successfully drained.
     pub drains: AtomicU32,
     /// Total count of DSP cycle durations discarded as implausible
@@ -214,7 +220,7 @@ pub struct RtStatusFlags {
     /// defense-in-depth discard in the plugin telemetry path (F8 / T5.1).
     pub elapsed_discarded_total: AtomicU32,
     /// Padding to isolate RT-hot fields to their own 64-byte cache line.
-    _pad_rt_hot: [u8; 20],
+    _pad_rt_hot: [u8; 16],
 
     // =========================================================================
     // Lines 1..3: RT Control & Handshake (Rate / Model / CabSim / Oversample / Quantum)
@@ -347,10 +353,9 @@ pub struct RtStatusFlags {
     /// Previous quantum value used by the main loop to detect and log changes.
     /// Updated by the main thread after logging. Not accessed by the RT thread.
     pub previous_buffer_frames: AtomicU32,
-    /// Total count of deferred structural commands superseded by a newer
-    /// same-kind command and discarded off-RT via the GC cascade (command
-    /// coalescing). Accompanies `RT_STATUS_STRUCTURAL_SUPERSEDED`.
-    pub structural_superseded_total: AtomicU32,
+    /// 4-byte explicit padding keeping 8-byte alignment for `resampler_failed_generation`
+    /// and preserving Lines 12..13 field offsets.
+    _pad_main_u32: [u8; 4],
     /// Request generation of a failed resampler rebuild attempt by the main thread.
     ///
     /// Stored with `Ordering::Release` by the main thread when a resampler rebuild
@@ -399,9 +404,10 @@ impl RtStatusFlags {
             xruns: AtomicU32::new(0),
             degrade_transitions_total: AtomicU32::new(0),
             structural_deferred_total: AtomicU32::new(0),
+            structural_superseded_total: AtomicU32::new(0),
             drains: AtomicU32::new(0),
             elapsed_discarded_total: AtomicU32::new(0),
-            _pad_rt_hot: [0; 20],
+            _pad_rt_hot: [0; 16],
 
             active_rate: AtomicU32::new(0),
             active_rate_changed: AtomicU32::new(0),
@@ -431,7 +437,7 @@ impl RtStatusFlags {
             _pad_playback: [0; 60],
 
             previous_buffer_frames: AtomicU32::new(0),
-            structural_superseded_total: AtomicU32::new(0),
+            _pad_main_u32: [0; 4],
             resampler_failed_generation: AtomicU64::new(0),
             flags_seen: AtomicU64::new(0),
             rt_priority: AtomicI32::new(-1),

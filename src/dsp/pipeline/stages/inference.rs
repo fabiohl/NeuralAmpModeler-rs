@@ -6,16 +6,172 @@
 use super::super::bridge::MAX_RESAMP_BUF;
 use super::super::context::DspPipelineContext;
 use super::adaptive_ctrl::{WAVENET_CROSSFADE_MAX_STATES, configure_adaptive_model};
-use super::routing::{model_process_stereo_with_os, run_stereo_or_mono};
-use crate::common::spsc::RT_STATUS_HOST_CONTRACT_VIOLATION;
+use super::routing::{finish_downsample, model_process_stereo_with_os, passthru};
+use crate::common::spsc::{RT_STATUS_HOST_CONTRACT_VIOLATION, RtStatusFlags};
+use crate::dsp::oversample::OversampleEngine;
 use crate::dsp::resampler::NamResampler;
 use crate::dsp::resampling::StreamingResampleBuffer;
-use crate::math::dsp::gain::crossfade_blend_mono_simd;
+use crate::math::dsp::gain::crossfade_blend_ramp_mono_simd;
+use crate::models::{NamModel, StaticModel};
+
+/// Executes single-channel WaveNet adaptive crossfade (`old_eff` -> `new_eff`)
+/// with continuous per-sample linear ramp and single-pass oversampling FIR
+/// preservation (`upsample` once -> stack-chunked dual-pass + ramp blend ->
+/// `downsample` once).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "DSP channel crossfade kernel taking disjoint model, oversampler, and buffer slices"
+)]
+#[inline(always)]
+fn crossfade_wavenet_channel(
+    model: &mut Option<Box<StaticModel>>,
+    os: &mut OversampleEngine,
+    model_in: &[f32],
+    os_in: &mut [f32],
+    os_model: &mut [f32],
+    m_out: &mut [f32],
+    scr: &mut [f32],
+    old_eff: usize,
+    new_eff: usize,
+    t_start: f32,
+    t_end: f32,
+    rt_status: &RtStatusFlags,
+) {
+    let Some(m) = model.as_deref_mut() else {
+        passthru(model_in, m_out);
+        return;
+    };
+
+    if old_eff == new_eff {
+        m.set_effective_layers(new_eff);
+        if os.is_bypass() {
+            m.process(model_in, m_out);
+        } else {
+            let n_os = os.upsample(model_in, os_in, Some(rt_status));
+            m.process(&os_in[..n_os], &mut os_model[..n_os]);
+            let written = os.downsample(&os_model[..n_os], m_out, Some(rt_status));
+            finish_downsample(written, model_in.len(), m_out, Some(rt_status));
+        }
+        return;
+    }
+
+    let mut backup_starts = [0usize; WAVENET_CROSSFADE_MAX_STATES];
+    let mut post_first_starts = [0usize; WAVENET_CROSSFADE_MAX_STATES];
+    if os.is_bypass() {
+        let mid_t = 0.5 * (t_start + t_end);
+        let old_second = mid_t < 0.5;
+        let (first_eff, second_eff) = if old_second {
+            (new_eff, old_eff)
+        } else {
+            (old_eff, new_eff)
+        };
+
+        let mut offset = 0;
+        m.backup_buffer_starts(&mut backup_starts, &mut offset);
+        m.set_effective_layers(first_eff);
+        if old_second {
+            m.process(model_in, scr);
+        } else {
+            m.process(model_in, m_out);
+        }
+
+        if first_eff > second_eff {
+            let mut post_off = 0;
+            m.backup_buffer_starts(&mut post_first_starts, &mut post_off);
+        }
+
+        let mut offset_restore = 0;
+        m.restore_buffer_starts(&backup_starts, &mut offset_restore);
+        m.set_effective_layers(second_eff);
+        if old_second {
+            m.process(model_in, m_out);
+        } else {
+            m.process(model_in, scr);
+        }
+
+        if first_eff > second_eff {
+            let mut post_restore = 0;
+            m.restore_buffer_starts(&post_first_starts, &mut post_restore);
+        }
+
+        let n = model_in.len().min(m_out.len()).min(scr.len());
+        let t_step = if n > 0 {
+            (t_end - t_start) / n as f32
+        } else {
+            0.0
+        };
+        crossfade_blend_ramp_mono_simd(&mut m_out[..n], &scr[..n], t_start, t_step);
+    } else {
+        // Upsample once before chunked evaluation so the half-band FIR delay lines
+        // advance continuously without paying double FIR cost.
+        let n_os = os.upsample(model_in, os_in, Some(rt_status));
+        let t_step_os = if n_os > 0 {
+            (t_end - t_start) / n_os as f32
+        } else {
+            0.0
+        };
+        // Process in stack-buffered sub-chunks (512 OS frames = 2 KB stack, zero heap)
+        // so common RT blocks at 2x/4x oversampling run in minimal dual-pass sweeps.
+        const OS_XFADE_CHUNK: usize = 512;
+        let mut new_chunk = [0.0f32; OS_XFADE_CHUNK];
+        let mut pos = 0usize;
+        while pos < n_os {
+            let c = (n_os - pos).min(OS_XFADE_CHUNK);
+            let in_chunk = &os_in[pos..pos + c];
+            let out_chunk = &mut os_model[pos..pos + c];
+            let chunk_t_start = t_start + (pos as f32) * t_step_os;
+            let chunk_t_mid = chunk_t_start + 0.5 * (c as f32) * t_step_os;
+            // Keep the higher-weighted crossfade branch's state authoritative in the
+            // shared ring buffers (`old_eff` while `t < 0.5`, `new_eff` once `t >= 0.5`).
+            let old_second = chunk_t_mid < 0.5;
+            let (first_eff, second_eff) = if old_second {
+                (new_eff, old_eff)
+            } else {
+                (old_eff, new_eff)
+            };
+
+            let mut offset = 0;
+            m.backup_buffer_starts(&mut backup_starts, &mut offset);
+            m.set_effective_layers(first_eff);
+            if old_second {
+                m.process(in_chunk, &mut new_chunk[..c]);
+            } else {
+                m.process(in_chunk, out_chunk);
+            }
+
+            if first_eff > second_eff {
+                let mut post_off = 0;
+                m.backup_buffer_starts(&mut post_first_starts, &mut post_off);
+            }
+
+            let mut offset_restore = 0;
+            m.restore_buffer_starts(&backup_starts, &mut offset_restore);
+            m.set_effective_layers(second_eff);
+            if old_second {
+                m.process(in_chunk, out_chunk);
+            } else {
+                m.process(in_chunk, &mut new_chunk[..c]);
+            }
+
+            // Keep layers `[second_eff..first_eff]` aligned with `[0..second_eff]` across
+            // chunks and blocks whenever the first pass exercised more layers.
+            if first_eff > second_eff {
+                let mut post_restore = 0;
+                m.restore_buffer_starts(&post_first_starts, &mut post_restore);
+            }
+
+            crossfade_blend_ramp_mono_simd(out_chunk, &new_chunk[..c], chunk_t_start, t_step_os);
+            pos += c;
+        }
+        let written = os.downsample(&os_model[..n_os], m_out, Some(rt_status));
+        finish_downsample(written, model_in.len(), m_out, Some(rt_status));
+    }
+}
 
 /// Model processing core — dispatches between passthrough, crossfade, and normal paths.
 ///
-/// `scratch_l` / `scratch_r` receive the second-pass output during WaveNet crossfading,
-/// and must NOT alias the final output buffer when chunking is active.
+/// `scratch_l` / `scratch_r` receive the second-pass output during non-oversampled
+/// WaveNet crossfading, and must NOT alias the final output buffer when chunking is active.
 #[inline(always)]
 #[expect(
     clippy::too_many_arguments,
@@ -51,21 +207,25 @@ fn process_model_core(
                 m_out_l.as_mut_ptr(),
                 model_in_l.len().min(m_out_l.len()),
             );
-            core::ptr::copy_nonoverlapping(
-                model_in_r.as_ptr(),
-                m_out_r.as_mut_ptr(),
-                model_in_r.len().min(m_out_r.len()),
-            );
+            if *ctx.process_mono {
+                if m_out_r.len() >= m_out_l.len() {
+                    core::ptr::copy_nonoverlapping(
+                        m_out_l.as_ptr(),
+                        m_out_r.as_mut_ptr(),
+                        m_out_l.len(),
+                    );
+                }
+            } else {
+                core::ptr::copy_nonoverlapping(
+                    model_in_r.as_ptr(),
+                    m_out_r.as_mut_ptr(),
+                    model_in_r.len().min(m_out_r.len()),
+                );
+            }
         }
     } else if is_crossfading_wavenet {
         // Path 2: WaveNet Dynamic Adaptive Crossfading.
-        // During dynamic compute scaling (Full -> Reduced -> Minimal), WaveNet layer
-        // counts change on-the-fly. To prevent clicks and transients, we execute a dual-pass:
-        // 1. Compute audio with previous effective layer count into main output (`m_out`).
-        // 2. Rewind delay buffer ring pointers to keep state consistent across the block.
-        // 3. Compute audio with new effective layer count into `scratch`.
-        // 4. Blend the two outputs smoothly using SIMD interpolation (`crossfade_blend_mono_simd`).
-
+        // Dual-pass evaluation with per-sample SIMD ramp and preserved oversampling FIR state.
         let old_eff_l = ctx
             .active_model_l
             .as_ref()
@@ -108,69 +268,51 @@ fn process_model_core(
         };
 
         if old_eff_l != new_eff_l || (!*ctx.process_mono && old_eff_r != new_eff_r) {
-            let mut backup_starts = [0usize; WAVENET_CROSSFADE_MAX_STATES];
-            let mut offset = 0;
-
-            // Step 2a: Snapshot internal delay buffer pointers before the first pass.
-            if let Some(m) = ctx.active_model_l.as_ref() {
-                m.backup_buffer_starts(&mut backup_starts, &mut offset);
-            }
-            if let (false, Some(m)) = (*ctx.process_mono, ctx.active_model_r.as_ref()) {
-                m.backup_buffer_starts(&mut backup_starts, &mut offset);
-            }
-
-            // Step 2b: Configure and process first pass with old effective layers.
-            if let Some(m) = ctx.active_model_l.as_mut() {
-                m.set_effective_layers(old_eff_l);
-            }
-            if let (false, Some(m)) = (*ctx.process_mono, ctx.active_model_r.as_mut()) {
-                m.set_effective_layers(old_eff_r);
-            }
-
-            run_stereo_or_mono(
-                ctx.active_model_l,
-                ctx.active_model_r,
-                model_in_l,
-                model_in_r,
-                m_out_l,
-                m_out_r,
-                *ctx.process_mono,
-            );
-
-            // Step 2c: Restore delay buffer pointers to the pre-pass state.
-            let mut offset_restore = 0;
-            if let Some(m) = ctx.active_model_l.as_mut() {
-                m.restore_buffer_starts(&backup_starts, &mut offset_restore);
-            }
-            if let (false, Some(m)) = (*ctx.process_mono, ctx.active_model_r.as_mut()) {
-                m.restore_buffer_starts(&backup_starts, &mut offset_restore);
-            }
-
-            // Step 2d: Configure and process second pass with new effective layers.
-            if let Some(m) = ctx.active_model_l.as_mut() {
-                m.set_effective_layers(new_eff_l);
-            }
-            if let (false, Some(m)) = (*ctx.process_mono, ctx.active_model_r.as_mut()) {
-                m.set_effective_layers(new_eff_r);
-            }
+            let frame_advance = if ctx.resampler.is_bypass() {
+                model_in_l.len()
+            } else {
+                let nam_rate = ctx.resampler.nam_rate().max(1) as u64;
+                let host_rate = ctx.resampler.host_rate() as u64;
+                ((model_in_l.len() as u64 * host_rate) / nam_rate).max(1) as usize
+            };
+            let (t_start, t_end) = ctx.adaptive.crossfade_ramp_bounds(frame_advance);
 
             let scr_l = &mut scratch_l[..model_in_l.len()];
-            let scr_r = &mut scratch_r[..model_in_l.len()];
-            run_stereo_or_mono(
+            crossfade_wavenet_channel(
                 ctx.active_model_l,
-                ctx.active_model_r,
+                ctx.os_l,
                 model_in_l,
-                model_in_r,
+                os_in_l,
+                os_model_l,
+                m_out_l,
                 scr_l,
-                scr_r,
-                *ctx.process_mono,
+                old_eff_l,
+                new_eff_l,
+                t_start,
+                t_end,
+                ctx.rt_status,
             );
 
-            // Step 2e: SIMD crossfade blend between old (`m_out`) and new (`scratch`) buffers.
-            let t = ctx.adaptive.current_crossfade_multiplier();
-            crossfade_blend_mono_simd(m_out_l, scr_l, t);
-            if !*ctx.process_mono {
-                crossfade_blend_mono_simd(m_out_r, scr_r, t);
+            if *ctx.process_mono {
+                if m_out_r.len() >= m_out_l.len() {
+                    passthru(m_out_l, m_out_r);
+                }
+            } else {
+                let scr_r = &mut scratch_r[..model_in_r.len()];
+                crossfade_wavenet_channel(
+                    ctx.active_model_r,
+                    ctx.os_r,
+                    model_in_r,
+                    os_in_r,
+                    os_model_r,
+                    m_out_r,
+                    scr_r,
+                    old_eff_r,
+                    new_eff_r,
+                    t_start,
+                    t_end,
+                    ctx.rt_status,
+                );
             }
         } else {
             // Layer counts are unchanged; evaluate standard path with oversampling.
@@ -294,20 +436,15 @@ pub fn run_inference(
                     capacity_valid && os_in_r.len() >= need_os && os_model_r.len() >= need_os;
             }
         }
-        if is_crossfading_wavenet {
-            capacity_valid = capacity_valid && crossfade_scratch_l.len() >= n;
-            if !*ctx.process_mono {
-                capacity_valid = capacity_valid && crossfade_scratch_r.len() >= n;
-            }
-        }
     } else {
         // Resampler active: intermediate rate conversion chunks require MAX_RESAMP_BUF
         capacity_valid = capacity_valid
             && resamp_mid_l.len() >= MAX_RESAMP_BUF
-            && resamp_mid_r.len() >= MAX_RESAMP_BUF
             && model_out_l.len() >= MAX_RESAMP_BUF;
         if !*ctx.process_mono {
-            capacity_valid = capacity_valid && model_out_r.len() >= MAX_RESAMP_BUF;
+            capacity_valid = capacity_valid
+                && resamp_mid_r.len() >= MAX_RESAMP_BUF
+                && model_out_r.len() >= MAX_RESAMP_BUF;
         }
         let factor_l = if ctx.os_l.is_bypass() {
             1
@@ -358,12 +495,25 @@ pub fn run_inference(
     if is_resamp_bypass {
         let model_in_l = &samples_l[..n];
         let model_in_r = if *ctx.process_mono {
-            &samples_l[..n]
+            &[][..]
         } else {
             &samples_r[..n]
         };
         let m_out_l = &mut resamp_out_l[..n];
-        let m_out_r = &mut resamp_out_r[..n];
+        let m_out_r = if *ctx.process_mono {
+            if resamp_out_r.len() >= n {
+                &mut resamp_out_r[..n]
+            } else {
+                &mut [][..]
+            }
+        } else {
+            &mut resamp_out_r[..n]
+        };
+        let scr_r = if *ctx.process_mono {
+            &mut [][..]
+        } else {
+            &mut model_out_r[..n]
+        };
 
         process_model_core(
             model_in_l,
@@ -376,7 +526,7 @@ pub fn run_inference(
             os_model_l,
             os_model_r,
             &mut model_out_l[..n],
-            &mut model_out_r[..n],
+            scr_r,
             lstm_passthrough,
             is_crossfading_wavenet,
         );
@@ -385,27 +535,43 @@ pub fn run_inference(
     } else {
         let host_rate = ctx.resampler.host_rate();
         let nam_rate = ctx.resampler.nam_rate();
+        let mono_mid_cap = 256usize;
+        let use_mono_mid_scratch = *ctx.process_mono && resamp_mid_r.len() < MAX_RESAMP_BUF;
+        let mid_out_cap = if use_mono_mid_scratch {
+            mono_mid_cap
+        } else {
+            MAX_RESAMP_BUF
+        };
         let max_input_per_pass =
-            NamResampler::max_input_samples_checked(MAX_RESAMP_BUF, host_rate, nam_rate)
-                .unwrap_or(0);
+            NamResampler::max_input_samples_checked(mid_out_cap, host_rate, nam_rate).unwrap_or(0);
 
+        let mut mono_mid_r = [0.0f32; 256];
+        let mut mono_out_r = [0.0f32; 256];
         let mut total_output: usize = 0;
         let mut input_offset: usize = 0;
 
         while input_offset < n {
             let remaining = n - input_offset;
             let chunk_input = if max_input_per_pass == 0 {
-                remaining.min(MAX_RESAMP_BUF)
+                remaining.min(mid_out_cap)
             } else {
                 remaining.min(max_input_per_pass)
             };
 
             let progress = if *ctx.process_mono {
-                ctx.resampler.process_input_mono(
-                    &samples_l[input_offset..input_offset + chunk_input],
-                    &mut resamp_mid_l[..MAX_RESAMP_BUF],
-                    &mut resamp_mid_r[..MAX_RESAMP_BUF],
-                )
+                if use_mono_mid_scratch {
+                    ctx.resampler.process_input_mono(
+                        &samples_l[input_offset..input_offset + chunk_input],
+                        &mut resamp_mid_l[..mono_mid_cap],
+                        &mut mono_mid_r,
+                    )
+                } else {
+                    ctx.resampler.process_input_mono(
+                        &samples_l[input_offset..input_offset + chunk_input],
+                        &mut resamp_mid_l[..MAX_RESAMP_BUF],
+                        &mut resamp_mid_r[..MAX_RESAMP_BUF],
+                    )
+                }
             } else {
                 ctx.resampler.process_input(
                     &samples_l[input_offset..input_offset + chunk_input],
@@ -425,9 +591,17 @@ pub fn run_inference(
             input_offset += consumed;
 
             let model_in_l = &resamp_mid_l[..n_48k];
-            let model_in_r = &resamp_mid_r[..n_48k];
+            let model_in_r = if *ctx.process_mono {
+                &[][..]
+            } else {
+                &resamp_mid_r[..n_48k]
+            };
             let m_out_l = &mut model_out_l[..n_48k];
-            let m_out_r = &mut model_out_r[..n_48k];
+            let m_out_r = if *ctx.process_mono {
+                &mut [][..]
+            } else {
+                &mut model_out_r[..n_48k]
+            };
 
             process_model_core(
                 model_in_l,
@@ -445,22 +619,39 @@ pub fn run_inference(
                 is_crossfading_wavenet,
             );
 
-            let out_progress = if *ctx.process_mono {
-                ctx.resampler.process_output_mono(
-                    m_out_l,
-                    &mut resamp_out_l[total_output..],
-                    &mut resamp_out_r[total_output..],
-                )
+            if *ctx.process_mono {
+                if resamp_out_r.len() >= resamp_out_l.len() {
+                    let out_progress = ctx.resampler.process_output_mono(
+                        m_out_l,
+                        &mut resamp_out_l[total_output..],
+                        &mut resamp_out_r[total_output..],
+                    );
+                    total_output += out_progress.samples_written;
+                } else {
+                    let mut out_in_pos = 0usize;
+                    while out_in_pos < m_out_l.len() && total_output < resamp_out_l.len() {
+                        let out_avail = (resamp_out_l.len() - total_output).min(mono_out_r.len());
+                        let out_progress = ctx.resampler.process_output_mono(
+                            &m_out_l[out_in_pos..],
+                            &mut resamp_out_l[total_output..total_output + out_avail],
+                            &mut mono_out_r[..out_avail],
+                        );
+                        total_output += out_progress.samples_written;
+                        if out_progress.samples_read == 0 && out_progress.samples_written == 0 {
+                            break;
+                        }
+                        out_in_pos += out_progress.samples_read;
+                    }
+                }
             } else {
-                ctx.resampler.process_output(
+                let out_progress = ctx.resampler.process_output(
                     m_out_l,
                     m_out_r,
                     &mut resamp_out_l[total_output..],
                     &mut resamp_out_r[total_output..],
-                )
-            };
-
-            total_output += out_progress.samples_written;
+                );
+                total_output += out_progress.samples_written;
+            }
         }
 
         total_output
@@ -504,10 +695,14 @@ pub fn run_inference_streaming(
     crossfade_scratch_l: &mut [f32],
     crossfade_scratch_r: &mut [f32],
 ) -> usize {
-    let n = n_samples
-        .min(in_l.len())
-        .min(in_r.len())
-        .min(MAX_RESAMP_BUF);
+    let n = if *ctx.process_mono {
+        n_samples.min(in_l.len()).min(MAX_RESAMP_BUF)
+    } else {
+        n_samples
+            .min(in_l.len())
+            .min(in_r.len())
+            .min(MAX_RESAMP_BUF)
+    };
     if n == 0 {
         return 0;
     }
@@ -574,9 +769,16 @@ pub fn run_inference_streaming(
     // call. Drive it in sub-blocks when the host block exceeds that bound so no
     // input is silently dropped and cardinality stays exact.
     let max_block = stream.max_block();
+    let process_mono = *ctx.process_mono;
+    let mono_needs_dummy_out_r = process_mono && out_r.len() < n;
+    let mono_needs_dummy_in_r = process_mono && in_r.len() < n;
+    let mut dummy_out_r = [0.0f32; 256];
     let mut offset = 0;
     while offset < n {
-        let chunk = (n - offset).min(max_block);
+        let mut chunk = (n - offset).min(max_block);
+        if mono_needs_dummy_out_r {
+            chunk = chunk.min(dummy_out_r.len());
+        }
         // Fresh closure per call: `stream.process` consumes the model by value,
         // so a new `FnMut` re-borrowing the pipeline context is created here.
         let model = |model_in_l: &[f32],
@@ -584,19 +786,33 @@ pub fn run_inference_streaming(
                      m_out_l: &mut [f32],
                      m_out_r: &mut [f32]|
          -> usize {
-            let total = model_in_l
-                .len()
-                .min(model_in_r.len())
-                .min(m_out_l.len())
-                .min(m_out_r.len());
+            let total = if process_mono {
+                model_in_l.len().min(m_out_l.len())
+            } else {
+                model_in_l
+                    .len()
+                    .min(model_in_r.len())
+                    .min(m_out_l.len())
+                    .min(m_out_r.len())
+            };
             let mut inner = 0;
             while inner < total {
-                let chunk = (total - inner).min(MAX_RESAMP_BUF);
+                let inner_chunk = (total - inner).min(MAX_RESAMP_BUF);
+                let m_in_r = if process_mono {
+                    &[][..]
+                } else {
+                    &model_in_r[inner..inner + inner_chunk]
+                };
+                let m_out_r_slice = if process_mono && m_out_r.len() < inner + inner_chunk {
+                    &mut [][..]
+                } else {
+                    &mut m_out_r[inner..inner + inner_chunk]
+                };
                 process_model_core(
-                    &model_in_l[inner..inner + chunk],
-                    &model_in_r[inner..inner + chunk],
-                    &mut m_out_l[inner..inner + chunk],
-                    &mut m_out_r[inner..inner + chunk],
+                    &model_in_l[inner..inner + inner_chunk],
+                    m_in_r,
+                    &mut m_out_l[inner..inner + inner_chunk],
+                    m_out_r_slice,
                     ctx,
                     os_in_l,
                     os_in_r,
@@ -607,15 +823,25 @@ pub fn run_inference_streaming(
                     lstm_passthrough,
                     is_crossfading_wavenet,
                 );
-                inner += chunk;
+                inner += inner_chunk;
             }
             total
         };
+        let stream_in_r = if mono_needs_dummy_in_r {
+            &in_l[offset..offset + chunk]
+        } else {
+            &in_r[offset..offset + chunk]
+        };
+        let stream_out_r = if mono_needs_dummy_out_r {
+            &mut dummy_out_r[..chunk]
+        } else {
+            &mut out_r[offset..offset + chunk]
+        };
         stream.process(
             &in_l[offset..offset + chunk],
-            &in_r[offset..offset + chunk],
+            stream_in_r,
             &mut out_l[offset..offset + chunk],
-            &mut out_r[offset..offset + chunk],
+            stream_out_r,
             model,
         );
         offset += chunk;

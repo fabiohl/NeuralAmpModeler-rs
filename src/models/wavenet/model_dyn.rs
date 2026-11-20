@@ -4,6 +4,7 @@
 use super::common::WAVENET_MAX_NUM_FRAMES;
 use super::layer_array_dyn::WaveNetLayerArrayDyn;
 use super::post_stack_head::PostStackHead;
+use crate::common::diagnostics::NamErrorCode;
 use crate::math::common::{AlignedVec, SimdMath};
 use crate::models::{NamModel, StaticModel};
 
@@ -83,20 +84,20 @@ use crate::models::{NamModel, StaticModel};
 /// and `prewarm` are consumed independently from the main weight stream.
 pub struct WaveNetModelDyn {
     /// Internal channel count (e.g., 16 for Standard).
-    pub ch: usize,
+    pub(crate) ch: usize,
     /// Kernel size (always 3 for WaveNet).
-    pub k: usize,
+    pub(crate) k: usize,
     /// Head projection size (e.g., 8 for Standard).
-    pub head: usize,
+    pub(crate) head: usize,
     /// Dynamically-sized layer arrays chained sequentially.
     /// - Array 0: IN=1, COND=cond, CH channels, HEAD outputs, no HeadBias
     /// - Middle arrays: IN=CH, COND=cond, CH channels, HEAD outputs, no HeadBias
     /// - Last array: IN=CH, COND=cond, HEAD channels, 1 output, with HeadBias
-    pub arrays: Vec<WaveNetLayerArrayDyn>,
+    pub(crate) arrays: Vec<WaveNetLayerArrayDyn>,
     /// Final voltage compensation scale (Target Output Scale).
-    pub head_scale: f32,
+    pub(crate) head_scale: f32,
     /// Largest circular buffer required at the Kernel's temporal root.
-    pub receptive_field_size: usize,
+    pub(crate) receptive_field_size: usize,
     /// Optional nested condition DSP sub-model (C++ `_condition_dsp`).
     ///
     /// Built eagerly during model construction from the `condition_dsp` JSON
@@ -104,26 +105,26 @@ pub struct WaveNetModelDyn {
     /// output replaces the raw input as the `condition` parameter passed to the
     /// layer arrays. When `None`, the raw input is used as both `layer_inputs`
     /// and `condition` (passthrough, cond≤1).
-    pub condition_dsp: Option<Box<StaticModel>>,
+    pub(crate) condition_dsp: Option<Box<StaticModel>>,
     /// Pre-allocated output buffer for condition_dsp processing.
     ///
     /// Size: `cond × WAVENET_MAX_NUM_FRAMES`, where `cond` is the main model's
     /// `condition_size`. This matches the sub-model's `NumOutputChannels()`.
-    pub condition_dsp_output: AlignedVec<f32>,
+    pub(crate) condition_dsp_output: AlignedVec<f32>,
     /// Optional post-stack head sub-object (Conv1D + activation).
     ///
     /// Processes the signal after the last layer array. Canonical NAMCore
     /// heads receive `head_scale * head_outputs` (scale before the head);
     /// the legacy Rust-only head is applied before `head_scale` (scale after
     /// the head). When `None`, the last array output is scaled directly.
-    pub post_stack_head: Option<PostStackHead>,
+    pub(crate) post_stack_head: Option<PostStackHead>,
     /// Scratch buffer for post-stack head output.
     ///
     /// Size: `out_ch × WAVENET_MAX_NUM_FRAMES`, where `out_ch` is the head's
     /// output channel count (defaults to 1 for mono).
-    pub head_output_scratch: AlignedVec<f32>,
+    pub(crate) head_output_scratch: AlignedVec<f32>,
     /// Whether to execute prewarm during `reset()`. Default: `true`.
-    pub prewarm_on_reset: bool,
+    pub(crate) prewarm_on_reset: bool,
     /// Deferred-stabilization pending unit armed by the split flow
     /// ([`NamModel::prewarm_reset`]).
     /// This family's stabilization is a single one-shot backfill pass (no
@@ -131,21 +132,21 @@ pub struct WaveNetModelDyn {
     /// for freshly built models; the integral
     /// [`Self::prewarm`](crate::models::NamModel::prewarm) completes it by
     /// construction and never consults it otherwise.
-    pub prewarm_pending: bool,
+    pub(crate) prewarm_pending: bool,
     /// Whether this dynamic WaveNet model explicitly supports dynamic channel slimming.
-    pub slimmable_capable: bool,
+    pub(crate) slimmable_capable: bool,
     /// Allowed channel breakpoints for slimmable channel slicing, one list per
     /// layer-array (C++ `SlimmableWavenet::_per_array_allowed_channels`).
     ///
     /// When `Some`, the outer `Vec` has one entry per layer-array; an empty
     /// inner list means that array is non-slimmable (keeps full channels).
     /// `None` means no slimmable breakpoints are defined.
-    pub allowed_channels: Option<Vec<Vec<usize>>>,
+    pub(crate) allowed_channels: Option<Vec<Vec<usize>>>,
     /// Pending slimmable channel targets set by `set_slimmable_size`, one per
     /// layer-array (C++ `_get_channels_for_slimmable_size`).
     ///
     /// Consumed before DSP processing. `None` means no pending change.
-    pub pending_slim_channel: Option<Vec<usize>>,
+    pub(crate) pending_slim_channel: Option<Vec<usize>>,
 }
 
 impl Clone for WaveNetModelDyn {
@@ -172,13 +173,166 @@ impl Clone for WaveNetModelDyn {
 }
 
 impl WaveNetModelDyn {
-    /// Returns whether the whole model can safely reach its unchecked kernels.
+    /// Constructs a validated `WaveNetModelDyn` from pre-built layer arrays and
+    /// optional conditioning/head sub-objects.
     ///
-    /// The model, array, layer and tensor fields are all public, so a consumer
-    /// can invalidate construction-time invariants from safe Rust. The safe
-    /// entry points ([`Self::process`], [`Self::prewarm`]) consult this
-    /// predicate before dispatching; while it reports `false`, processing
-    /// produces silence instead of dereferencing corrupted state.
+    /// Runs [`Self::validate_state`] once at construction so the real-time hot
+    /// path can dispatch directly without per-callback validation.
+    ///
+    /// # Errors
+    /// Returns [`NamErrorCode::InvalidModelTopology`] if `validate_state()` fails,
+    /// or [`NamErrorCode::OutOfMemory`] on scratch buffer allocation failure.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Dynamic WaveNet constructor initializes arrays, conditioning, head, and slimmable metadata"
+    )]
+    pub fn from_parts(
+        ch: usize,
+        k: usize,
+        head: usize,
+        arrays: Vec<WaveNetLayerArrayDyn>,
+        head_scale: f32,
+        receptive_field_size: usize,
+        condition_dsp: Option<Box<StaticModel>>,
+        post_stack_head: Option<PostStackHead>,
+        slimmable_capable: bool,
+        allowed_channels: Option<Vec<Vec<usize>>>,
+    ) -> Result<Self, NamErrorCode> {
+        let cond = arrays.first().map_or(1, |a| a.cond);
+        let cond_dsp_elems = cond
+            .checked_mul(WAVENET_MAX_NUM_FRAMES)
+            .ok_or(NamErrorCode::InvalidModelTopology)?;
+        let head_out_ch = post_stack_head
+            .as_ref()
+            .map(|h| h.out_channels())
+            .unwrap_or(1);
+        let head_scratch_elems = head_out_ch
+            .checked_mul(WAVENET_MAX_NUM_FRAMES)
+            .ok_or(NamErrorCode::InvalidModelTopology)?;
+
+        let model = Self {
+            ch,
+            k,
+            head,
+            arrays,
+            head_scale,
+            receptive_field_size,
+            condition_dsp,
+            condition_dsp_output: AlignedVec::new(cond_dsp_elems, 0.0f32)?,
+            post_stack_head,
+            head_output_scratch: AlignedVec::new(head_scratch_elems, 0.0f32)?,
+            prewarm_on_reset: true,
+            prewarm_pending: false,
+            slimmable_capable,
+            allowed_channels,
+            pending_slim_channel: None,
+        };
+        if !model.validate_state() {
+            return Err(NamErrorCode::InvalidModelTopology);
+        }
+        Ok(model)
+    }
+
+    /// Builds a minimal structurally-empty `WaveNetModelDyn` stub for
+    /// downstream queue/GC unit tests (`arrays` is empty; never run DSP on it).
+    #[cfg(feature = "testing")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "testing")))]
+    pub fn dummy_slimmable_stub(ch: usize) -> Self {
+        Self {
+            ch,
+            k: 3,
+            head: 1,
+            arrays: Vec::new(),
+            head_scale: 1.0,
+            receptive_field_size: 1,
+            condition_dsp: None,
+            condition_dsp_output: AlignedVec::empty(),
+            post_stack_head: None,
+            head_output_scratch: AlignedVec::empty(),
+            prewarm_on_reset: false,
+            prewarm_pending: false,
+            slimmable_capable: true,
+            allowed_channels: None,
+            pending_slim_channel: None,
+        }
+    }
+
+    /// Returns the primary internal channel count.
+    #[inline(always)]
+    pub fn ch(&self) -> usize {
+        self.ch
+    }
+
+    /// Returns the kernel size.
+    #[inline(always)]
+    pub fn k(&self) -> usize {
+        self.k
+    }
+
+    /// Returns the final head projection width.
+    #[inline(always)]
+    pub fn head(&self) -> usize {
+        self.head
+    }
+
+    /// Returns the dynamic layer arrays.
+    #[inline(always)]
+    pub fn arrays(&self) -> &[WaveNetLayerArrayDyn] {
+        &self.arrays
+    }
+
+    /// Returns the final voltage compensation scale (`head_scale`).
+    #[inline(always)]
+    pub fn head_scale(&self) -> f32 {
+        self.head_scale
+    }
+
+    /// Returns the receptive field size in samples.
+    #[inline(always)]
+    pub fn receptive_field_size(&self) -> usize {
+        self.receptive_field_size
+    }
+
+    /// Returns the optional nested condition DSP sub-model.
+    #[inline(always)]
+    pub fn condition_dsp(&self) -> Option<&StaticModel> {
+        self.condition_dsp.as_deref()
+    }
+
+    /// Returns the optional post-stack head.
+    #[inline(always)]
+    pub fn post_stack_head(&self) -> Option<&PostStackHead> {
+        self.post_stack_head.as_ref()
+    }
+
+    /// Returns whether prewarm runs during `reset()`.
+    #[inline(always)]
+    pub fn prewarm_on_reset(&self) -> bool {
+        self.prewarm_on_reset
+    }
+
+    /// Returns whether a deferred prewarm pass is pending.
+    #[inline(always)]
+    pub fn prewarm_pending(&self) -> bool {
+        self.prewarm_pending
+    }
+
+    /// Returns the optional per-array allowed slimmable channel breakpoints.
+    #[inline(always)]
+    pub fn allowed_channels(&self) -> Option<&[Vec<usize>]> {
+        self.allowed_channels.as_deref()
+    }
+
+    /// Returns the optional pending slimmable channel targets.
+    #[inline(always)]
+    pub fn pending_slim_channel(&self) -> Option<&[usize]> {
+        self.pending_slim_channel.as_deref()
+    }
+
+    /// Returns whether the whole model satisfies its unchecked kernel invariants.
+    ///
+    /// Enforced once at construction (`from_parts`) and asserted in debug builds
+    /// on the real-time path.
     pub fn validate_state(&self) -> bool {
         let Some(first) = self.arrays.first() else {
             return false;
@@ -341,11 +495,10 @@ impl WaveNetModelDyn {
     /// Dynamic WaveNet is hardcoded to `Avx2Math`. It does not call
     /// `dispatch_simd!` and has no AVX-512 monomorph.
     pub fn process(&mut self, input: &[f32], output: &mut [f32]) {
-        if !self.validate_state() {
-            let frames = input.len().min(output.len());
-            output[..frames].fill(0.0);
-            return;
-        }
+        debug_assert!(
+            self.validate_state(),
+            "WaveNetModelDyn::process called with invalid internal state"
+        );
         // SAFETY: `process_internal` is an `unsafe fn` whose `M` is fixed to `Avx2Math` (this
         // model hardcodes the AVX2 backend and never dispatches AVX-512), and it clamps the frame
         // count to `input.len()`/`output.len()` per its documented contract.
@@ -518,9 +671,10 @@ impl WaveNetModelDyn {
     /// the dispatch pattern of the rest of the codebase).
     #[cold]
     pub fn prewarm(&mut self) {
-        if !self.validate_state() {
-            return;
-        }
+        debug_assert!(
+            self.validate_state(),
+            "WaveNetModelDyn::prewarm called with invalid internal state"
+        );
         // SAFETY: `prewarm_internal` is an `unsafe fn` reached here with `M` fixed to `Avx2Math`
         // (this model's only backend), and it only touches the model's own pre-allocated buffers
         // and the optional condition-DSP sub-model.
@@ -563,9 +717,10 @@ impl WaveNetModelDyn {
     /// Requires an x86-64-v3 (AVX2) processor.
     #[cold]
     pub unsafe fn prewarm_avx2(&mut self) {
-        if !self.validate_state() {
-            return;
-        }
+        debug_assert!(
+            self.validate_state(),
+            "WaveNetModelDyn::prewarm_avx2 called with invalid internal state"
+        );
         // SAFETY: `prewarm_avx2` is documented to require an x86-64-v3 (AVX2) host and
         // `Avx2Math` is selected only on such hosts, so its instructions are available;
         // `prewarm_internal` only touches the model's own pre-allocated buffers.
