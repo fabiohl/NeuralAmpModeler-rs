@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
   "schema_notes": "Benchmarks with `batch_factor > 1` report total time for `batch_factor` blocks; the dashboard divides by `batch_factor` before comparing against threshold.",
-  "generated_at": "2026-11-17T16:32:20Z",
+  "generated_at": "2026-11-20T08:22:03Z",
   "provenance": {
-    "git_commit": "27adffbdb2b5122740e1a748fa5764a48e3763c5",
+    "git_commit": "ce179eaeb48ff220972946fa6acb1f91bbd597cd",
     "git_dirty": false,
-    "run_id": "20261117T162455Z-27607",
+    "run_id": "20261120T081604Z-36359",
     "effective_isa": "x86-64-v3 (AVX2/FMA/F16C/BMI)",
     "cpu_model": "AMD Ryzen 7 5700U with Radeon Graphics",
     "rustc": "rustc 1.100.0 (0ef1bc386 2026-11-09)",
@@ -136,55 +136,55 @@
     {
       "id": "wavenet-a2-dyn-blended@48000:live",
       "label": "WaveNet A2 Dynamic Blended (CH=3, blended layers 2/23) C++ cross-reference @48000 Live",
-      "esr_namcore": 5.411303522619305e-14,
-      "esr_f64": 2.3496293535210235e-14,
-      "snr_db": 132.6669810559768,
-      "mrstft": 9.825771893599758e-6,
+      "esr_namcore": 5.0959067167375915e-14,
+      "esr_f64": 2.964277352642187e-14,
+      "snr_db": 132.92778530589683,
+      "mrstft": 0.000010067162783474976,
       "optional": false
     },
     {
       "id": "wavenet-a2-dyn-gated@48000:live",
       "label": "WaveNet A2 Dynamic Gated (CH=8, gated layers 3/23) C++ cross-reference @48000 Live",
-      "esr_namcore": 2.5560842602262892e-14,
-      "esr_f64": 1.335765806235726e-14,
-      "snr_db": 135.92424833945498,
-      "mrstft": 8.782382884787811e-6,
+      "esr_namcore": 2.8064643634326524e-14,
+      "esr_f64": 1.836195430636802e-14,
+      "snr_db": 135.5184046809345,
+      "mrstft": 9.32944739667268e-6,
       "optional": false
     },
     {
       "id": "wavenet-a2-film-chaos@48000:live",
       "label": "WaveNet A2-FiLM Chaos Stress (CH=3, FiLM active) C++ cross-reference @48000 Live",
-      "esr_namcore": 1.377827038689124e-14,
-      "esr_f64": 8.311325157271413e-15,
-      "snr_db": 138.60805296838726,
-      "mrstft": 7.321412850354142e-6,
+      "esr_namcore": 1.3816417677327466e-14,
+      "esr_f64": 8.329832533001017e-15,
+      "snr_db": 138.59604546299263,
+      "mrstft": 7.475490370264706e-6,
       "optional": false
     },
     {
       "id": "wavenet-a2-film-full@48000:live",
       "label": "WaveNet A2-FiLM-Full (CH=8, FiLM active) C++ cross-reference @48000 Live",
-      "esr_namcore": 1.2246459485139982e-14,
-      "esr_f64": 5.645908822336472e-15,
-      "snr_db": 139.11989449937263,
-      "mrstft": 7.0817975301212255e-6,
+      "esr_namcore": 1.2005387448030927e-14,
+      "esr_f64": 7.2618943721019e-15,
+      "snr_db": 139.20623819461463,
+      "mrstft": 7.130065979136018e-6,
       "optional": false
     },
     {
       "id": "wavenet-a2-film-input-mixin-pre@48000:live",
       "label": "WaveNet A2-FiLM-InputMixinPre (CH=3, input_mixin_pre_film) C++ cross-reference @48000 Live",
-      "esr_namcore": 3.4424178244986565e-14,
-      "esr_f64": 2.2101513883664452e-14,
-      "snr_db": 134.63136418185852,
-      "mrstft": 6.923403081108469e-6,
+      "esr_namcore": 3.2859340252119286e-14,
+      "esr_f64": 1.9719527392353574e-14,
+      "snr_db": 134.83341160552217,
+      "mrstft": 6.538548233860805e-6,
       "optional": false
     },
     {
       "id": "wavenet-a2-film-lite@48000:live",
       "label": "WaveNet A2-FiLM-Lite (CH=3, FiLM active) C++ cross-reference @48000 Live",
-      "esr_namcore": 3.055501899940382e-13,
-      "esr_f64": 1.717133370671282e-13,
-      "snr_db": 125.14917441895598,
-      "mrstft": 0.000010611154478241158,
+      "esr_namcore": 3.175899675799485e-13,
+      "esr_f64": 1.435790388995994e-13,
+      "snr_db": 124.98133225053144,
+      "mrstft": 0.00001086538922005986,
       "optional": false
     },
     {
@@ -217,10 +217,10 @@
     {
       "id": "wavenet-a2-max@48000:live",
       "label": "WaveNet A2 Max (CH=4, cond=8, FiLM, head1x1) C++ cross-reference @48000 Live",
-      "esr_namcore": 2.5679825085029305e-14,
-      "esr_f64": 1.6626234837973537e-14,
-      "snr_db": 135.9040793873657,
-      "mrstft": 5.903009947254625e-6,
+      "esr_namcore": 2.4681211646154915e-14,
+      "esr_f64": 1.6436956633004498e-14,
+      "snr_db": 136.07633523799146,
+      "mrstft": 5.84874401492928e-6,
       "optional": false
     },
     {
@@ -498,118 +498,118 @@
     {
       "id": "RT_WaveNet_Std_CH16",
       "label": "WaveNet Standard CH16",
-      "median_latency_us": 41.93
+      "median_latency_us": 41.26
     },
     {
       "id": "RT_WaveNet_Feather_CH8",
       "label": "WaveNet Feather CH8",
-      "median_latency_us": 15.0
+      "median_latency_us": 14.63
     },
     {
       "id": "RT_WaveNet_Lite_CH12",
       "label": "WaveNet Lite CH12",
-      "median_latency_us": 53.41
+      "median_latency_us": 51.86
     },
     {
       "id": "RT_WaveNet_Nano_CH4",
       "label": "WaveNet Nano CH4",
-      "median_latency_us": 12.73
+      "median_latency_us": 11.97
     },
     {
       "id": "RT_A2_Full_CH8",
       "label": "A2 Full CH8",
-      "median_latency_us": 19.22
+      "median_latency_us": 18.68
     },
     {
       "id": "RT_A2_Lite_CH3",
       "label": "A2 Lite CH3",
-      "median_latency_us": 13.9
+      "median_latency_us": 13.76
     },
     {
       "id": "RT_LSTM_1x16",
       "label": "LSTM 1x16",
-      "median_latency_us": 6.49
+      "median_latency_us": 6.44
     },
     {
       "id": "RT_LSTM_2x8",
       "label": "LSTM 2x8",
-      "median_latency_us": 7.04
+      "median_latency_us": 6.91
     },
     {
       "id": "RT_Linear_Direct_RF4",
       "label": "Linear RF=4 Direct",
-      "median_latency_us": 0.16
+      "median_latency_us": 0.17
     },
     {
       "id": "RT_Linear_Fft_RF2048",
       "label": "Linear FFT RF=2048",
-      "median_latency_us": 4.98
+      "median_latency_us": 4.91
     },
     {
       "id": "RT_ConvNet",
       "label": "ConvNet",
-      "median_latency_us": 9.5
+      "median_latency_us": 9.3
     },
     {
       "id": "RT_WaveNet_Dyn_Free",
       "label": "WaveNet Dyn Free",
-      "median_latency_us": 19.18
+      "median_latency_us": 17.09
     },
     {
       "id": "RT_LSTM_Dyn_1x7",
       "label": "LSTM Dyn 1x7",
-      "median_latency_us": 8.18
+      "median_latency_us": 8.05
     },
     {
       "id": "RT_A2_Dyn_Gated_CH8",
       "label": "A2 Dyn Gated CH8",
-      "median_latency_us": 176.73
+      "median_latency_us": 34.15
     },
     {
       "id": "RT_A2_Dyn_Blended_CH3",
       "label": "A2 Dyn Blended CH3",
-      "median_latency_us": 130.65
+      "median_latency_us": 22.14
     },
     {
       "id": "RT_A2_Max_CH4",
       "label": "A2 Max CH4",
-      "median_latency_us": 142.87
+      "median_latency_us": 141.1
     },
     {
       "id": "RT_DSP_Resampler_44k1_to_48k",
       "label": "DSP Resampler 44.1k->48k",
-      "median_latency_us": 1.32,
+      "median_latency_us": 1.3,
       "batch_factor": 64,
       "unit": "per_block_us"
     },
     {
       "id": "RT_DSP_Resampler_96k_to_48k",
       "label": "DSP Resampler 96k->48k",
-      "median_latency_us": 0.66,
+      "median_latency_us": 0.65,
       "batch_factor": 64,
       "unit": "per_block_us"
     },
     {
       "id": "RT_DSP_CabSim_IR_Medium",
       "label": "DSP CabSim IR Medium",
-      "median_latency_us": 1.28,
+      "median_latency_us": 1.24,
       "batch_factor": 64,
       "unit": "per_block_us"
     },
     {
       "id": "RT_DSP_Pipeline_Base_NoOS",
       "label": "DSP Pipeline Base (No OS)",
-      "median_latency_us": 42.48
+      "median_latency_us": 41.81
     },
     {
       "id": "RT_DSP_Pipeline_HQ_4xOS",
       "label": "DSP Pipeline HQ (4x OS)",
-      "median_latency_us": 172.61
+      "median_latency_us": 170.23
     },
     {
       "id": "RT_DSP_Pipeline_AdaptiveOn",
       "label": "DSP Pipeline (Adaptive On)",
-      "median_latency_us": 63.75
+      "median_latency_us": 29.45
     }
   ],
   "monitoring_alerts": {
