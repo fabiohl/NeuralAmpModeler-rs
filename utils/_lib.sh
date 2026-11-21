@@ -146,9 +146,12 @@ ensure_namcore_render() {
   local fingerprint="$cxx:$build_type:$flags:std=20:a2=ON:core=$core_commit:plugin=$plugin_commit:cc=$cxx_ver:cmake=$cmake_ver"
   if [ -n "$bin" ] && [ -f "$config_file" ] && [ "$(cat "$config_file" 2>/dev/null)" = "$fingerprint" ]; then echo "$bin"; return 0; fi
   rm -rf "$build_dir"; mkdir -p "$build_dir" "$logs_dir"
+  # CMake 4.5+ rejects NAMCore v0.6.0's IDE-only `source_group(NAM ${CMAKE_CURRENT_SOURCE_DIR} ...)`.
+  printf 'macro(source_group)\nendmacro()\n' > "$build_dir/cmake_compat.cmake"
   echo "→ compiling C++ NAMCore render ($cxx, $build_type, -j$jobs)" >&2
   cmake -S "$CORE_DIR" -B "$build_dir" -DCMAKE_BUILD_TYPE="$build_type" \
     -DCMAKE_CXX_COMPILER="$cxx" -DCMAKE_CXX_STANDARD=20 -DCMAKE_CXX_FLAGS="$flags" \
+    -DCMAKE_PROJECT_NAM_INCLUDE="$build_dir/cmake_compat.cmake" \
     -DNAM_ENABLE_A2_FAST=ON > "$logs_dir/cmake-configure.log" 2>&1 || return 4
   cmake --build "$build_dir" --target render -j"$jobs" > "$logs_dir/cmake-build.log" 2>&1 || return 5
   bin=""
