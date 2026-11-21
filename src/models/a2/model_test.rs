@@ -676,3 +676,84 @@ fn test_wavenet_a2_reset_determinism_with_and_without_prewarm() {
         );
     }
 }
+
+#[test]
+fn test_inject_rt_status_rt_same_instance_is_noop() {
+    use crate::common::spsc::RtStatusFlags;
+    use std::sync::Arc;
+
+    let flags = Arc::new(RtStatusFlags::new());
+    let mut model = WaveNetA2::<3>::new().unwrap();
+    // Off-RT loader pre-injects the canonical instance.
+    model.inject_rt_status(Arc::clone(&flags));
+    let strong_before = Arc::strong_count(&flags);
+
+    // Repeated RT injection of the same instance must neither change the
+    // reference count nor replace the stored pointer.
+    for _ in 0..1024 {
+        model.inject_rt_status_rt(&flags);
+    }
+
+    assert_eq!(
+        Arc::strong_count(&flags),
+        strong_before,
+        "RT re-injection must not touch the strong count"
+    );
+    assert!(
+        model
+            .rt_status
+            .as_ref()
+            .is_some_and(|stored| Arc::ptr_eq(stored, &flags)),
+        "stored pointer must remain the pre-injected instance"
+    );
+}
+
+#[test]
+fn test_inject_rt_status_rt_refuses_foreign_instance() {
+    use crate::common::spsc::RtStatusFlags;
+    use std::sync::Arc;
+
+    let flags = Arc::new(RtStatusFlags::new());
+    let foreign = Arc::new(RtStatusFlags::new());
+    let mut model = WaveNetA2::<8>::new().unwrap();
+    model.inject_rt_status(Arc::clone(&flags));
+    let strong_before = Arc::strong_count(&flags);
+    let foreign_before = Arc::strong_count(&foreign);
+
+    // Replacing a live instance on RT would risk `Arc::drop_slow`; the call is
+    // a documented no-op instead.
+    model.inject_rt_status_rt(&foreign);
+
+    assert_eq!(Arc::strong_count(&flags), strong_before);
+    assert_eq!(Arc::strong_count(&foreign), foreign_before);
+    assert!(
+        model
+            .rt_status
+            .as_ref()
+            .is_some_and(|stored| Arc::ptr_eq(stored, &flags))
+    );
+}
+
+#[test]
+fn test_inject_rt_status_rt_adopts_when_empty() {
+    use crate::common::spsc::RtStatusFlags;
+    use std::sync::Arc;
+
+    let flags = Arc::new(RtStatusFlags::new());
+    let strong_before = Arc::strong_count(&flags);
+    let mut model = WaveNetA2::<3>::new().unwrap();
+
+    model.inject_rt_status_rt(&flags);
+
+    assert_eq!(
+        Arc::strong_count(&flags),
+        strong_before + 1,
+        "adoption must add exactly one strong reference"
+    );
+    assert!(
+        model
+            .rt_status
+            .as_ref()
+            .is_some_and(|stored| Arc::ptr_eq(stored, &flags))
+    );
+}

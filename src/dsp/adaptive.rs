@@ -151,12 +151,32 @@ pub struct AdaptiveCompute {
     /// `None` until a WaveNet model is detected via `set_wavenet_full_ch`.
     wavenet_full_ch: Option<usize>,
     /// Array channel widths of the full-quality WaveNet model.
+    /// Only populated by off-RT registrations; the RT mono path uses
+    /// [`Self::wavenet_rt_target_ch`] instead so it never allocates.
     wavenet_array_channels: Vec<usize>,
     /// Per-array allowed channels metadata (`allowed_channels`).
     wavenet_allowed_channels: Option<Vec<Vec<usize>>>,
+    /// Whether [`Self::wavenet_allowed_channels`] belongs to the active model.
+    ///
+    /// The RT registration path clears this flag without freeing the metadata
+    /// (dropping a nested `Vec` would deallocate on the audio thread). A later
+    /// off-RT registration replaces and frees it safely.
+    wavenet_allowed_channels_active: bool,
     /// Current target channel counts of the active WaveNet model.
     /// Tracks the last value applied via `take_slimmable_rebuild`.
-    wavenet_targets_current: Option<Vec<usize>>,
+    /// An empty vector means "no applied target" (legacy `None`).
+    wavenet_targets_current: Vec<usize>,
+    /// Inline single-array state used by the RT registration path.
+    ///
+    /// `true` means the active model was registered via
+    /// [`Self::set_wavenet_full_ch_rt`]: the mono channel count lives in
+    /// [`Self::wavenet_full_ch`] and the applied target in
+    /// [`Self::wavenet_rt_target_ch`], so the vector bookkeeping is bypassed
+    /// and no allocation/deallocation is required. The stale vectors are
+    /// reclaimed by the next off-RT registration.
+    wavenet_mono_rt: bool,
+    /// Applied single-array target for the RT mono path (`None` = no target).
+    wavenet_rt_target_ch: Option<usize>,
     /// Whether the loaded WaveNet model explicitly declares slimmability support.
     /// Conventional WaveNets (default) set this to `false` and maintain full channel size.
     wavenet_slimmable_capable: bool,
@@ -187,7 +207,10 @@ impl AdaptiveCompute {
             wavenet_full_ch: None,
             wavenet_array_channels: Vec::new(),
             wavenet_allowed_channels: None,
-            wavenet_targets_current: None,
+            wavenet_allowed_channels_active: false,
+            wavenet_targets_current: Vec::new(),
+            wavenet_mono_rt: false,
+            wavenet_rt_target_ch: None,
             wavenet_slimmable_capable: false,
         }
     }
@@ -515,6 +538,9 @@ impl AdaptiveCompute {
     ///
     /// When `allowed_channels` is absent, scales channels by `ratio` and clamps to `[1, orig_ch]`.
     pub fn wavenet_slimmable_targets(&self) -> Option<Vec<usize>> {
+        if self.wavenet_mono_rt {
+            return Some(vec![self.wavenet_scalar_target(0)?]);
+        }
         if !self.wavenet_slimmable_capable {
             return if self.wavenet_array_channels.is_empty() {
                 self.wavenet_full_ch.map(|ch| vec![ch])
@@ -523,7 +549,9 @@ impl AdaptiveCompute {
             };
         }
         let ratio = self.wavenet_slimmable_ratio();
-        if let Some(ref per_array) = self.wavenet_allowed_channels {
+        if let Some(ref per_array) = self.wavenet_allowed_channels
+            && self.wavenet_allowed_channels_active
+        {
             let mut targets = Vec::with_capacity(per_array.len());
             for (i, allowed) in per_array.iter().enumerate() {
                 if allowed.is_empty() {
@@ -556,9 +584,192 @@ impl AdaptiveCompute {
     }
 
     /// Primary scalar channel target query (returns first array's target channels).
+    ///
+    /// Scalar, allocation-free variant of [`Self::wavenet_slimmable_targets`]
+    /// for the mono/uniform-channel WaveNet fast path. Safe to call on the RT
+    /// thread.
     pub fn wavenet_slimmable_ch_target(&self) -> Option<usize> {
-        self.wavenet_slimmable_targets()
-            .and_then(|t| t.first().copied())
+        self.wavenet_scalar_target(0)
+    }
+
+    /// Returns the currently applied first-array channel count without cloning
+    /// the target vector.
+    ///
+    /// Falls back to the registered full-quality width when no target has been
+    /// applied yet. Safe to call on the RT thread.
+    #[inline(always)]
+    pub fn wavenet_current_ch(&self) -> Option<usize> {
+        if self.wavenet_mono_rt {
+            return self.wavenet_rt_target_ch.or(self.wavenet_full_ch);
+        }
+        self.wavenet_targets_current
+            .first()
+            .copied()
+            .or(self.wavenet_full_ch)
+    }
+
+    /// Number of per-array targets the active configuration exposes.
+    ///
+    /// Zero means the legacy `wavenet_slimmable_targets()` would return `None`.
+    #[inline(always)]
+    fn wavenet_targets_len(&self) -> usize {
+        if self.wavenet_mono_rt {
+            return usize::from(self.wavenet_full_ch.is_some());
+        }
+        if self.wavenet_slimmable_capable {
+            if self.wavenet_allowed_channels_active
+                && let Some(per_array) = self.wavenet_allowed_channels.as_ref()
+            {
+                return per_array.len();
+            }
+            if !self.wavenet_array_channels.is_empty() {
+                return self.wavenet_array_channels.len();
+            }
+            return usize::from(self.wavenet_full_ch.is_some());
+        }
+        if self.wavenet_array_channels.is_empty() {
+            return usize::from(self.wavenet_full_ch.is_some());
+        }
+        self.wavenet_array_channels.len()
+    }
+
+    /// Scalar target channel count for a single array index.
+    ///
+    /// Mirrors the per-index logic of [`Self::wavenet_slimmable_targets`] but
+    /// performs no heap allocation, making it suitable for the RT path.
+    fn wavenet_scalar_target(&self, index: usize) -> Option<usize> {
+        if self.wavenet_mono_rt {
+            if index != 0 {
+                return None;
+            }
+            let orig = self.wavenet_full_ch?;
+            if !self.wavenet_slimmable_capable {
+                return Some(orig);
+            }
+            let ratio = self.wavenet_slimmable_ratio();
+            let t = ((orig as f32) * ratio).round() as usize;
+            return Some(t.clamp(1, orig));
+        }
+        if self.wavenet_slimmable_capable {
+            let ratio = self.wavenet_slimmable_ratio();
+            if self.wavenet_allowed_channels_active
+                && let Some(per_array) = self.wavenet_allowed_channels.as_ref()
+            {
+                let allowed = per_array.get(index)?;
+                if allowed.is_empty() {
+                    return Some(
+                        self.wavenet_array_channels
+                            .get(index)
+                            .copied()
+                            .unwrap_or_else(|| self.wavenet_full_ch.unwrap_or(1)),
+                    );
+                }
+                let idx =
+                    crate::models::slimmable::slimmable_tier_index(ratio as f64, allowed.len());
+                return allowed.get(idx).copied();
+            }
+            if let Some(&orig) = self.wavenet_array_channels.get(index) {
+                let t = ((orig as f32) * ratio).round() as usize;
+                return Some(t.clamp(1, orig));
+            }
+            if index == 0 {
+                let orig = self.wavenet_full_ch?;
+                let t = ((orig as f32) * ratio).round() as usize;
+                return Some(t.clamp(1, orig));
+            }
+            return None;
+        }
+        if self.wavenet_array_channels.is_empty() {
+            return if index == 0 {
+                self.wavenet_full_ch
+            } else {
+                None
+            };
+        }
+        self.wavenet_array_channels.get(index).copied()
+    }
+
+    /// Whether the currently applied targets already equal the requested ones.
+    #[inline]
+    fn wavenet_current_matches_targets(&self) -> bool {
+        if self.wavenet_mono_rt {
+            return self.wavenet_rt_target_ch == self.wavenet_scalar_target(0);
+        }
+        let len = self.wavenet_targets_len();
+        if len != self.wavenet_targets_current.len() {
+            return false;
+        }
+        for (i, &applied) in self.wavenet_targets_current.iter().enumerate() {
+            match self.wavenet_scalar_target(i) {
+                Some(target) if target == applied => {}
+                _ => return false,
+            }
+        }
+        true
+    }
+
+    /// Records the requested targets as applied, reusing the preallocated
+    /// `wavenet_targets_current` buffer (no allocation, no deallocation).
+    #[inline]
+    fn store_targets_current_in_place(&mut self) {
+        if self.wavenet_mono_rt {
+            self.wavenet_rt_target_ch = self.wavenet_scalar_target(0);
+            return;
+        }
+        let len = self.wavenet_targets_len();
+        if self.wavenet_targets_current.capacity() < len {
+            // Growing here would allocate on the RT thread. Registrations keep
+            // the capacity sized for their array count, so this is a contract
+            // violation rather than a runtime condition.
+            debug_assert!(
+                false,
+                "RT slimmable confirm requires preallocated target capacity"
+            );
+            return;
+        }
+        self.wavenet_targets_current.clear();
+        let mut written = 0usize;
+        // SAFETY: `capacity >= len` was checked above, so there is room for
+        // exactly `len` initialized `usize` values. `wavenet_scalar_target`
+        // reads only the channel metadata fields, never `wavenet_targets_current`,
+        // so the raw writes cannot alias an active read. The length is updated
+        // only after the written prefix is initialized; a `None` target leaves
+        // the already-written prefix valid (mirroring the previous `push` loop).
+        unsafe {
+            let ptr = self.wavenet_targets_current.as_mut_ptr();
+            for i in 0..len {
+                let Some(target) = self.wavenet_scalar_target(i) else {
+                    break;
+                };
+                ptr.add(i).write(target);
+                written += 1;
+            }
+            self.wavenet_targets_current.set_len(written);
+        }
+    }
+
+    /// Peeks the first-array slimmable rebuild target without allocating.
+    ///
+    /// Scalar counterpart of [`Self::peek_slimmable_rebuild`] for the
+    /// mono/uniform-channel fast path. Returns `Some(ch)` only when the FSM or
+    /// override demands a different width than the applied one. RT-safe.
+    #[inline]
+    pub fn peek_slimmable_ch_rebuild(&self) -> Option<usize> {
+        if !self.wavenet_slimmable_capable || self.wavenet_current_matches_targets() {
+            return None;
+        }
+        self.wavenet_scalar_target(0)
+    }
+
+    /// Commits a successful first-array rebuild without allocating.
+    ///
+    /// Scalar counterpart of [`Self::take_slimmable_rebuild`] for the
+    /// mono/uniform-channel fast path. RT-safe.
+    #[inline]
+    pub fn take_slimmable_ch_rebuild(&mut self) -> Option<usize> {
+        let target = self.peek_slimmable_ch_rebuild()?;
+        self.store_targets_current_in_place();
+        Some(target)
     }
 
     /// Records the full-quality channel count of the currently loaded WaveNet model
@@ -566,15 +777,39 @@ impl AdaptiveCompute {
     ///
     /// Conventional WaveNet models without slimmability metadata pass `capable = false`,
     /// preventing `take_slimmable_rebuild` from altering their array widths.
+    ///
+    /// Off-RT only: allocates/frees the tracking buffers.
     pub fn set_wavenet_full_ch(&mut self, ch: usize, capable: bool) {
         self.wavenet_full_ch = Some(ch);
         self.wavenet_array_channels = vec![ch];
         self.wavenet_allowed_channels = None;
-        self.wavenet_targets_current = if capable { Some(vec![ch]) } else { None };
+        self.wavenet_allowed_channels_active = false;
+        self.wavenet_targets_current = if capable { vec![ch] } else { Vec::new() };
+        self.wavenet_mono_rt = false;
+        self.wavenet_rt_target_ch = None;
+        self.wavenet_slimmable_capable = capable;
+    }
+
+    /// RT-safe counterpart of [`Self::set_wavenet_full_ch`] for the
+    /// mono/uniform-channel fast path.
+    ///
+    /// Stores the channel count inline (no `Vec` growth) and invalidates the
+    /// inactive `allowed_channels` metadata by flag, leaving its buffers to be
+    /// reclaimed by the next off-RT registration. The vector bookkeeping is
+    /// bypassed until then, so this call performs zero heap allocation and zero
+    /// deallocation.
+    #[inline]
+    pub fn set_wavenet_full_ch_rt(&mut self, ch: usize, capable: bool) {
+        self.wavenet_full_ch = Some(ch);
+        self.wavenet_mono_rt = true;
+        self.wavenet_rt_target_ch = if capable { Some(ch) } else { None };
+        self.wavenet_allowed_channels_active = false;
         self.wavenet_slimmable_capable = capable;
     }
 
     /// Registers full WaveNet topology and allowed_channels metadata.
+    ///
+    /// Off-RT only: takes and frees the metadata buffers.
     pub fn set_wavenet_slimmable_info(
         &mut self,
         array_channels: Vec<usize>,
@@ -582,9 +817,20 @@ impl AdaptiveCompute {
         capable: bool,
     ) {
         self.wavenet_full_ch = array_channels.first().copied();
-        self.wavenet_array_channels = array_channels.clone();
+        let mut array_channels = array_channels;
+        if array_channels.is_empty() {
+            array_channels.reserve(1);
+        }
+        let mut targets = Vec::with_capacity(array_channels.len().max(1));
+        if capable {
+            targets.extend_from_slice(&array_channels);
+        }
+        self.wavenet_array_channels = array_channels;
         self.wavenet_allowed_channels = allowed_channels;
-        self.wavenet_targets_current = if capable { Some(array_channels) } else { None };
+        self.wavenet_allowed_channels_active = self.wavenet_allowed_channels.is_some();
+        self.wavenet_targets_current = targets;
+        self.wavenet_mono_rt = false;
+        self.wavenet_rt_target_ch = None;
         self.wavenet_slimmable_capable = capable;
     }
 
@@ -612,18 +858,27 @@ impl AdaptiveCompute {
             return None;
         }
         let targets = self.wavenet_slimmable_targets()?;
-        if self.wavenet_targets_current.as_ref() != Some(&targets) {
-            Some(targets)
+        let pending = if self.wavenet_mono_rt {
+            !self.wavenet_current_matches_targets()
         } else {
-            None
-        }
+            self.wavenet_targets_current != targets
+        };
+        if pending { Some(targets) } else { None }
     }
 
     /// Commits a successfully applied rebuild: records `applied` as the
     /// current channel counts so subsequent peeks report no pending work.
     /// Call only after the rebuild actually succeeded.
+    ///
+    /// Off-RT only: allocates the new tracking buffer.
     pub fn confirm_slimmable_rebuild(&mut self, applied: &[usize]) {
-        self.wavenet_targets_current = Some(applied.to_vec());
+        if self.wavenet_mono_rt {
+            self.wavenet_rt_target_ch = applied.first().copied();
+            return;
+        }
+        let mut targets = Vec::with_capacity(applied.len().max(1));
+        targets.extend_from_slice(applied);
+        self.wavenet_targets_current = targets;
     }
 
     /// Returns `Some(targets)` if a WaveNet slimmable rebuild is needed,

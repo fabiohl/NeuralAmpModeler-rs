@@ -765,4 +765,116 @@ mod tests {
         assert!((s1 - e0).abs() < 1e-7, "t_end(0)={e0} != t_start(1)={s1}");
         assert!(e1 > s1);
     }
+
+    #[test]
+    fn rt_scalar_api_matches_legacy_mono_state_transitions() {
+        use crate::common::alloc_audit::{
+            TrackingGuard, get_alloc_count, get_dealloc_count, get_realloc_count,
+        };
+
+        let flags = rt_flags();
+        let budget = 1000;
+        let mut legacy = AdaptiveCompute::new(AdaptiveComputeMode::Conservative);
+        let mut rt = AdaptiveCompute::new(AdaptiveComputeMode::Conservative);
+        legacy.set_wavenet_full_ch(16, true);
+        rt.set_wavenet_full_ch_rt(16, true);
+        assert_eq!(
+            legacy.wavenet_current_ch().or(legacy.wavenet_full_ch),
+            rt.wavenet_current_ch()
+        );
+
+        // 3 degrade blocks, 5 recover blocks, and mixed steady-state bands.
+        let ratios = [
+            0.71f32, 0.71, 0.71, 0.86, 0.86, 0.86, 0.1, 0.1, 0.1, 0.1, 0.1, 0.9, 0.9, 0.9, 0.1,
+            0.1, 0.1, 0.1, 0.1, 0.1,
+        ];
+        for &ratio in &ratios {
+            let latency = ((budget as f32) * ratio) as u64;
+            legacy.update(latency, budget, 48_000, &flags);
+            rt.update(latency, budget, 48_000, &flags);
+
+            assert_eq!(
+                legacy.state(),
+                rt.state(),
+                "state diverged at ratio {ratio}"
+            );
+            assert_eq!(legacy.prev_state(), rt.prev_state());
+            assert_eq!(
+                legacy.wavenet_slimmable_ch_target(),
+                rt.wavenet_slimmable_ch_target(),
+                "scalar target diverged at ratio {ratio}"
+            );
+            assert_eq!(
+                legacy.wavenet_slimmable_targets(),
+                rt.wavenet_slimmable_targets(),
+                "legacy target vector diverged at ratio {ratio}"
+            );
+
+            let legacy_peek = legacy
+                .peek_slimmable_rebuild()
+                .and_then(|v| v.first().copied());
+            assert_eq!(legacy_peek, rt.peek_slimmable_ch_rebuild());
+
+            let legacy_take = legacy
+                .take_slimmable_rebuild()
+                .and_then(|v| v.first().copied());
+            assert_eq!(legacy_take, rt.take_slimmable_ch_rebuild());
+            assert_eq!(
+                legacy
+                    .wavenet_slimmable_targets()
+                    .as_deref()
+                    .and_then(|v| v.first().copied()),
+                rt.wavenet_current_ch(),
+                "applied current channel diverged at ratio {ratio}"
+            );
+        }
+
+        // RT scalar path is allocation- and deallocation-free.
+        let (allocs, reallocs, deallocs) = {
+            let _guard = TrackingGuard::new();
+            for i in 0..1000usize {
+                rt.set_wavenet_full_ch_rt(16 + (i & 1), true);
+                let _ = rt.wavenet_current_ch();
+                let _ = rt.peek_slimmable_ch_rebuild();
+                let _ = rt.take_slimmable_ch_rebuild();
+                rt.set_wavenet_full_ch_rt(8, false);
+                let _ = rt.wavenet_current_ch();
+                let _ = rt.peek_slimmable_ch_rebuild();
+            }
+            (get_alloc_count(), get_realloc_count(), get_dealloc_count())
+        };
+        assert_eq!(allocs, 0, "RT full-ch registration must not allocate");
+        assert_eq!(reallocs, 0, "RT full-ch registration must not reallocate");
+        assert_eq!(deallocs, 0, "RT full-ch registration must not deallocate");
+    }
+
+    #[test]
+    fn rt_scalar_api_matches_legacy_multi_array_targets() {
+        let flags = rt_flags();
+        let budget = 1000;
+        let mut legacy = AdaptiveCompute::new(AdaptiveComputeMode::Conservative);
+        let mut rt = AdaptiveCompute::new(AdaptiveComputeMode::Conservative);
+        let info = || (vec![8usize, 8], Some(vec![vec![2, 4, 8], vec![]]), true);
+        let (arrays, allowed, capable) = info();
+        legacy.set_wavenet_slimmable_info(arrays, allowed, capable);
+        let (arrays, allowed, capable) = info();
+        rt.set_wavenet_slimmable_info(arrays, allowed, capable);
+
+        for _ in 0..6 {
+            let latency = above_threshold(budget, 0.90);
+            legacy.update(latency, budget, 48_000, &flags);
+            rt.update(latency, budget, 48_000, &flags);
+        }
+        assert_eq!(legacy.state(), rt.state());
+        assert_eq!(legacy.state(), AdaptiveState::Minimal);
+        assert_eq!(legacy.take_slimmable_rebuild(), Some(vec![4, 8]));
+        assert_eq!(rt.take_slimmable_ch_rebuild(), Some(4));
+        assert_eq!(
+            rt.wavenet_slimmable_targets(),
+            legacy.wavenet_slimmable_targets()
+        );
+        assert_eq!(rt.peek_slimmable_ch_rebuild(), None);
+        assert_eq!(legacy.peek_slimmable_rebuild(), None);
+        assert_eq!(rt.wavenet_current_ch(), Some(4));
+    }
 }

@@ -1020,3 +1020,94 @@ fn fifo_causality_across_parked_structural_and_scalar_with_gapless_ack() {
 
     drop(gc_cons);
 }
+
+/// Drop sentinel: verifies that parking a payload in the deferred slot (both
+/// Phase 0 re-park and Phase 2 window park) never drops it on the RT thread,
+/// and that every payload is eventually released exactly once by the handler.
+#[test]
+fn parking_never_drops_payload_on_the_drain() {
+    use std::sync::atomic::AtomicUsize;
+
+    static DROPS: AtomicUsize = AtomicUsize::new(0);
+
+    struct DropPayload(u64);
+    impl Drop for DropPayload {
+        fn drop(&mut self) {
+            DROPS.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    struct Handler;
+    impl RtSwapHandler for Handler {
+        type Payload = DropPayload;
+
+        fn is_structural(&self, _payload: &Self::Payload) -> bool {
+            true
+        }
+
+        fn coalesce_key(&self, payload: &Self::Payload) -> Option<u64> {
+            Some(payload.0)
+        }
+
+        fn install(&mut self, payload: Box<Self::Payload>, _gc: &mut GcSink<'_>) {
+            drop(payload);
+        }
+
+        fn discard(&mut self, payload: Box<Self::Payload>, _gc: &mut GcSink<'_>) {
+            drop(payload);
+        }
+    }
+
+    let (mut producer, consumer) = RingBuffer::new(8);
+    let (mut gc_prod, _gc_cons) = RingBuffer::new(64);
+    let mut parking_lot: [Option<GcItem>; 16] = std::array::from_fn(|_| None);
+    let overflow = GcOverflowBuffer::new(64);
+    let status = RtStatusFlags::new();
+    let mut drain = RtSwapDrain::new(
+        consumer,
+        SwapTunables {
+            pops_per_callback: 8,
+            swaps_per_callback: 1,
+            backlog_flag: false,
+        },
+    );
+    let mut handler = Handler;
+    let mut sink = GcSink {
+        producer: &mut gc_prod,
+        parking_lot: &mut parking_lot,
+        overflow: &overflow,
+        rt_status: &status,
+        parking_lot_dirty: None,
+    };
+
+    for id in 0..3u64 {
+        producer.push(Box::new(DropPayload(id))).unwrap();
+    }
+
+    // First callback: installs id 0, parks id 1, leaves id 2 queued.
+    let mut budget = SwapBudget::new(1);
+    drain.drain(&mut handler, &mut budget, &mut sink);
+    assert_eq!(
+        DROPS.load(Ordering::Relaxed),
+        1,
+        "parking must not drop the deferred payload"
+    );
+    assert!(drain.has_deferred());
+
+    // Second callback: resolves the parked id 1 (budget consumed), id 2 stays
+    // queued for the next callback.
+    let mut budget = SwapBudget::new(1);
+    drain.drain(&mut handler, &mut budget, &mut sink);
+    assert_eq!(DROPS.load(Ordering::Relaxed), 2);
+    assert!(!drain.has_deferred());
+
+    // Third callback: installs the remaining id 2.
+    let mut budget = SwapBudget::new(1);
+    drain.drain(&mut handler, &mut budget, &mut sink);
+    assert_eq!(
+        DROPS.load(Ordering::Relaxed),
+        3,
+        "every payload must be released exactly once (no leak, no double drop)"
+    );
+    assert!(!drain.has_deferred());
+}

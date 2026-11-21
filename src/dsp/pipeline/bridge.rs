@@ -221,6 +221,61 @@ impl DspBridge {
         self.dropped_frames.swap(0, Ordering::Relaxed)
     }
 
+    /// Raw publication generation as written by the capture producer.
+    ///
+    /// Diagnostic/watchdog snapshot only: uses `Relaxed`, so it is neither
+    /// synchronized with the buffer contents nor with
+    /// [`Self::consumed_gen_raw`]. Callers that need a publication barrier must
+    /// go through the `DspBridgeWriter` / `DspBridgeReader` protocols instead.
+    ///
+    /// # Safety
+    /// `ptr` must point to a live, initialized `DspBridge`. Only the `generation`
+    /// field place is projected; no `&DspBridge` is materialized, so this is
+    /// sound while the RT producer/consumer concurrently access other fields.
+    #[inline(always)]
+    pub unsafe fn written_gen_raw(ptr: *const Self) -> u64 {
+        // SAFETY: `ptr` is valid per the caller contract; `&raw const` projects
+        // the field place without creating a reference to the whole struct.
+        unsafe {
+            let field = &raw const (*ptr).generation;
+            (*field).load(Ordering::Relaxed)
+        }
+    }
+
+    /// Raw consumption generation as acknowledged by the playback consumer.
+    ///
+    /// Diagnostic/watchdog snapshot only (`Relaxed`); not a synchronization
+    /// barrier. See [`Self::written_gen_raw`].
+    ///
+    /// # Safety
+    /// Same contract as [`Self::written_gen_raw`].
+    #[inline(always)]
+    pub unsafe fn consumed_gen_raw(ptr: *const Self) -> u64 {
+        // SAFETY: see `written_gen_raw`.
+        unsafe {
+            let field = &raw const (*ptr).consumed_gen;
+            (*field).load(Ordering::Relaxed)
+        }
+    }
+
+    /// Drains the dropped frames counter through a raw pointer projection,
+    /// returning the accumulated value and resetting it.
+    ///
+    /// Equivalent to [`Self::drain_dropped_frames`] for concurrent observers that
+    /// must not materialize a `&DspBridge` while RT threads are live.
+    ///
+    /// # Safety
+    /// `ptr` must point to a live, initialized `DspBridge`. Only the
+    /// `dropped_frames` field place is projected.
+    #[inline(always)]
+    pub unsafe fn drain_dropped_frames_raw(ptr: *const Self) -> u32 {
+        // SAFETY: see `written_gen_raw`; the atomic `swap` requires only `&AtomicU32`.
+        unsafe {
+            let field = &raw const (*ptr).dropped_frames;
+            (*field).swap(0, Ordering::Relaxed)
+        }
+    }
+
     /// Resets the bridge state to silence during host teardown or reconnection.
     ///
     /// Clears both buffers' lengths to 0 and synchronizes `generation` and

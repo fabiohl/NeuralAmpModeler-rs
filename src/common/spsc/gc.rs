@@ -378,6 +378,14 @@ impl Default for GcOverflowBuffer {
     }
 }
 
+/// Stores `value` into a slot the caller has proven empty, without emitting a
+/// `drop_glue` call for the overwritten `None` on the RT thread.
+#[inline(always)]
+fn park_without_drop(slot: &mut Option<GcItem>, value: Option<GcItem>) {
+    debug_assert!(slot.is_none(), "park_without_drop requires an empty slot");
+    std::mem::forget(std::mem::replace(slot, value));
+}
+
 /// RT-safe GC cascade: tries the SPSC channel, then a 16-slot parking lot,
 /// then the overflow buffer as a last resort.
 ///
@@ -420,7 +428,7 @@ pub fn gc_cascade(
         match gc_producer.push(parked) {
             Ok(()) => {}
             Err(rtrb::PushError::Full(returned)) => {
-                *slot = Some(returned);
+                park_without_drop(slot, Some(returned));
                 break;
             }
         }
@@ -438,7 +446,7 @@ pub fn gc_cascade(
         let mut i_opt = Some(i);
         for slot in parking_lot.iter_mut() {
             if slot.is_none() {
-                *slot = i_opt.take();
+                park_without_drop(slot, i_opt.take());
                 return;
             }
         }

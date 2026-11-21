@@ -599,3 +599,45 @@ fn test_split_spsc_and_from_ref() {
     let read = reader.read_block(&mut last_gen, |l, r| (l.to_vec(), r.to_vec()));
     assert_eq!(read, Some((vec![0.25, -0.5], vec![0.5, -0.25])));
 }
+
+/// Reads `(written_gen, consumed_gen)` through the raw projections.
+fn raw_generations(bridge: *const DspBridge) -> (u64, u64) {
+    // SAFETY: `bridge` points to a live `DspBridge` owned by the calling test;
+    // no concurrent access is performed in these single-threaded tests.
+    unsafe {
+        (
+            DspBridge::written_gen_raw(bridge),
+            DspBridge::consumed_gen_raw(bridge),
+        )
+    }
+}
+
+#[test]
+fn test_generation_raw_accessors_track_publish_and_consume() {
+    let mut bridge = new_bridge();
+    assert_eq!(raw_generations(&raw const *bridge), (0, 0));
+
+    // SAFETY: `bridge` outlives both endpoints and this test is the single
+    // SPSC producer and consumer.
+    let bridge_ref = unsafe { BridgeRef::new(&raw mut *bridge) };
+    // SAFETY: single SPSC pair derived from `bridge_ref`.
+    let (writer, reader) = unsafe { DspBridgeWriter::split_spsc(bridge_ref) }.expect("non-null");
+
+    writer.write_block(&[1.0, 2.0], &[3.0, 4.0], 2, false);
+    assert_eq!(raw_generations(&raw const *bridge), (1, 0));
+
+    let mut last_gen = 0u64;
+    let read = reader.read_block(&mut last_gen, |_, _| ());
+    assert!(read.is_some());
+    assert_eq!(raw_generations(&raw const *bridge), (1, 1));
+}
+
+#[test]
+fn test_drain_dropped_frames_raw_matches_safe_drain() {
+    let bridge = new_bridge();
+    bridge.dropped_frames.store(7, Ordering::Relaxed);
+    // SAFETY: `bridge` is a live local `DspBridge`; no concurrent access in this test.
+    let drained = unsafe { DspBridge::drain_dropped_frames_raw(&raw const *bridge) };
+    assert_eq!(drained, 7);
+    assert_eq!(bridge.drain_dropped_frames(), 0);
+}

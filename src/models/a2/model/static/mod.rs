@@ -167,8 +167,30 @@ impl<const CH: usize> WaveNetA2<CH> {
     }
 
     /// Injects `RtStatusFlags` for RT→Main telemetry (RF8).
+    ///
+    /// Off-RT only: replaces (and thus may free) a previous `Arc`.
     pub fn inject_rt_status(&mut self, rt_status: Arc<crate::common::spsc::RtStatusFlags>) {
         self.rt_status = Some(rt_status);
+    }
+
+    /// RT-safe `RtStatusFlags` injection.
+    ///
+    /// The canonical instance is expected to be pre-injected by the off-RT
+    /// loader with [`Self::inject_rt_status`]; when the RT thread later hands
+    /// the same `Arc`, this is a `ptr_eq` no-op that touches no reference
+    /// count. When no status is stored yet, a new strong reference is adopted
+    /// (atomic increment only). A different live instance is refused instead of
+    /// being replaced, because replacing it would drop the previous strong
+    /// reference — and `Arc::drop_slow` on the audio thread is forbidden.
+    ///
+    /// Zero allocation and zero deallocation.
+    #[inline]
+    pub fn inject_rt_status_rt(&mut self, rt_status: &Arc<crate::common::spsc::RtStatusFlags>) {
+        match self.rt_status.as_ref() {
+            Some(current) if Arc::ptr_eq(current, rt_status) => {}
+            Some(_) => {}
+            None => self.rt_status = Some(Arc::clone(rt_status)),
+        }
     }
 
     /// Returns the total receptive field size.

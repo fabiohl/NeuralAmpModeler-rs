@@ -421,7 +421,7 @@ impl<R: SwapRing> RtSwapDrain<R> {
         } else {
             // Budget exhausted and nothing newer queued: keep parked for the
             // next callback (causally first there as well).
-            self.deferred = Some(p);
+            park_without_drop(&mut self.deferred, p);
             flag_deferred(gc.rt_status);
         }
     }
@@ -485,7 +485,7 @@ impl<R: SwapRing> RtSwapDrain<R> {
                         handler.install(cand, gc);
                         budget.consume();
                     } else {
-                        candidate = Some(cand);
+                        park_without_drop(&mut candidate, cand);
                         break;
                     }
                 }
@@ -560,7 +560,7 @@ impl<R: SwapRing> RtSwapDrain<R> {
                 self.deferred.is_none(),
                 "deferred slot must be free when parking a window candidate"
             );
-            self.deferred = Some(p);
+            park_without_drop(&mut self.deferred, p);
             // The candidate's pop must not be covered by the ack: rewind the
             // sequence so Phase 0 consumes the slot exactly once on resolve.
             self.ring.rollback_last_pop();
@@ -608,6 +608,24 @@ where
     };
     ring.peek()
         .is_some_and(|head| handler.coalesce_key(head) == Some(key))
+}
+
+/// Parks a payload in an empty slot without emitting `drop_glue` for the
+/// previous value.
+///
+/// Every call site guarantees the slot is empty: Phase 0 `take()`s the
+/// deferred payload before re-parking it and Phase 1 takes the local candidate
+/// before re-parking it. `replace` + `mem::forget` keeps the polymorphic
+/// `Option<Box<Payload>>` destruction path out of the RT binary; a plain
+/// assignment forces the compiler to emit a `drop_glue` branch that a future
+/// protocol change could take on the audio thread.
+#[inline(always)]
+fn park_without_drop<T>(slot: &mut Option<T>, value: T) {
+    debug_assert!(
+        slot.is_none(),
+        "parked payload slot must be empty before parking"
+    );
+    std::mem::forget(slot.replace(value));
 }
 
 /// Raises `RT_STATUS_STRUCTURAL_DEFERRED` (+ monotonic counter, `Relaxed`).
