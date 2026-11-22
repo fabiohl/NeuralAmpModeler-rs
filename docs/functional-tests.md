@@ -28,8 +28,8 @@ This guide defines the manual functional verification procedures and the formal 
 | **Tier 1 (Manual)**     | ⚡ **Smoke Test:** Sanity checks on model loading, dispatch, and basic inference                     | ~2 min                                              | After modifications to core DSP or loader modules  |
 | **Tier 2 (Manual)**     | 🎯 **Feature Verification:** Block-invariance, reset idempotency, DSP stage transitions              | ~10–15 min                                          | Milestone completion or major feature integration  |
 | **Tier 3 (Manual)**     | 🛡️ **Robustness & Stress:** Continuous soak, SPSC burst contention, rate modulation                  | ~20–30 min                                          | Pre-release audits or major engine refactorings    |
-| **Agile Quick Runner**  | 🚀 **Agile First-Line QA:** Structural debug tests, float/C++ parity, parser fuzzing (2,216–2,273 tests) | ~16–102s (16–22s warm; 67–97s CI; budget ≤ 5 min) | Pre-commit check or local iterative validation     |
-| **Long Audit Runner**   | 🔬 **Exhaustive Pre-Release Audit:** Soak, full parity matrix, heap audit, RT deadline (2,553 / 2,536 tests) | ~10–15 min (625–749s local; 737s hosted CI) | Nightly builds and pre-release human certification |
+| **Agile Quick Runner**  | 🚀 **Agile First-Line QA:** Structural debug tests, float/C++ parity, parser fuzzing (2,416–2,445 tests) | ~16–137s (16–22s warm; 91–137s CI; budget ≤ 5 min) | Pre-commit check or local iterative validation     |
+| **Long Audit Runner**   | 🔬 **Exhaustive Pre-Release Audit:** Soak, full parity matrix, heap audit, RT deadline (2,748 hosted CI) | ~10–15 min (621s hosted CI)                | Nightly builds and pre-release human certification |
 
 ---
 
@@ -181,7 +181,7 @@ The quick suite is the primary automated gate for local development (~16–102s 
 ```
 
 - **Freshness (`nam_freshness artifacts-hard`):** Verifies golden-artifact freshness and integrity; exit code 3 becomes a `generator-drift` gap (without emitting `PASS` on the same phase), exit code 0 passes, and other nonzero exits fail the run.
-- **Tests (`cargo test --locked --features testing,pinned --no-fail-fast`, Debug):** Runs every non-ignored test target (measured: 2,273 passed on `x86_64` Linux, 2,240 passed on `aarch64` Linux, 2,216 passed on `aarch64` macOS Apple Silicon, 2,254–2,255 passed on `x86_64-pc-windows-msvc`, and 2,265 passed on `aarch64-pc-windows-msvc`; 310–311 ignored; enforced floor `assert_ran_tests` ≥ 2,000), including structural/logic/parser/FSM checks, non-ignored numerical and parity checks, and the `libm_export_guard` symbol gate. Ignored tests are not invoked. For Windows 11 execution via Git Bash and explicit platform gaps, see [testing.md](testing.md#310-windows-11-experimental-validation-explicit-gaps--community-audit-protocol).
+- **Tests (`cargo test --locked --features testing,pinned --no-fail-fast`, Debug):** Runs every non-ignored test target (measured: 2,434 passed on `x86_64` Linux, 2,445 passed on `aarch64` Linux, 2,430 passed on `aarch64` macOS Apple Silicon, 2,416 passed on `x86_64-pc-windows-msvc`, and 2,427 passed on `aarch64-pc-windows-msvc`; 311–312 ignored; enforced floor `assert_ran_tests` ≥ 2,000), including structural/logic/parser/FSM checks, non-ignored numerical and parity checks, and the `libm_export_guard` symbol gate. Ignored tests are not invoked. For Windows 11 execution via Git Bash and explicit platform gaps, see [testing.md](testing.md#310-windows-11-experimental-validation-explicit-gaps--community-audit-protocol).
 
 **Expected Outcome:**
 

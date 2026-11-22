@@ -487,10 +487,10 @@ fn assert_isa_self_consistency_with_precision(
         InstructionSet::Avx512VnniBf16 => "VNNI+BF16",
         _ => "UNKNOWN",
     };
-    let suffix = match precision {
-        ActivationPrecision::Fast => "self-consistency",
-        ActivationPrecision::Standard => "self-consistency (HF)",
-        _ => "self-consistency (custom)",
+    let (suffix, report_label) = match precision {
+        ActivationPrecision::Fast => ("self-consistency", label.to_string()),
+        ActivationPrecision::Standard => ("self-consistency (HF)", format!("{label} (HF)")),
+        _ => ("self-consistency (custom)", format!("{label} (custom)")),
     };
     println!(
         "[ISA Matrix] {label} | {isa_name:>10} {suffix} | MSE={mse:.2e} | \
@@ -498,7 +498,7 @@ fn assert_isa_self_consistency_with_precision(
         bitwise.mismatch_count, bitwise.total_samples
     );
 
-    common::report_isa(label, isa_name, isa_name, None, mse, None, None);
+    common::report_isa(&report_label, isa_name, isa_name, None, mse, None, None);
 
     assert_eq!(
         bitwise.mismatch_count, 0,

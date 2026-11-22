@@ -273,16 +273,17 @@ mod tests {
             pair.model_l.is_some(),
             "model_l must be Some for stereo load"
         );
-        #[cfg(feature = "dual-mono")]
-        assert!(
-            pair.model_r.is_some(),
-            "model_r must be Some for stereo load when dual-mono is enabled"
-        );
-        #[cfg(not(feature = "dual-mono"))]
-        assert!(
-            pair.model_r.is_none(),
-            "model_r must be None for stereo load when dual-mono is disabled"
-        );
+        if cfg!(feature = "dual-mono") {
+            assert!(
+                pair.model_r.is_some(),
+                "model_r must be Some for stereo load when dual-mono is enabled"
+            );
+        } else {
+            assert!(
+                pair.model_r.is_none(),
+                "model_r must be None for stereo load when dual-mono is disabled"
+            );
+        }
     }
 
     #[test]

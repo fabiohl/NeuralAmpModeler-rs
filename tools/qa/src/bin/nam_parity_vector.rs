@@ -295,38 +295,10 @@ fn cmd_generate(args: &[String]) -> ExitCode {
         }
     };
 
-    let target_triple = std::env::var("TARGET").unwrap_or_else(|_| {
-        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-        {
-            "x86_64-unknown-linux-gnu".into()
-        }
-        #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
-        {
-            "aarch64-unknown-linux-gnu".into()
-        }
-        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-        {
-            "aarch64-apple-darwin".into()
-        }
-        #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
-        {
-            "x86_64-pc-windows-msvc".into()
-        }
-        #[cfg(all(target_os = "windows", target_arch = "aarch64"))]
-        {
-            "aarch64-pc-windows-msvc".into()
-        }
-        #[cfg(not(any(
-            all(target_os = "linux", target_arch = "x86_64"),
-            all(target_os = "linux", target_arch = "aarch64"),
-            all(target_os = "macos", target_arch = "aarch64"),
-            all(target_os = "windows", target_arch = "x86_64"),
-            all(target_os = "windows", target_arch = "aarch64")
-        )))]
-        {
-            "unknown".into()
-        }
-    });
+    let target_triple = std::env::var("TARGET")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| env!("NAM_QA_TARGET").into());
 
     let instruction_set = if cfg!(target_arch = "aarch64") {
         SIMD_MATH.name.to_string()
@@ -355,8 +327,14 @@ fn cmd_generate(args: &[String]) -> ExitCode {
         initial_state: InitialState::Prewarmed,
         num_channels,
         num_samples_per_channel,
-        toolchain: std::env::var("RUSTC_VERSION").unwrap_or_else(|_| "rustc 1.99.0".into()),
-        compile_flags: std::env::var("RUSTFLAGS").unwrap_or_else(|_| "-C opt-level=3".into()),
+        toolchain: std::env::var("RUSTC_VERSION")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| env!("NAM_QA_RUSTC_VERSION").into()),
+        compile_flags: std::env::var("RUSTFLAGS")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| env!("NAM_QA_COMPILE_FLAGS").into()),
         target_triple,
         instruction_set,
         fp_env: "FTZ/DAZ active".into(),

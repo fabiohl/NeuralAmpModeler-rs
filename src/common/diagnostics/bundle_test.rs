@@ -123,9 +123,10 @@ fn test_diagnostic_bundle_honest_scheduler_and_windows_pii_redaction() {
         rendered.contains("model.memory_bytes=524288"),
         "Memory footprint must be present: {rendered}"
     );
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    assert!(
-        rendered.contains("rt.scheduler=UNSUPPORTED"),
-        "Non-Linux/macOS must honestly report UNSUPPORTED scheduler: {rendered}"
-    );
+    if cfg!(not(any(target_os = "linux", target_os = "macos"))) {
+        assert!(
+            rendered.contains("rt.scheduler=UNSUPPORTED"),
+            "Non-Linux/macOS must honestly report UNSUPPORTED scheduler: {rendered}"
+        );
+    }
 }
