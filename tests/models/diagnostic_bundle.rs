@@ -211,6 +211,7 @@ fn test_rt_status_flags_provider_populated() {
 }
 
 #[test]
+#[serial_test::serial(panic_hook)]
 fn test_panic_hook_behavior() {
     let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     use std::fs;
@@ -336,6 +337,47 @@ fn test_panic_hook_behavior() {
     assert!(
         !found_bypass_report,
         "No report should be written if shutdown is in progress"
+    );
+
+    neural_amp_modeler_rs::common::panic_hook::clear_shutdown_in_progress();
+
+    // Part 3: Test thread-local suppression guard skips disk write.
+    let component_suppressed = unique_component("test-panic-suppressed");
+    let original_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    neural_amp_modeler_rs::common::panic_hook::install_panic_hook(component_suppressed);
+
+    let result = {
+        let _suppress =
+            neural_amp_modeler_rs::common::panic_hook::suppress_panic_report_on_current_thread();
+        std::panic::catch_unwind(|| {
+            panic!("Contained panic under suppression guard");
+        })
+    };
+    assert!(result.is_err());
+
+    std::panic::set_hook(original_hook);
+
+    let mut found_suppressed_report = false;
+    if let Ok(entries) = fs::read_dir(&cache_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let is_target = path.is_file()
+                && path
+                    .file_name()
+                    .and_then(|f| f.to_str())
+                    .map(|name| name.contains(component_suppressed) && name.ends_with(".txt"))
+                    .unwrap_or(false);
+            if is_target {
+                found_suppressed_report = true;
+                let _ = fs::remove_file(path);
+            }
+        }
+    }
+
+    assert!(
+        !found_suppressed_report,
+        "No report should be written while PanicReportSuppressionGuard is active"
     );
 }
 
@@ -659,10 +701,14 @@ mod heap_audit_tests {
     }
 
     #[test]
+    #[serial_test::serial(panic_hook)]
     fn test_panic_hook_zero_alloc() {
         let _guard = super::TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
 
+        let original_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
         neural_amp_modeler_rs::common::panic_hook::install_panic_hook("test-panic-hook-zero-alloc");
+        std::panic::set_hook(original_hook);
 
         let allocs = {
             let _guard = TrackingGuard::new();

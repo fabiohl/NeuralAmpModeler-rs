@@ -3892,6 +3892,7 @@ fn test_tr2b2_condition_dsp_contract() {
 /// divergence that the calibrated mrstft_max gate catches at native
 /// sample rate, proving the gate is not a placebo.
 #[test]
+#[serial_test::serial(panic_hook)]
 fn test_mrstft_hard_gate_catches_regression() {
     // Suppress report output and panic messages during this
     // controlled-panic regression test to keep the green-test suite clean.
