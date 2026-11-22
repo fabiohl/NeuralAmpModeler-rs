@@ -1,27 +1,99 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-//! Host-agnostic bounded streaming resample buffer with strict cardinality.
+//! Host-agnostic bounded streaming resample buffer with strict output cardinality.
 //!
 //! [`StreamingResampleBuffer`] couples a fractional host sample rate to a
 //! model sample rate (e.g. 44.1 kHz ↔ 48 kHz, 96 kHz ↔ 48 kHz) through a
-//! caller-supplied model processor, guaranteeing that:
+//! caller-supplied model processor.
 //!
-//! - Every [`pull_output`](StreamingResampleBuffer::pull_output) / [`process`](StreamingResampleBuffer::process)
-//!   call delivers **exactly** the requested number of host samples
-//!   (zero-padding only the formally declared initial latency during warm-up);
-//! - Excess output is retained in an internal FIFO for the next call;
-//! - No sample is ever dropped, duplicated, or fabricated beyond the declared
-//!   latency — strict conservation holds:
-//!   `total real output == total input consumed - declared_latency`;
-//! - The API is RT-safe: zero heap allocation on the continuous processing path
-//!   (all storage is pre-allocated at construction).
+//! # Output cardinality
 //!
-//! The abstraction is generic, pure and host-agnostic (Apache-2.0): it does not
-//! reference any plugin-host concept. The neural model is injected as a plain
+//! - [`pull_output`](StreamingResampleBuffer::pull_output) writes exactly
+//!   `min(n, out_l.len(), out_r.len())` host samples per channel. Excess output
+//!   is retained in the internal output FIFO for the next call.
+//! - [`process`](StreamingResampleBuffer::process) writes exactly
+//!   `n = min(in_l.len(), in_r.len(), out_l.len(), out_r.len())` host samples
+//!   per channel. Output cardinality is **independent** of how much input was
+//!   accepted in the same call.
+//!
+//! `real + padded == written` holds for every [`PullResult`] and
+//! [`StreamingResult`] returned by a single call: `real` counts generated
+//! samples and `padded` counts zeros (declared priming plus any deficit).
+//!
+//! # Input acceptance (`process` only)
+//!
+//! `process` never buffers more host input than the input FIFO can hold, so
+//! `consumed <= n`; `consumed == n` is guaranteed only when the caller passes
+//! at most `max_block()` samples, the input FIFO is empty, and the model
+//! callback keeps making progress. In particular `consumed < n` occurs when the
+//! caller exceeds `max_block()` (only the first `max_block()` samples are
+//! accepted) or when queued input cannot be drained. `consumed` is never
+//! greater than the input length `n`, and no relation between `consumed` and
+//! `written` is a contract.
+//!
+//! # Priming and underflow
+//!
+//! The first [`latency_samples`](StreamingResampleBuffer::latency_samples)
+//! host-rate samples delivered are zeros (the declared initial latency); the
+//! resampler startup transient is discarded so the signal is delayed by exactly
+//! that latency. Beyond the priming budget, any output deficit is still
+//! zero-filled to preserve cardinality, is counted in
+//! [`underflow_total`](StreamingResampleBuffer::underflow_total), and flags
+//! [`underflow`](StreamingResult::underflow) on the result. Underflow has two
+//! independent causes: not enough real host output was available, or the model
+//! callback produced fewer model-rate samples than it received.
+//!
+//! # Backpressure
+//!
+//! All buffers are pre-allocated and bounded. [`push_input`](StreamingResampleBuffer::push_input)
+//! accepts only what fits in the input FIFO; [`push_model_output`](StreamingResampleBuffer::push_model_output)
+//! accepts what fits in the model FIFO and drains as much as the output FIFO
+//! allows. The remainder stays queued in order and is resumed by the next
+//! granular call or by [`pull_output`](StreamingResampleBuffer::pull_output) /
+//! [`process`](StreamingResampleBuffer::process). Accepted samples are never
+//! dropped or duplicated.
+//!
+//! # Callback semantics
+//!
+//! The model is injected as a plain
 //! `FnMut(&[f32], &[f32], &mut [f32], &mut [f32]) -> usize` processor at model
-//! rate (mono or stereo), so any consumer (plugin host, standalone audio host,
-//! offline renderer) can drive it.
+//! rate (mono or stereo). It receives equal-length input and output slices and
+//! returns the number of output samples it produced. It reports **production,
+//! not consumption**: the adapter does not guess which inputs a partially
+//! producing callback consumed and never fabricates non-zero model samples. If
+//! `produced < drained`, the `produced` samples are kept, the call is flagged as
+//! underflow, and a callback returning `0` stops the loop (remaining host input
+//! stays queued) instead of spinning.
+//!
+//! # Granular API vs. one-shot call
+//!
+//! [`push_input`](StreamingResampleBuffer::push_input),
+//! [`drain_model_samples`](StreamingResampleBuffer::drain_model_samples),
+//! [`push_model_output`](StreamingResampleBuffer::push_model_output) and
+//! [`pull_output`](StreamingResampleBuffer::pull_output) let the caller drive
+//! each pipeline stage. Every push returns the number of samples actually
+//! accepted: the caller must preserve only the **unaccepted suffix**, present it
+//! again in order, and must never re-send input already accepted into the FIFO.
+//! [`process`](StreamingResampleBuffer::process) performs the same stages in one
+//! call, draining pre-existing FIFO state before the new block.
+//!
+//! # Conservation
+//!
+//! While the callback produces one model sample per input sample, every accepted
+//! input is eventually drained, and padding does not exceed the declared latency,
+//! the totals satisfy
+//! `output_real_total() == input_total() - latency_samples()`.
+//! The relation does not hold after a contract violation (oversized block,
+//! stalled callback or underflow).
+//!
+//! # Real-time safety
+//!
+//! The API is RT-safe: zero heap allocation on the continuous processing path
+//! (all storage is pre-allocated at construction). The abstraction is generic,
+//! pure and host-agnostic (Apache-2.0): it does not reference any plugin-host
+//! concept, so any consumer (plugin host, standalone audio host, offline
+//! renderer) can drive it.
 
 use log::error;
 
@@ -85,11 +157,13 @@ pub const MAX_MODEL_CAP: usize = MAX_STREAM_BLOCK * 8;
 /// Result of a single [`pull_output`](StreamingResampleBuffer::pull_output) call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PullResult {
-    /// Total samples delivered (`== requested`).
+    /// Total samples delivered: `min(requested, out_l.len(), out_r.len())`.
     pub written: usize,
     /// Real (non-primed) samples among `written`.
     pub real: usize,
-    /// Zero samples among `written` (priming/deficit compensation).
+    /// Zero samples among `written` (priming + any underflow deficit).
+    ///
+    /// `real + padded == written` always holds.
     pub padded: usize,
     /// `true` when real samples were fabricated beyond the declared priming
     /// budget — indicates a mid-stream underflow (contract violation).
@@ -99,15 +173,24 @@ pub struct PullResult {
 /// Result of a single [`process`](StreamingResampleBuffer::process) call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StreamingResult {
-    /// Host samples consumed (pushed) from the input slices.
+    /// Host samples actually accepted into the input FIFO from the input
+    /// slices. Bounded by the input length `n` and by the free input-FIFO
+    /// space, so `consumed <= n`; `consumed == n` holds only when the caller's
+    /// block fits in `max_block()`, the input FIFO is empty and the model
+    /// callback makes progress. Inspect it to detect a partially consumed block.
     pub consumed: usize,
-    /// Host samples delivered to the output slices (`== consumed`).
+    /// Host samples delivered to the output slices. Always
+    /// `min(in_l.len(), in_r.len(), out_l.len(), out_r.len())`, independent of
+    /// `consumed` (hence `written == consumed` is not guaranteed).
     pub written: usize,
     /// Real (non-primed) samples among `written`.
     pub real: usize,
-    /// Zero samples among `written` (declared initial latency priming).
+    /// Zero samples among `written` (declared priming and any output deficit).
+    ///
+    /// `real + padded == written` always holds.
     pub padded: usize,
-    /// `true` when samples were fabricated beyond the declared priming budget.
+    /// `true` when samples were fabricated beyond the declared priming budget,
+    /// or when the model callback produced fewer samples than it received.
     pub underflow: bool,
 }
 
@@ -416,9 +499,11 @@ impl StreamingResampleBuffer {
 
     /// Pushes a host-rate input block into the input FIFO.
     ///
-    /// Returns the number of samples accepted per channel (all of `in_l.len()`
-    /// when within `max_block` of free space). Bounded: never overflows and
-    /// keeps both channels synchronized.
+    /// Returns the number of samples accepted per channel, bounded by the free
+    /// input-FIFO space and by `min(in_l.len(), in_r.len())`; both channels stay
+    /// synchronized. When the return value is smaller than the block length, the
+    /// caller owns the **unaccepted suffix** and must present it again in order;
+    /// already accepted samples must not be re-sent.
     #[inline]
     pub fn push_input(&mut self, in_l: &[f32], in_r: &[f32]) -> usize {
         let free = self.in_fifo[0].free().min(self.in_fifo[1].free());
@@ -473,7 +558,9 @@ impl StreamingResampleBuffer {
     /// [`pull_output`](Self::pull_output) or `push_model_output` calls.
     ///
     /// Returns the exact number of model samples per channel accepted into the
-    /// adapter (guaranteed never to be dropped or silently overwritten).
+    /// adapter (guaranteed never to be dropped or silently overwritten). When
+    /// less than `min(in_l.len(), in_r.len())`, retain the unaccepted suffix and
+    /// re-present it in order; never re-send accepted samples.
     /// RT-safe: zero allocations.
     pub fn push_model_output(&mut self, in_l: &[f32], in_r: &[f32]) -> usize {
         let n = in_l.len().min(in_r.len());
@@ -625,10 +712,12 @@ impl StreamingResampleBuffer {
         }
     }
 
-    /// Pulls **exactly** `n` host-rate samples from the output FIFO, retaining
-    /// any excess for the next call and resuming any backpressured model output.
+    /// Pulls `min(n, out_l.len(), out_r.len())` host-rate samples, retaining any
+    /// excess for the next call and resuming any backpressured model output.
     ///
-    /// During warm-up, the formally declared latency
+    /// The returned [`PullResult::written`] is that clamped count and always
+    /// satisfies `real + padded == written`. During warm-up, the formally
+    /// declared latency
     /// ([`latency_samples`](StreamingResampleBuffer::latency_samples)) is
     /// zero-primed deterministically; afterwards every delivered sample is real.
     /// If real samples fall short beyond the priming budget (mid-stream
@@ -748,18 +837,27 @@ impl StreamingResampleBuffer {
     /// pending model-rate samples, and pulls exactly `n` samples.
     ///
     /// # Contract
-    /// - `in_l/in_r` and `out_l/out_r` carry host-rate samples; equal lengths
-    ///   are expected (the effective length is the minimum of all four).
+    /// - `in_l/in_r` and `out_l/out_r` carry host-rate samples; the effective
+    ///   length is `n = min(in_l.len(), in_r.len(), out_l.len(), out_r.len())`.
+    /// - Exactly `n` host samples are written per channel (`written == n`), so
+    ///   `real + padded == written`. Input acceptance is separate:
+    ///   `consumed <= n` because the block is bounded by the free input-FIFO
+    ///   space. `consumed < n` means only the first `consumed` input samples
+    ///   were accepted; re-present the suffix (in order) and never re-send the
+    ///   accepted prefix. Passing more than `max_block()` samples makes partial
+    ///   acceptance and underflow observable.
     /// - `model` is invoked with equal-length model-rate slices (`&mid[..drained]`
     ///   and `&mut model_out[..drained]`) and is expected to write `drained`
     ///   output samples (1:1 synchronous cardinality, returning the written count).
+    ///   It reports production, not consumption; unconsumed inputs are never
+    ///   inferred.
     /// - **Under-producing callback (`produced < drained`):** the callback
     ///   signature does not report input consumption separately from output
     ///   production, so the adapter never guesses unconsumed inputs and never
     ///   fabricates non-zero model-rate samples. It preserves the `produced`
     ///   real samples written, flags `StreamingResult::underflow = true`
-    ///   immediately (stopping the loop on `produced == 0`), and accounts any
-    ///   host-rate zero-fill deficit in `underflow_total`.
+    ///   immediately (stopping the loop on `produced == 0` without spinning),
+    ///   and accounts any host-rate zero-fill deficit in `underflow_total`.
     /// - **Bypass + granular API compatibility:** when `is_bypass()` is `true`
     ///   and all internal FIFOs (`in_fifo`, `model_fifo`, `out_fifo`) are empty,
     ///   `process` takes a zero-copy direct fast path. If any FIFO holds pending

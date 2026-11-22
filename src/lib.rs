@@ -45,6 +45,9 @@
 //!
 //! ## Quick start
 //!
+//! > **Pre-release:** `4.0.0` is not yet published to crates.io. Until it is,
+//! > depend on this repository by path or git revision.
+//!
 //! Add the crate to `Cargo.toml`. The published package is
 //! `NeuralAmpModeler-rs`, but the imported library name is
 //! `neural_amp_modeler_rs`:

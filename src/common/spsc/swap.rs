@@ -13,7 +13,8 @@
 //!    callback is resolved first: it is causally before everything still in
 //!    the ring, so it applies before any newer command. It is discarded
 //!    instead when stale (its generation no longer matches the current
-//!    request) or superseded (the ring head carries the same coalesce key).
+//!    request) or superseded (a structural, valid ring head carries the same
+//!    `Some` coalesce key).
 //! 2. **Phase 1 — bounded drain with latest-wins coalescing.** Payloads are
 //!    popped under a per-callback pop cap; same-key structural payloads
 //!    collapse to the latest one, light scalar payloads apply inline, and
@@ -481,7 +482,9 @@ impl<R: SwapRing> RtSwapDrain<R> {
                 // subsequent scalar so FIFO causality across the command
                 // stream is strictly preserved.
                 if let Some(cand) = candidate.take() {
-                    if budget.can_apply() {
+                    if is_stale(handler, &cand) {
+                        handler.discard(cand, gc);
+                    } else if budget.can_apply() {
                         handler.install(cand, gc);
                         budget.consume();
                     } else {
@@ -506,8 +509,11 @@ impl<R: SwapRing> RtSwapDrain<R> {
                 // Same key as the pending candidate: free coalescing (no
                 // budget, no slot) — the older candidate is obsolete.
                 if let Some(older) = candidate.replace(p) {
+                    let stale = is_stale(handler, &older);
                     handler.discard(older, gc);
-                    flag_superseded(gc.rt_status);
+                    if !stale {
+                        flag_superseded(gc.rt_status);
+                    }
                 }
                 pops += 1;
                 continue;
@@ -525,8 +531,12 @@ impl<R: SwapRing> RtSwapDrain<R> {
             if let Some(p) = self.ring.pop()
                 && let Some(older) = candidate.replace(p)
             {
-                handler.install(older, gc);
-                budget.consume();
+                if is_stale(handler, &older) {
+                    handler.discard(older, gc);
+                } else {
+                    handler.install(older, gc);
+                    budget.consume();
+                }
             }
             pops += 1;
         }
@@ -549,6 +559,10 @@ impl<R: SwapRing> RtSwapDrain<R> {
         let Some(p) = candidate else {
             return;
         };
+        if is_stale(handler, &p) {
+            handler.discard(p, gc);
+            return;
+        }
         if budget.can_apply() {
             handler.install(p, gc);
             budget.consume();
@@ -595,19 +609,30 @@ fn is_stale<H: RtSwapHandler>(handler: &H, payload: &H::Payload) -> bool {
 }
 
 /// Whether a newer same-key payload sits at the ring head (latest-wins
-/// supersession probe). Payloads without a coalesce key are never superseded
-/// and never supersede.
+/// supersession probe).
+///
+/// Only a head that is structural, non-stale, and carries the same `Some`
+/// coalesce key supersedes the payload. A stale, non-structural, or
+/// key-less head never suppresses a valid payload. Payloads without a
+/// coalesce key are never superseded and never supersede.
 #[inline(always)]
 fn is_superseded_by_head<H, R>(handler: &H, payload: &H::Payload, ring: &R) -> bool
 where
     H: RtSwapHandler,
     R: SwapRing<Payload = H::Payload>,
 {
+    if !handler.is_structural(payload) {
+        return false;
+    }
     let Some(key) = handler.coalesce_key(payload) else {
         return false;
     };
-    ring.peek()
-        .is_some_and(|head| handler.coalesce_key(head) == Some(key))
+    let Some(head) = ring.peek() else {
+        return false;
+    };
+    handler.is_structural(head)
+        && !is_stale(handler, head)
+        && handler.coalesce_key(head) == Some(key)
 }
 
 /// Parks a payload in an empty slot without emitting `drop_glue` for the

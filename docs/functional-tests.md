@@ -204,13 +204,15 @@ The long audit suite provides exhaustive pre-release validation (~10–13 minute
 
 - **Preflight Gates:** `preflight-render` (build fingerprint by oracle commit/compiler, wrapper `render_multichannel` cache key, binary smoke, receipt provenance), `preflight-catalog`, `preflight-package`, `preflight-freshness`, and diagnostic `preflight-simd-probe`.
 
-- **8-Phase Battery:** (1) `catch-all` (`phase1`), (2) `soak` (`phase2`), (3) `isa-codegen` (`phase3`), (4) `heap-audit` (`phase4`), (5) `rt-deadline` (`phase5`), (6) `rt-jitter` (`phase6`), (7) `loom` (`phase7`), (8) `perf` (`phase8`). Each phase writes `target/logs/long-<phase>.log` with shell xtrace routed to `target/logs/long-xtrace.log` by `xtrace_side_channel` (`utils/_lib.sh`), so the phase log contains command output only.
+- **8-Phase Battery:** (1) `catch-all` (`phase1`), (2) `soak` (`phase2`), (3) `isa-codegen` (`phase3`), (4) `heap-audit` (`phase4`), (5) `rt-deadline` (`phase5`), (6) `rt-jitter` (`phase6`), (7) `loom` (`phase7`), (8) `perf` (`phase8`). Each phase writes `target/logs/long-<phase>.log` with shell xtrace routed to `target/logs/long-xtrace.log` by `xtrace_side_channel` (`utils/_lib.sh`), so the phase log contains command output only. `heap-audit` passes `--no-fail-fast` before `--` so its three targets (`rt_constraints`, `cabsim_stereo`, `models`) always execute and the aggregated status still fails the phase on any failure.
+
+- **Phase classification precedence:** a timeout (`124`/`137`) or non-zero exit becomes `FAIL` before `PHASE_GAP` is consulted; then an authorized explicit gap is accepted (`no-bench-core` only when the phase ran no tests, `skip-capability:<n>` only after the `catch-all` tests ran, optional-dependency gaps in phases that run no libtest); any other phase required to run tests that executed zero tests is `FAIL`. A `GAP no-bench-core` declared by a phase that still ran its tests is classified by those tests, never by the declared gap.
 
 - **Numeric telemetry:** `target/logs/fidelity-metrics-<NAM_RUN_ID>.jsonl` (exported as `NAM_METRICS_JSONL`) carries ESR/SNR/MR-STFT/MSE rows from the fidelity helpers and `heap_alloc` totals (`scenario`, `allocations`) from `phase4`; it is truncated before `phase1`, isolated per run, and never gates a phase. `target/logs/fidelity-metrics.jsonl` remains only as the fixed fallback for isolated consumers.
 
 - **Quality verdict:** `utils/quality-dashboard.sh --check docs/quality-contract.json --fidelity-only` checks fidelity without the performance baseline. The full `--check` remains receipt 5 for release certification.
 
-- **Typed discipline verdicts:** each discipline that uses `_lib.sh` writes `target/logs/<script>-status.tsv` containing five tab-separated columns (`<discipline>\t<verdict>\t<gaps>\t<fails>\t<scope=full|scope=partial>`), where internal gap and failure lists are comma-separated. A partial selection (`--only`) records `scope=partial` without counting as a GAP.
+- **Typed discipline verdicts:** each discipline that uses `_lib.sh` writes `target/logs/<script>-status.tsv` containing five tab-separated columns (`<discipline>\t<verdict>\t<gaps>\t<fails>\t<scope=full|scope=partial>`), where internal gap and failure lists are comma-separated. A partial selection (`--only`) records `scope=partial` without counting as a GAP. `--help` and invalid usage (exit `2`) close through `finish` with exactly one `RESULT:` and do not create `target/logs`, append to `summary.txt`, or overwrite an existing carrier.
 
 - **Receipt Validation:**
 

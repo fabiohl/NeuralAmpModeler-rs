@@ -17,7 +17,7 @@ while [ $# -gt 0 ]; do
     --check-only) CHECK_ONLY=1; shift ;;
     --skip-bench) SKIP_BENCH=1; shift ;;
     --out) [ $# -ge 2 ] && [ -n "$2" ] || usage_fail "remote-simd-gate.sh: --out requer argumento"; RECEIPT_OUT="$2"; shift 2 ;;
-    -h|--help) echo "Uso: utils/remote-simd-gate.sh [--sde] [--check-only] [--skip-bench] [--out <file>]"; exit 0 ;;
+    -h|--help) help_exit "Uso: utils/remote-simd-gate.sh [--sde] [--check-only] [--skip-bench] [--out <file>]" ;;
     *) usage_fail "remote-simd-gate.sh: flag não reconhecida '$1'" ;;
   esac
 done

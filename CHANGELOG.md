@@ -12,6 +12,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [4.0.0] - 2026-11-22
+
+Pre-release, not yet published to crates.io. This major release hardens the A2 single-frame path with typed preconditions, bounds SPSC swap coalescing, tightens loader and CabSim input validation, documents the streaming contract, and updates examples and release tooling.
+
+Upgrading from `2.0.0` also requires reading the **Breaking Changes and Migration** section of `3.0.0` below.
+
+### SemVer Inventory [4.0.0]
+
+Each change is classified as `aditiva` (new; existing callers unaffected), `compatível` (no observable change for valid callers), `quebra` (input previously accepted or behavior changed), or `sem quebra` (documentation only).
+
+| Area | Change | Class |
+|---|---|---|
+| `A2Layer::process_single_frame` | Invalid input: `debug_assert!` in debug builds; no buffer mutation in release builds | quebra (debug) / compatível (release) |
+| `A2Layer::try_process_single_frame` and `A2LayerError` | New fallible API with one variant per precondition; `#[non_exhaustive]` | aditiva |
+| A2 topology: `head1x1_active`, `mixin_groups != 1`, `l1x1_groups != 1`, mixin or residual width different from output channels | Rejected by `try_`; the legacy path treats them as invalid input | quebra (possível) |
+| A2 buffer, weight, bias, grouped-layout and integer-overflow preconditions | Rejected by `try_`; the legacy path treats them as invalid input. Dilation above `isize::MAX` is rejected for every kernel size | quebra (possível) |
+| A2 requested instruction set | Checked against the host before kernel dispatch | compatível |
+| A2 output for valid inputs | Bit-for-bit identical to the previous release | compatível |
+| Metadata `training` size budget | One budget shared by the whole tree; historical units documented; nesting limit is 16 containers (17 are rejected) | quebra (possível) |
+| `num_layers` and layer dimensions | Validated before replication. More than 64 layers, PReLU vectors above 512 slopes, and aggregate PReLU cost above 64 × 512 are rejected. `0` is still accepted | quebra (possível) |
+| WAV and CabSim RIFF container | `riff_size` below 4 or beyond the buffer is rejected; chunks crossing the container end are rejected; bytes after the container are ignored | quebra (malformed) / compatível (valid) |
+| Odd-sized terminal `data` chunk without pad byte | Tolerated only when the payload ends exactly at the container end | compatível |
+| `testing` feature, `write_wav_f32` | Writes a legal RIFF size (`36 + data`) | compatível (test helper) |
+| Streaming contract (`streaming_adapter`) | Underflow and consumption behavior documented; no behavior change | sem quebra |
+| `MirroredBuffer<T>` | Doc-test added for `try_window_mut` across the seam | sem quebra |
+| `examples/streaming_partial.rs` | New partial-progress streaming example | aditiva |
+| `examples/cabsim.rs`, `examples/offline_render.rs` | Errors propagated with `?`, preserving the `NamErrorCode` cause | compatível |
+| SPSC swap coalescing (`common::spsc`) | A stale head no longer suppresses a valid deferred candidate; no signature change | compatível |
+| `utils/` QA scripts | `-h` and invalid usage emit one `RESULT` without overwriting the previous carrier; heap audit runs with `--no-fail-fast`; capability `GAP` only when explicitly declared | compatível (repository tooling) |
+
+---
+
 ## [3.0.0] - 2026-11-17
 
 This major release resolves physical-aliasing soundness in `MirroredBuffer<T>`, enforces strict backpressure and FIFO ordering in `StreamingResampleBuffer`, converges extensible WAV validation, adds experimental verifiable Windows 11 (`x86_64` and `aarch64`) support, and hardens cross-platform diagnostics and QA gates. Read **Breaking Changes** before upgrading from `2.0.0`.
@@ -129,7 +161,8 @@ Patch release, fully backward-compatible: public types, functions and `NamErrorC
   - 3-tier lock-free SPSC parameter and model hot-swap mechanism with off-RT garbage collection cascade.
   - Diagnostic error reporting catalogue (`NamErrorCode` E1xxx–E5xxx).
 
-[Unreleased]: https://github.com/fabiohl/NeuralAmpModeler-rs/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/fabiohl/NeuralAmpModeler-rs/compare/v4.0.0...HEAD
+[4.0.0]: https://github.com/fabiohl/NeuralAmpModeler-rs/compare/v2.0.0...v4.0.0
 
 [2.0.0]: https://github.com/fabiohl/NeuralAmpModeler-rs/compare/v1.0.1...v2.0.0
 

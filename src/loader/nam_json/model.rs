@@ -151,11 +151,26 @@ impl NamLayerConfig {
     ///
     /// Extracts per-layer `activation`, `gating_mode`, and `secondary_activation`
     /// arrays for `num_layers` expected entries (23 for standard A2).
-    /// Returns `None` when `layer_raw` is absent or the `activation` array
-    /// is missing/invalid.
+    /// When `layer_raw` is absent, returns the documented defaults: for
+    /// `num_layers` entries, `LeakyReLU { negative_slope: A2_LEAKY_SLOPE }`,
+    /// gating `Gated` + `Sigmoid` secondary when `self.gated == Some(true)`,
+    /// otherwise `None` for both. When `layer_raw` is present but the
+    /// `activation` array is missing, the defaults come from
+    /// [`parse_layer_activations`](super::activation_parser::parse_layer_activations).
     ///
     /// This is the primary entry point for the dynamic A2 engine
     /// to obtain the heterogeneous activation configuration at model build time.
+    ///
+    /// # Errors
+    ///
+    /// Delegates to
+    /// [`parse_layer_activations`](super::activation_parser::parse_layer_activations):
+    /// [`NamErrorCode::OutOfMemory`](crate::common::diagnostics::NamErrorCode::OutOfMemory)
+    /// when `num_layers` is too large to represent,
+    /// [`NamErrorCode::InvalidModelTopology`](crate::common::diagnostics::NamErrorCode::InvalidModelTopology)
+    /// when it exceeds the A2 per-layer-array ceiling (64), and
+    /// [`NamErrorCode::NamJsonUnknownActivation`](crate::common::diagnostics::NamErrorCode::NamJsonUnknownActivation)
+    /// for unknown or malformed activation specs.
     pub fn parse_activation_config(
         &self,
         num_layers: usize,
@@ -163,6 +178,7 @@ impl NamLayerConfig {
         super::activation_parser::LayerActivationConfig,
         crate::common::diagnostics::NamErrorCode,
     > {
+        super::activation_parser::validate_num_layers(num_layers)?;
         let raw = match self.layer_raw.as_ref() {
             Some(r) => r,
             None => {

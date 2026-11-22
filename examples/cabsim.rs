@@ -78,8 +78,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 2. Initialize UPOLS frequency-domain convolution engine.
     println!("\n[2/3] Building UPOLS Convolution Engine");
-    let conv_engine = ConvEngine::new(&ir_samples, PARTITION_SIZE)
-        .map_err(|e| format!("Failed to build ConvEngine: {:?}", e))?;
+    let conv_engine = ConvEngine::new(&ir_samples, PARTITION_SIZE)?;
 
     let partition_size = conv_engine.partition_size();
     let num_partitions = conv_engine.num_partitions();
@@ -98,8 +97,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // 3. Wrap with CabSimAdapter for variable block size support.
-    let mut adapter = CabSimAdapter::new(Box::new(conv_engine))
-        .map_err(|e| format!("Failed to create CabSimAdapter: {:?}", e))?;
+    let mut adapter = CabSimAdapter::new(Box::new(conv_engine))?;
 
     // 4. Generate a test audio signal (raw guitar DI style: 110 Hz A2 fundamental + harmonics).
     let duration_secs = 2.0;

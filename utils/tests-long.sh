@@ -3,7 +3,7 @@
 # Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 # tests-long.sh — long-duration audit, stress, and verification suite. Classe B.
 # Uso: utils/tests-long.sh [--strict] [--only <fase>[,<fase>]]
-# Orçamento: 345         # inclui recibo .partial, telemetria por rodada, publish atômico e carrier consumer-smoke-status.tsv
+# Orçamento: 365         # inclui precedência FAIL/GAP autorizada, recibo .partial, telemetria por rodada, publish atômico e carrier consumer-smoke-status.tsv
 set -x; PS4='+ ${BASH_SOURCE##*/}:${LINENO}: '
 set -o pipefail
 cd "$(dirname "$0")/.."
@@ -53,7 +53,7 @@ while [ $# -gt 0 ]; do
       [ $# -ge 2 ] && [ -n "$2" ] || usage_fail "tests-long.sh: --only requer argumento"
       IFS=',' read -r -a ONLY_PHASES <<< "$2"; shift 2 ;;
     -h|--help)
-      usage; exit 0 ;;
+      usage; help_exit ;;
     *)
       usage_fail "tests-long.sh: flag não reconhecida '$1'" ;;
   esac
@@ -140,6 +140,20 @@ extract_failures() {
   ' "$log" > "$out" 2>/dev/null || true
 }
 
+# GAP authorization requires coherent phase evidence: `no-bench-core` means
+# no tests ran, `skip-capability:<n>` means catch-all tests ran, and req_tests=0
+# phases may report an optional dependency gap.
+phase_gap_authorized() {
+  local log="$1" req="$2"
+  [ -n "$PHASE_GAP" ] || return 1
+  [ "$req" -eq 0 ] && return 0
+  case "$PHASE_GAP" in
+    no-bench-core) ! ran_tests "$log" ;;
+    skip-capability:*) ran_tests "$log" ;;
+    *) return 1 ;;
+  esac
+}
+
 exec_phase() {
   local pid="$1" pname="$2" to_s="$3" req_tests="$4"; shift 4
   local log="$LOG_DIR/long-$pname.log"
@@ -159,13 +173,15 @@ exec_phase() {
   local dur_ms=$(( (t1 - t0) / 1000000 ))
   [ "$dur_ms" -lt 0 ] && dur_ms=0
   local status="PASSED"
+  local gap_auth=0
+  phase_gap_authorized "$log" "$req_tests" && gap_auth=1
   if [ "$rc" -eq 3 ] && [ "$pid" = "phase8" ]; then
     status="SKIP_CAPABILITY"; GAPS+=("$pname:perf-baseline-missing"); emit "PHASE: $pname GAP perf-baseline-missing"
   elif [ "$rc" -eq 3 ] && [ "$pid" = "preflight-render" ] && [ "$STRICT" -eq 0 ]; then
     status="SKIP_CAPABILITY"
     GAPS+=("$pname:optional-dependency-missing")
     emit "PHASE: $pname GAP optional-dependency-missing"
-  elif [ "$rc" -ne 0 ] || { [ "$req_tests" -eq 1 ] && ! ran_tests "$log"; }; then
+  elif [ "$rc" -ne 0 ] || { [ "$gap_auth" -eq 0 ] && [ "$req_tests" -eq 1 ] && ! ran_tests "$log"; }; then
     status="FAILED"; FAILS+=("$pname")
     case "$rc" in 124|137) note=" (timeout)"; reason="TIMEOUT" ;; esac
     [ -z "$reason" ] && reason="TEST_FAILURE"
@@ -179,7 +195,7 @@ exec_phase() {
       [ -s "$fail_out" ] && { echo "--- [FAILURES: $pname] ---" >&2; cat "$fail_out" >&2; echo "--- [END FAILURES: $pname] ---" >&2; }
       echo "--- [FAIL LOG: $pname (rc=$rc)] ---" >&2; tail -n 120 "$log" >&2 || true; echo "--- [END LOG: $pname] ---" >&2
     fi
-  elif [ -n "$PHASE_GAP" ]; then
+  elif [ "$gap_auth" -eq 1 ]; then
     status="SKIP_CAPABILITY"
     GAPS+=("$pname:$PHASE_GAP")
     emit "PHASE: $pname GAP $PHASE_GAP"
@@ -263,7 +279,7 @@ exec_phase "phase3" "isa-codegen" 300 1 run_phase_isa_codegen
 # --- Phase 4: heap-audit (alvos e filtro: ver docs/testing.md; perfil próprio) ---
 run_phase_heap_audit() {
   export CARGO_TARGET_DIR="$LONG_ROOT/heap-audit"
-  run_cmd cargo test --locked --release --features testing,heap-audit --test rt_constraints --test cabsim_stereo \
+  run_cmd cargo test --locked --release --features testing,heap-audit --no-fail-fast --test rt_constraints --test cabsim_stereo \
     --test models -- --include-ignored heap_audit
 }
 exec_phase "phase4" "heap-audit" 300 1 run_phase_heap_audit

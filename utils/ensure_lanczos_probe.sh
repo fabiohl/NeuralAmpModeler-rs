@@ -45,7 +45,7 @@ ensure_lanczos_probe() {
 
 case "$#:${1:-}" in
     0:) ;;
-    1:-h|1:--help) echo "Usage: utils/ensure_lanczos_probe.sh"; exit 0 ;;
+    1:-h|1:--help) help_exit "Usage: utils/ensure_lanczos_probe.sh" >&2 ;;
     *) usage_fail "ensure_lanczos_probe.sh não aceita argumentos ($*)" >&2 ;;
 esac
 

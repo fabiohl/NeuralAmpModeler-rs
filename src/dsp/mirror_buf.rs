@@ -267,6 +267,36 @@ impl<T: MirrorSafe> MirroredBuffer<T> {
     /// Enforcing `len <= self.size()` guarantees that no two elements in the
     /// returned `&mut [T]` alias the same physical memory, even when the
     /// window crosses the `N` mirror seam.
+    ///
+    /// # Examples
+    ///
+    /// A window of `len <= size()` may cross the seam: it stays contiguous in
+    /// virtual memory while wrapping around the physical ring exactly once.
+    ///
+    /// ```
+    /// use neural_amp_modeler_rs::dsp::mirror_buf::MirroredBuffer;
+    ///
+    /// let mut buf = MirroredBuffer::<f32>::new(16)?;
+    /// let n = buf.size();
+    /// buf.fill(0.0);
+    ///
+    /// // Starts two elements before the seam and ends two elements after it.
+    /// let window = buf.try_window_mut(n - 2, 4).expect("len <= size()");
+    /// window.copy_from_slice(&[10.0, 11.0, 12.0, 13.0]);
+    ///
+    /// // Physical slots `n-2, n-1, 0, 1` received the values in order.
+    /// assert_eq!(buf[n - 2], 10.0);
+    /// assert_eq!(buf[n - 1], 11.0);
+    /// assert_eq!(buf[0], 12.0);
+    /// assert_eq!(buf[1], 13.0);
+    /// // The mirrored half exposes the same physical storage.
+    /// assert_eq!(buf[2 * n - 2], 10.0);
+    /// assert_eq!(buf[n], 12.0);
+    ///
+    /// // A window longer than the physical half is rejected instead of aliasing.
+    /// assert!(buf.try_window_mut(0, n + 1).is_none());
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
     #[inline(always)]
     pub fn try_window_mut(&mut self, offset: usize, len: usize) -> Option<&mut [T]> {
         let n = self.size_elements;

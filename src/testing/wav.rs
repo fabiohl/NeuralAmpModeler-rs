@@ -21,15 +21,16 @@ const AUDIO_FORMAT_IEEE_FLOAT: u16 = 3;
 pub fn write_wav_f32(path: &Path, samples: &[f32], sample_rate: u32) -> io::Result<()> {
     let num_samples = samples.len() as u32;
     let data_size = num_samples * 4;
-    let file_size = WAV_HEADER_SIZE as u32 + data_size;
+    // RIFF size excludes the 8-byte "RIFF"+size prefix.
+    let riff_size = WAV_HEADER_SIZE as u32 - 8 + data_size;
     let byte_rate = sample_rate * 4;
     let block_align: u16 = 4;
     let bits_per_sample: u16 = 32;
 
-    let mut buf = Vec::with_capacity(file_size as usize);
+    let mut buf = Vec::with_capacity(WAV_HEADER_SIZE + data_size as usize);
 
     buf.extend_from_slice(b"RIFF");
-    buf.extend_from_slice(&file_size.to_le_bytes());
+    buf.extend_from_slice(&riff_size.to_le_bytes());
     buf.extend_from_slice(b"WAVE");
 
     buf.extend_from_slice(b"fmt ");

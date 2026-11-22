@@ -15,6 +15,63 @@ use crate::common::diagnostics::NamErrorCode;
 use crate::models::a2::activations::ActivationType;
 use crate::models::a2::gating::GatingMode;
 
+/// Maximum number of internal layers accepted by the activation helpers (D-06).
+///
+/// This is the A2 per-layer-array cap already enforced by the topology scan
+/// (`MAX_DILATIONS_PER_ARRAY`), restated here because these helpers are public
+/// and replicate defaults/specs per layer *before* any topology validation.
+/// `0` remains accepted where it was accepted before.
+const MAX_ACTIVATION_LAYERS: usize = 64;
+
+/// Maximum length of a single `PReLU` `negative_slopes` vector (D-06).
+///
+/// Equal to the widest channel ceiling any consumer accepts (512, shared by
+/// ConvNet, WaveNet free geometry and post-stack heads), so no model with a
+/// channel-consistent slope vector is rejected. Bounding it prevents a small
+/// number of layers from amplifying a huge vector through replication.
+const MAX_PRELU_SLOPES_PER_VECTOR: usize = 512;
+
+/// Validates `num_layers` before any `vec![_; num_layers]` replication.
+///
+/// Distinguishes an impossible capacity (the byte count for the vector itself
+/// overflows `usize`, reported as [`NamErrorCode::OutOfMemory`]) from a
+/// geometry that is representable but unsupported by this parser (reported as
+/// [`NamErrorCode::InvalidModelTopology`]).
+pub(super) fn validate_num_layers(num_layers: usize) -> Result<(), NamErrorCode> {
+    if num_layers
+        .checked_mul(std::mem::size_of::<ActivationType>())
+        .is_none()
+    {
+        return Err(NamErrorCode::OutOfMemory);
+    }
+    if num_layers > MAX_ACTIVATION_LAYERS {
+        return Err(NamErrorCode::InvalidModelTopology);
+    }
+    Ok(())
+}
+
+/// Cost of one activation when replicated `num_layers` times, in slope slots.
+///
+/// Non-`PReLU` activations cost one slot per layer; `PReLU` costs its slope
+/// vector length. The multiplication is checked and the aggregate is capped so
+/// a vector cannot be cloned an unbounded number of times.
+fn ensure_replication_cost(
+    activation: &ActivationType,
+    num_layers: usize,
+) -> Result<(), NamErrorCode> {
+    let per_layer = match activation {
+        ActivationType::PReLU { negative_slopes } => negative_slopes.len(),
+        _ => 1,
+    };
+    let total = num_layers
+        .checked_mul(per_layer)
+        .ok_or(NamErrorCode::OutOfMemory)?;
+    if total > MAX_ACTIVATION_LAYERS * MAX_PRELU_SLOPES_PER_VECTOR {
+        return Err(NamErrorCode::InvalidModelTopology);
+    }
+    Ok(())
+}
+
 /// Parses a single activation specification into a typed [`ActivationType`].
 ///
 /// Mirrors the C++ `nam::activations::ActivationConfig::from_json`
@@ -80,6 +137,9 @@ pub(crate) fn try_parse_activation(v: &serde_json::Value) -> Result<ActivationTy
                     let arr = vector
                         .as_array()
                         .ok_or(NamErrorCode::NamJsonUnknownActivation)?;
+                    if arr.len() > MAX_PRELU_SLOPES_PER_VECTOR {
+                        return Err(NamErrorCode::InvalidModelTopology);
+                    }
                     let mut slopes = Vec::with_capacity(arr.len());
                     for e in arr {
                         slopes
@@ -131,11 +191,22 @@ pub struct LayerActivationConfig {
 ///
 /// Returns `Ok(`[`LayerActivationConfig`]`)` with the documented default
 /// (`LeakyReLU` with slope 0.01) only when the `activation` field is absent.
-/// Rejects unknown or invalid activations with [`NamErrorCode::NamJsonUnknownActivation`].
+///
+/// # Errors
+///
+/// - [`NamErrorCode::OutOfMemory`] when `num_layers` is so large that the
+///   per-layer vector size itself overflows.
+/// - [`NamErrorCode::InvalidModelTopology`] when `num_layers` exceeds the A2
+///   per-layer-array ceiling (64).
+/// - [`NamErrorCode::NamJsonUnknownActivation`] for unknown or malformed
+///   activation specs.
+/// - [`NamErrorCode::InvalidModelTopology`] for malformed gating fields or
+///   divergent `secondary_activation` lengths.
 pub fn parse_layer_activations(
     raw: &serde_json::Value,
     num_layers: usize,
 ) -> Result<LayerActivationConfig, NamErrorCode> {
+    validate_num_layers(num_layers)?;
     let activations = match parse_activations_from_json(raw, num_layers)? {
         Some(acts) => acts,
         None => vec![
@@ -165,10 +236,20 @@ pub fn parse_layer_activations(
 ///
 /// Rejects wrong array lengths, null, unknown names, or malformed objects with
 /// [`NamErrorCode::NamJsonUnknownActivation`] (`E1221`).
+///
+/// # Errors
+///
+/// - [`NamErrorCode::OutOfMemory`] when `num_layers` is so large that the
+///   per-layer vector size overflows.
+/// - [`NamErrorCode::InvalidModelTopology`] when `num_layers` exceeds 64 or a
+///   replicated `PReLU` vector would exceed the aggregate slope budget.
+/// - [`NamErrorCode::NamJsonUnknownActivation`] for wrong array lengths, null,
+///   unknown names or malformed entries.
 pub fn parse_activations_from_json(
     raw: &serde_json::Value,
     num_layers: usize,
 ) -> Result<Option<Vec<ActivationType>>, NamErrorCode> {
+    validate_num_layers(num_layers)?;
     let act_val = match raw.get("activation") {
         None => return Ok(None),
         Some(v) => v,
@@ -177,12 +258,14 @@ pub fn parse_activations_from_json(
     // Single-string activation: replicate across all layers (A2 generic).
     if let Some(s) = act_val.as_str() {
         let at = try_parse_activation(&serde_json::Value::String(s.to_string()))?;
+        ensure_replication_cost(&at, num_layers)?;
         return Ok(Some(vec![at; num_layers]));
     }
 
     // Single-object activation: replicate across all layers (A2 generic).
     if let Some(obj) = act_val.as_object() {
         let at = try_parse_activation(&serde_json::Value::Object(obj.clone()))?;
+        ensure_replication_cost(&at, num_layers)?;
         return Ok(Some(vec![at; num_layers]));
     }
 
@@ -210,6 +293,7 @@ fn parse_gating_modes_with_source(
     raw: &serde_json::Value,
     num_layers: usize,
 ) -> Result<(Vec<GatingMode>, bool), NamErrorCode> {
+    validate_num_layers(num_layers)?;
     if let Some(v) = raw.get("gating_mode") {
         if let Some(s) = v.as_str() {
             let mode = match s {
@@ -253,6 +337,12 @@ fn parse_gating_modes_with_source(
 /// `gated`. Absent fields default to [`GatingMode::None`]. Invalid strings,
 /// non-string elements (including `null`), wrong-length arrays, or non-boolean
 /// `gated` values are rejected fail-closed.
+///
+/// # Errors
+///
+/// - [`NamErrorCode::OutOfMemory`] when `num_layers` is too large to represent.
+/// - [`NamErrorCode::InvalidModelTopology`] when `num_layers` exceeds 64 or the
+///   gating fields are malformed/divergent.
 pub fn parse_gating_modes_from_json(
     raw: &serde_json::Value,
     num_layers: usize,
@@ -308,6 +398,7 @@ fn parse_secondary_activations_for_modes(
         }
         Some(v) => {
             let parsed = try_parse_activation(v)?;
+            ensure_replication_cost(&parsed, num_layers)?;
             Ok(gating_modes
                 .iter()
                 .map(|&m| {
@@ -329,10 +420,19 @@ fn parse_secondary_activations_for_modes(
 /// (including `PReLU` bare/scalar/vector) via `try_parse_activation`. Any
 /// unrecognized or malformed entry fails closed with
 /// [`NamErrorCode::NamJsonUnknownActivation`].
+///
+/// # Errors
+///
+/// - [`NamErrorCode::OutOfMemory`] when `num_layers` is too large to represent.
+/// - [`NamErrorCode::InvalidModelTopology`] when `num_layers` exceeds 64 or a
+///   replicated `PReLU` vector would exceed the aggregate slope budget.
+/// - [`NamErrorCode::NamJsonUnknownActivation`] for unknown/malformed entries
+///   or a divergent array length.
 pub fn parse_secondary_activations_from_json(
     raw: &serde_json::Value,
     num_layers: usize,
 ) -> Result<Vec<Option<ActivationType>>, NamErrorCode> {
+    validate_num_layers(num_layers)?;
     match raw.get("secondary_activation") {
         None | Some(serde_json::Value::Null) => Ok(vec![None; num_layers]),
         Some(serde_json::Value::String(s)) if s.is_empty() || s.eq_ignore_ascii_case("none") => {
@@ -352,7 +452,11 @@ pub fn parse_secondary_activations_from_json(
             }
             Ok(out)
         }
-        Some(v) => Ok(vec![Some(try_parse_activation(v)?); num_layers]),
+        Some(v) => {
+            let at = try_parse_activation(v)?;
+            ensure_replication_cost(&at, num_layers)?;
+            Ok(vec![Some(at); num_layers])
+        }
     }
 }
 

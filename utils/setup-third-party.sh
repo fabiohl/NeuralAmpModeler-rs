@@ -29,7 +29,7 @@ cd "$(dirname "$0")/.."
 . utils/_lib.sh
 case "$#:${1:-}" in
     0:) ;;
-    1:-h|1:--help) echo "Usage: utils/setup-third-party.sh"; exit 0 ;;
+    1:-h|1:--help) help_exit "Usage: utils/setup-third-party.sh" ;;
     *) usage_fail "setup-third-party.sh não aceita argumentos ($*)" ;;
 esac
 lib_init

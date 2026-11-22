@@ -220,18 +220,20 @@ The output is informational only; `simd_probe` does not issue a compliance verdi
 
 ### Add Dependency
 
+> **Pre-release:** `4.0.0` is not yet published to crates.io. Until it is, depend on this repository by path or git revision. Review the SemVer inventory in [CHANGELOG.md](CHANGELOG.md) before upgrading from `3.0.0`.
+
 Add `NeuralAmpModeler-rs` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-NeuralAmpModeler-rs = "3.0"
+NeuralAmpModeler-rs = "4.0"
 ```
 
 For test harnesses, audio generators, and perceptual fidelity measurement tools:
 
 ```toml
 [dependencies]
-NeuralAmpModeler-rs = { version = "3.0", features = ["testing"] }
+NeuralAmpModeler-rs = { version = "4.0", features = ["testing"] }
 ```
 
 > **Crate name vs. library name:** the published package is `NeuralAmpModeler-rs`, but the importable Rust library is `neural_amp_modeler_rs`. So `cargo add NeuralAmpModeler-rs`, then `use neural_amp_modeler_rs::…;` (the package name is immutable and deliberately different).
@@ -256,7 +258,7 @@ time and is not required for correctness.
 
 ### Model Files
 
-The engine consumes `.nam` (JSON) and `.namb` (binary) model files. Community models are distributed by the official [Neural Amp Modeler](https://www.neuralampmodeler.com/) project and on TONE3000. Downstream projects adding `NeuralAmpModeler-rs = "3.0"` as a dependency call the library API directly (see the snippet below). To try the bundled in-memory example with **no external file**, run from a repository checkout (or extracted crate source):
+The engine consumes `.nam` (JSON) and `.namb` (binary) model files. Community models are distributed by the official [Neural Amp Modeler](https://www.neuralampmodeler.com/) project and on TONE3000. Downstream projects adding `NeuralAmpModeler-rs = "4.0"` as a dependency call the library API directly (see the snippet below). To try the bundled in-memory example with **no external file**, run from a repository checkout (or extracted crate source):
 
 ```bash
 cargo run --example synthetic_model

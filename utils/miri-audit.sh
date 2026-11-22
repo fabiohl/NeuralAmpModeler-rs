@@ -10,7 +10,7 @@ cd "$(dirname "$0")/.."
 . utils/_lib.sh
 case "$#:${1:-}" in
     0:) ;;
-    1:-h|1:--help) echo "Usage: utils/miri-audit.sh"; exit 0 ;;
+    1:-h|1:--help) help_exit "Usage: utils/miri-audit.sh" ;;
     *) usage_fail "miri-audit.sh não aceita argumentos ($*)" ;;
 esac
 lib_init

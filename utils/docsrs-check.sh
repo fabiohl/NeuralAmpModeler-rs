@@ -10,7 +10,7 @@ cd "$(dirname "$0")/.."
 . utils/_lib.sh
 case "$#:${1:-}" in
   0:) ;;
-  1:-h|1:--help) echo "Usage: utils/docsrs-check.sh"; exit 0 ;;
+  1:-h|1:--help) help_exit "Usage: utils/docsrs-check.sh" ;;
   *) usage_fail "docsrs-check.sh não aceita argumentos ($*)" ;;
 esac
 

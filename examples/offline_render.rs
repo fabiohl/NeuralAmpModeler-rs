@@ -35,7 +35,7 @@ use std::path::{Path, PathBuf};
 use std::process;
 use std::time::Instant;
 
-use neural_amp_modeler_rs::common::diagnostics::SystemSnapshot;
+use neural_amp_modeler_rs::common::diagnostics::{NamErrorCode, SystemSnapshot};
 use neural_amp_modeler_rs::dsp::oversample::{OversampleEngine, OversampleFactor};
 use neural_amp_modeler_rs::loader::{LoadOptions, load_and_build_model};
 use neural_amp_modeler_rs::models::NamModel;
@@ -87,7 +87,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let model = model_pair
         .model_l
         .as_mut()
-        .ok_or("Failed to obtain left-channel model from pair")?;
+        .ok_or(NamErrorCode::ModelBuildFailed)?;
 
     println!("  Architecture : {}", model_pair.architecture);
     println!("  Topology     : {}", model_pair.topology);
@@ -108,8 +108,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 4. Initialize 4× half-band oversampling engine (HQ Mode).
     println!("\n[3/4] Initializing HQ Quality Engine");
     let os_factor = OversampleFactor::X4;
-    let mut os_engine = OversampleEngine::new(os_factor, BLOCK_SIZE)
-        .map_err(|e| format!("Failed to create oversampling engine: {:?}", e))?;
+    let mut os_engine = OversampleEngine::new(os_factor, BLOCK_SIZE)?;
 
     let os_multiplier = os_factor.multiplier(); // 4x
     let added_latency = os_engine.latency_samples();

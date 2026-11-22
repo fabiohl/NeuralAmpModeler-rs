@@ -247,6 +247,21 @@ fn test_parse_layer_activations_missing_defaults_to_leaky_relu() {
 }
 
 #[test]
+fn test_parse_layer_activations_absent_fields_use_standard_a2_layer_count() {
+    let raw = serde_json::json!({});
+    let config = parse_layer_activations(&raw, A2_NUM_LAYERS).expect("absent fields default");
+    assert_eq!(config.activations.len(), A2_NUM_LAYERS);
+    assert_eq!(config.gating_modes.len(), A2_NUM_LAYERS);
+    assert_eq!(config.secondary_activations.len(), A2_NUM_LAYERS);
+    assert!(config.activations.iter().all(|act| act
+        == &ActivationType::LeakyReLU {
+            negative_slope: 0.01
+        }));
+    assert!(config.gating_modes.iter().all(|m| m == &GatingMode::None));
+    assert!(config.secondary_activations.iter().all(Option::is_none));
+}
+
+#[test]
 fn test_parse_layer_activations_unknown_rejected() {
     let raw = serde_json::json!({ "activation": "Gelu" });
     assert_eq!(
@@ -417,5 +432,157 @@ fn test_try_parse_activation_leaky_hard_tanh_custom_params() {
             min_slope: 0.1,
             max_slope: 0.2,
         }
+    );
+}
+
+// — F06 / T5.6: dimensions validated before any per-layer replication ————
+
+#[test]
+fn test_activation_helpers_accept_supported_layer_boundaries() {
+    let raw = serde_json::json!({});
+    for n in [0usize, 1, 23, 64] {
+        let cfg = parse_layer_activations(&raw, n).expect("supported layer count");
+        assert_eq!(cfg.activations.len(), n);
+        assert_eq!(cfg.gating_modes.len(), n);
+        assert_eq!(cfg.secondary_activations.len(), n);
+
+        assert_eq!(
+            parse_activations_from_json(&raw, n).expect("activation helper"),
+            None
+        );
+        assert_eq!(
+            parse_gating_modes_from_json(&raw, n)
+                .expect("gating helper")
+                .len(),
+            n
+        );
+        assert_eq!(
+            parse_secondary_activations_from_json(&raw, n)
+                .expect("secondary helper")
+                .len(),
+            n
+        );
+    }
+}
+
+#[test]
+fn test_activation_helpers_reject_65_layers_as_unsupported_geometry() {
+    let raw = serde_json::json!({
+        "activation": "Tanh",
+        "gating_mode": "none",
+        "secondary_activation": null
+    });
+    assert_eq!(
+        parse_layer_activations(&raw, 65),
+        Err(NamErrorCode::InvalidModelTopology)
+    );
+    assert_eq!(
+        parse_activations_from_json(&raw, 65),
+        Err(NamErrorCode::InvalidModelTopology)
+    );
+    assert_eq!(
+        parse_gating_modes_from_json(&raw, 65),
+        Err(NamErrorCode::InvalidModelTopology)
+    );
+    assert_eq!(
+        parse_secondary_activations_from_json(&raw, 65),
+        Err(NamErrorCode::InvalidModelTopology)
+    );
+}
+
+#[test]
+fn test_activation_helpers_reject_usize_max_without_panic() {
+    let raw = serde_json::json!({});
+    assert_eq!(
+        parse_layer_activations(&raw, usize::MAX),
+        Err(NamErrorCode::OutOfMemory)
+    );
+    assert_eq!(
+        parse_activations_from_json(&raw, usize::MAX),
+        Err(NamErrorCode::OutOfMemory)
+    );
+    assert_eq!(
+        parse_gating_modes_from_json(&raw, usize::MAX),
+        Err(NamErrorCode::OutOfMemory)
+    );
+    assert_eq!(
+        parse_secondary_activations_from_json(&raw, usize::MAX),
+        Err(NamErrorCode::OutOfMemory)
+    );
+}
+
+#[test]
+fn test_parse_activation_config_validates_before_defaults() {
+    let cfg = crate::loader::nam_json::NamLayerConfig::default();
+    assert_eq!(
+        cfg.parse_activation_config(65),
+        Err(NamErrorCode::InvalidModelTopology)
+    );
+    assert_eq!(
+        cfg.parse_activation_config(usize::MAX),
+        Err(NamErrorCode::OutOfMemory)
+    );
+    let ok = cfg.parse_activation_config(64).expect("64 layers accepted");
+    assert_eq!(ok.activations.len(), 64);
+}
+
+#[test]
+fn test_prelu_slope_vector_and_replication_limits() {
+    let slopes_513: Vec<f64> = (0..513).map(|i| i as f64 * 0.001).collect();
+    let over =
+        serde_json::json!({ "activation": { "type": "PReLU", "negative_slopes": slopes_513 } });
+    assert_eq!(
+        parse_layer_activations(&over, 23),
+        Err(NamErrorCode::InvalidModelTopology)
+    );
+
+    let slopes_512: Vec<f64> = (0..512).map(|i| i as f64 * 0.001).collect();
+    let max =
+        serde_json::json!({ "activation": { "type": "PReLU", "negative_slopes": slopes_512 } });
+    let cfg = parse_layer_activations(&max, 64).expect("64 layers x 512 slopes accepted");
+    assert_eq!(cfg.activations.len(), 64);
+    assert!(cfg.activations.iter().all(|a| matches!(
+        a,
+        ActivationType::PReLU { negative_slopes } if negative_slopes.len() == 512
+    )));
+
+    let slopes_256: Vec<f64> = (0..256).map(|i| i as f64 * 0.001).collect();
+    let mid =
+        serde_json::json!({ "activation": { "type": "PReLU", "negative_slopes": slopes_256 } });
+    parse_layer_activations(&mid, 23).expect("256-slope vector accepted for a 256-channel layer");
+}
+
+#[test]
+fn test_gating_legacy_blended_and_divergent_lists_at_boundaries() {
+    let legacy = serde_json::json!({ "gated": true });
+    let cfg = parse_layer_activations(&legacy, 64).expect("legacy gated at 64 layers");
+    assert!(cfg.gating_modes.iter().all(|m| m == &GatingMode::Gated));
+    assert!(
+        cfg.secondary_activations
+            .iter()
+            .all(|s| s == &Some(ActivationType::Sigmoid))
+    );
+
+    let blended = serde_json::json!({ "gating_mode": "blended" });
+    let modes = parse_gating_modes_from_json(&blended, 64).expect("blended at 64 layers");
+    assert!(modes.iter().all(|m| m == &GatingMode::Blended));
+
+    let divergent_activation = serde_json::json!({ "activation": ["Tanh"] });
+    assert_eq!(
+        parse_activations_from_json(&divergent_activation, 2),
+        Err(NamErrorCode::NamJsonUnknownActivation)
+    );
+    let divergent_gating = serde_json::json!({ "gating_mode": ["none"] });
+    assert_eq!(
+        parse_gating_modes_from_json(&divergent_gating, 2),
+        Err(NamErrorCode::InvalidModelTopology)
+    );
+    let divergent_secondary = serde_json::json!({
+        "gating_mode": ["none", "gated"],
+        "secondary_activation": ["Tanh"]
+    });
+    assert_eq!(
+        parse_layer_activations(&divergent_secondary, 2),
+        Err(NamErrorCode::InvalidModelTopology)
     );
 }

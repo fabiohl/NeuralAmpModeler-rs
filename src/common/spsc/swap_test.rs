@@ -393,6 +393,400 @@ fn deferred_resolves_next_callback_before_newer_ring_payloads() {
     assert_eq!(handler.installed, vec![0, 1, 2]);
 }
 
+/// Aging probe: a ring wrapper that marks one payload as stale when it is
+/// popped, so a retained candidate can age inside a single drain window.
+struct AgingRing {
+    inner: Consumer<Box<TestPayload>>,
+    aged_id: u64,
+    age: Arc<AtomicBool>,
+}
+
+impl SwapRing for AgingRing {
+    type Payload = TestPayload;
+
+    fn pop(&mut self) -> Option<Box<Self::Payload>> {
+        let payload = rtrb::Consumer::pop(&mut self.inner).ok();
+        if payload.as_ref().is_some_and(|p| p.id == self.aged_id) {
+            self.age.store(true, Ordering::Relaxed);
+        }
+        payload
+    }
+
+    fn peek(&self) -> Option<&Self::Payload> {
+        rtrb::Consumer::peek(&self.inner).ok().map(|b| &**b)
+    }
+
+    fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
+    fn occupied(&self) -> usize {
+        self.inner.slots()
+    }
+}
+
+struct AgingHandler {
+    aged_id: u64,
+    age: Arc<AtomicBool>,
+    installed: Vec<u64>,
+    discarded: Vec<u64>,
+    scalars_installed: usize,
+}
+
+impl AgingHandler {
+    fn new(aged_id: u64, age: Arc<AtomicBool>) -> Self {
+        Self {
+            aged_id,
+            age,
+            installed: Vec::with_capacity(16),
+            discarded: Vec::with_capacity(16),
+            scalars_installed: 0,
+        }
+    }
+}
+
+impl RtSwapHandler for AgingHandler {
+    type Payload = TestPayload;
+
+    fn is_structural(&self, payload: &Self::Payload) -> bool {
+        payload.kind != Kind::Scalar
+    }
+
+    fn coalesce_key(&self, payload: &Self::Payload) -> Option<u64> {
+        match payload.kind {
+            Kind::Structural => Some(payload.key),
+            Kind::Scalar | Kind::Restore => None,
+        }
+    }
+
+    fn current_generation(&self) -> Option<u64> {
+        Some(0)
+    }
+
+    fn generation_of(&self, payload: &Self::Payload) -> Option<u64> {
+        if payload.id == self.aged_id && self.age.load(Ordering::Relaxed) {
+            Some(1)
+        } else {
+            Some(payload.generation)
+        }
+    }
+
+    fn install(&mut self, payload: Box<Self::Payload>, _gc: &mut GcSink<'_>) {
+        if payload.kind == Kind::Scalar {
+            self.scalars_installed += 1;
+        } else {
+            self.installed.push(payload.id);
+        }
+    }
+
+    fn discard(&mut self, payload: Box<Self::Payload>, _gc: &mut GcSink<'_>) {
+        self.discarded.push(payload.id);
+    }
+}
+
+/// Sequence table of F02: in callback 2 the head `seq3` is stale, so it must
+/// not supersede the valid parked `seq2`. `seq2` installs exactly once and
+/// `seq3` is discarded without consuming the structural budget or counting a
+/// supersession; the sequential ack stays gapless.
+#[test]
+fn stale_head_does_not_supersede_deferred_candidate() {
+    let (mut prod, cons) = RingBuffer::new(8);
+    let log: Rc<RefCell<Vec<SeqEvent>>> = Rc::new(RefCell::new(Vec::new()));
+    let mut drain = RtSwapDrain::new(
+        SeqRing {
+            inner: cons,
+            processed: 0,
+            log: Rc::clone(&log),
+        },
+        SwapTunables {
+            pops_per_callback: 8,
+            swaps_per_callback: 1,
+            backlog_flag: false,
+        },
+    );
+    prod.push(TestPayload::structural(1, 10)).unwrap();
+    prod.push(TestPayload::structural(2, 20)).unwrap();
+
+    let mut parking_lot: [Option<GcItem>; 16] = std::array::from_fn(|_| None);
+    let overflow = GcOverflowBuffer::new(64);
+    let rt_status = RtStatusFlags::new();
+    let (mut gc_prod, gc_cons) = RingBuffer::new(64);
+    let mut handler = TestHandler::new(16);
+
+    {
+        let mut budget = SwapBudget::new(1);
+        let mut sink = GcSink {
+            producer: &mut gc_prod,
+            parking_lot: &mut parking_lot,
+            overflow: &overflow,
+            rt_status: &rt_status,
+            parking_lot_dirty: None,
+        };
+        drain.drain(&mut handler, &mut budget, &mut sink);
+    }
+    assert_eq!(handler.installed, vec![1], "seq1 installs, seq2 parks");
+    assert!(drain.has_deferred());
+
+    prod.push(TestPayload::stale(3, 20, 99)).unwrap();
+    {
+        let mut budget = SwapBudget::new(1);
+        let mut sink = GcSink {
+            producer: &mut gc_prod,
+            parking_lot: &mut parking_lot,
+            overflow: &overflow,
+            rt_status: &rt_status,
+            parking_lot_dirty: None,
+        };
+        drain.drain(&mut handler, &mut budget, &mut sink);
+    }
+    assert_eq!(
+        handler.installed,
+        vec![1, 2],
+        "the stale head must not suppress the valid parked payload"
+    );
+    assert_eq!(handler.discarded, vec![3], "seq3 is discarded as stale");
+    assert!(
+        !rt_status.check_and_clear_flag(RT_STATUS_STRUCTURAL_SUPERSEDED),
+        "a stale head is not a supersession"
+    );
+    assert_eq!(
+        rt_status
+            .structural_superseded_total
+            .load(Ordering::Relaxed),
+        0
+    );
+    assert!(!drain.has_deferred());
+    assert!(drain.is_empty());
+    assert_eq!(ring_net_seq(&log), 3, "ack covers every resolved envelope");
+    drop(gc_cons);
+}
+
+/// A structural, valid head with the same key still supersedes a parked
+/// payload, preserving latest-wins coalescing across callbacks.
+#[test]
+fn valid_same_key_head_supersedes_deferred_candidate() {
+    let mut h = Harness::new(8, 8, 1, false);
+    h.producer.push(TestPayload::structural(0, 10)).unwrap();
+    h.producer.push(TestPayload::structural(1, 20)).unwrap();
+    let mut handler = TestHandler::new(16);
+    h.callback(&mut handler);
+    assert_eq!(handler.installed, vec![0]);
+    assert!(h.drain.has_deferred());
+
+    h.producer.push(TestPayload::structural(2, 20)).unwrap();
+    h.callback(&mut handler);
+    assert_eq!(handler.installed, vec![0, 2], "latest same-key installs");
+    assert_eq!(handler.discarded, vec![1], "parked older build retires");
+    assert!(
+        h.rt_status
+            .check_and_clear_flag(RT_STATUS_STRUCTURAL_SUPERSEDED)
+    );
+    assert_eq!(
+        h.rt_status
+            .structural_superseded_total
+            .load(Ordering::Relaxed),
+        1
+    );
+    assert!(!h.drain.has_deferred());
+    assert!(h.drain.is_empty());
+}
+
+/// A candidate that ages after being popped is revalidated before the scalar
+/// flush: it is discarded to GC, consumes no structural budget, and the
+/// scalar still applies inline.
+#[test]
+fn retained_candidate_aging_at_scalar_flush() {
+    let age = Arc::new(AtomicBool::new(false));
+    let (mut prod, cons) = RingBuffer::new(8);
+    let mut drain = RtSwapDrain::new(
+        AgingRing {
+            inner: cons,
+            aged_id: 1,
+            age: Arc::clone(&age),
+        },
+        SwapTunables {
+            pops_per_callback: 8,
+            swaps_per_callback: 1,
+            backlog_flag: false,
+        },
+    );
+    prod.push(TestPayload::structural(0, 10)).unwrap();
+    prod.push(TestPayload::structural(1, 20)).unwrap();
+    prod.push(TestPayload::scalar(2)).unwrap();
+
+    let mut parking_lot: [Option<GcItem>; 16] = std::array::from_fn(|_| None);
+    let overflow = GcOverflowBuffer::new(64);
+    let rt_status = RtStatusFlags::new();
+    let (mut gc_prod, gc_cons) = RingBuffer::new(64);
+    let mut handler = AgingHandler::new(1, Arc::clone(&age));
+    let mut budget = SwapBudget::new(1);
+    {
+        let mut sink = GcSink {
+            producer: &mut gc_prod,
+            parking_lot: &mut parking_lot,
+            overflow: &overflow,
+            rt_status: &rt_status,
+            parking_lot_dirty: None,
+        };
+        drain.drain(&mut handler, &mut budget, &mut sink);
+    }
+    assert_eq!(handler.installed, vec![0], "only the still-valid candidate");
+    assert_eq!(handler.discarded, vec![1], "aged candidate discards to GC");
+    assert_eq!(handler.scalars_installed, 1, "scalar still applies inline");
+    assert_eq!(budget.used(), 1, "aged candidate must not consume budget");
+    assert!(
+        !rt_status.check_and_clear_flag(RT_STATUS_STRUCTURAL_SUPERSEDED),
+        "aging is not supersession"
+    );
+    assert!(!drain.has_deferred());
+    assert!(drain.is_empty());
+    drop(gc_cons);
+}
+
+/// A candidate that ages after being popped is revalidated at a key change:
+/// the stale older candidate is discarded without consuming budget or raising
+/// the supersession counter, and the newer candidate installs under budget.
+#[test]
+fn retained_candidate_aging_at_key_change() {
+    let age = Arc::new(AtomicBool::new(false));
+    let (mut prod, cons) = RingBuffer::new(8);
+    let mut drain = RtSwapDrain::new(
+        AgingRing {
+            inner: cons,
+            aged_id: 1,
+            age: Arc::clone(&age),
+        },
+        SwapTunables {
+            pops_per_callback: 8,
+            swaps_per_callback: 2,
+            backlog_flag: false,
+        },
+    );
+    prod.push(TestPayload::structural(0, 10)).unwrap();
+    prod.push(TestPayload::structural(1, 20)).unwrap();
+    prod.push(TestPayload::structural(2, 30)).unwrap();
+
+    let mut parking_lot: [Option<GcItem>; 16] = std::array::from_fn(|_| None);
+    let overflow = GcOverflowBuffer::new(64);
+    let rt_status = RtStatusFlags::new();
+    let (mut gc_prod, gc_cons) = RingBuffer::new(64);
+    let mut handler = AgingHandler::new(1, Arc::clone(&age));
+    let mut budget = SwapBudget::new(2);
+    {
+        let mut sink = GcSink {
+            producer: &mut gc_prod,
+            parking_lot: &mut parking_lot,
+            overflow: &overflow,
+            rt_status: &rt_status,
+            parking_lot_dirty: None,
+        };
+        drain.drain(&mut handler, &mut budget, &mut sink);
+    }
+    assert_eq!(handler.installed, vec![0, 2]);
+    assert_eq!(handler.discarded, vec![1]);
+    assert_eq!(budget.used(), 2, "only real installs consume budget");
+    assert!(
+        !rt_status.check_and_clear_flag(RT_STATUS_STRUCTURAL_SUPERSEDED),
+        "aging is not supersession"
+    );
+    assert!(!drain.has_deferred());
+    assert!(drain.is_empty());
+    drop(gc_cons);
+}
+
+/// A candidate that ages after being popped is revalidated at the end of the
+/// phase: it is discarded to GC, installs nothing, and consumes no budget.
+#[test]
+fn retained_candidate_aging_at_phase_end() {
+    let age = Arc::new(AtomicBool::new(false));
+    let (mut prod, cons) = RingBuffer::new(8);
+    let mut drain = RtSwapDrain::new(
+        AgingRing {
+            inner: cons,
+            aged_id: 0,
+            age: Arc::clone(&age),
+        },
+        SwapTunables {
+            pops_per_callback: 8,
+            swaps_per_callback: 1,
+            backlog_flag: false,
+        },
+    );
+    prod.push(TestPayload::structural(0, 10)).unwrap();
+
+    let mut parking_lot: [Option<GcItem>; 16] = std::array::from_fn(|_| None);
+    let overflow = GcOverflowBuffer::new(64);
+    let rt_status = RtStatusFlags::new();
+    let (mut gc_prod, gc_cons) = RingBuffer::new(64);
+    let mut handler = AgingHandler::new(0, Arc::clone(&age));
+    let mut budget = SwapBudget::new(1);
+    {
+        let mut sink = GcSink {
+            producer: &mut gc_prod,
+            parking_lot: &mut parking_lot,
+            overflow: &overflow,
+            rt_status: &rt_status,
+            parking_lot_dirty: None,
+        };
+        drain.drain(&mut handler, &mut budget, &mut sink);
+    }
+    assert!(handler.installed.is_empty(), "no stale install");
+    assert_eq!(handler.discarded, vec![0]);
+    assert_eq!(budget.used(), 0, "discard must not consume budget");
+    assert!(!drain.has_deferred());
+    assert!(drain.is_empty());
+    drop(gc_cons);
+}
+
+/// Aging inside a coalescing window: a stale pending candidate replaced by a
+/// newer same-key head is discarded as stale, without raising supersession.
+#[test]
+fn retained_candidate_aging_during_coalescing() {
+    let age = Arc::new(AtomicBool::new(false));
+    let (mut prod, cons) = RingBuffer::new(8);
+    let mut drain = RtSwapDrain::new(
+        AgingRing {
+            inner: cons,
+            aged_id: 0,
+            age: Arc::clone(&age),
+        },
+        SwapTunables {
+            pops_per_callback: 8,
+            swaps_per_callback: 1,
+            backlog_flag: false,
+        },
+    );
+    prod.push(TestPayload::structural(0, 10)).unwrap();
+    prod.push(TestPayload::structural(1, 10)).unwrap();
+
+    let mut parking_lot: [Option<GcItem>; 16] = std::array::from_fn(|_| None);
+    let overflow = GcOverflowBuffer::new(64);
+    let rt_status = RtStatusFlags::new();
+    let (mut gc_prod, gc_cons) = RingBuffer::new(64);
+    let mut handler = AgingHandler::new(0, Arc::clone(&age));
+    let mut budget = SwapBudget::new(1);
+    {
+        let mut sink = GcSink {
+            producer: &mut gc_prod,
+            parking_lot: &mut parking_lot,
+            overflow: &overflow,
+            rt_status: &rt_status,
+            parking_lot_dirty: None,
+        };
+        drain.drain(&mut handler, &mut budget, &mut sink);
+    }
+    assert_eq!(handler.installed, vec![1], "only the newest same-key build");
+    assert_eq!(handler.discarded, vec![0]);
+    assert_eq!(budget.used(), 1);
+    assert!(
+        !rt_status.check_and_clear_flag(RT_STATUS_STRUCTURAL_SUPERSEDED),
+        "an aged candidate is stale, not superseded"
+    );
+    assert!(!drain.has_deferred());
+    assert!(drain.is_empty());
+    drop(gc_cons);
+}
+
 /// Sequence-tracking ring wrapper recording the acknowledgment hooks.
 #[derive(Debug, PartialEq, Eq)]
 enum SeqEvent {

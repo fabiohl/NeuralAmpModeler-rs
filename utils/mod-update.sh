@@ -18,7 +18,7 @@ cd "$(dirname "$0")/.."
 . utils/_lib.sh
 case "$#:${1:-}" in
     0:) ;;
-    1:-h|1:--help) echo "Usage: utils/mod-update.sh"; exit 0 ;;
+    1:-h|1:--help) help_exit "Usage: utils/mod-update.sh" ;;
     *) usage_fail "mod-update.sh não aceita argumentos ($*)" ;;
 esac
 lib_init

@@ -9,7 +9,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 . utils/_lib.sh
 
-case "${1:-}" in "") ;; -h|--help) echo "Uso: utils/tests-quick.sh"; exit 0 ;; *) usage_fail "tests-quick.sh não aceita argumentos ($*)" ;; esac
+case "${1:-}" in "") ;; -h|--help) help_exit "Uso: utils/tests-quick.sh" ;; *) usage_fail "tests-quick.sh não aceita argumentos ($*)" ;; esac
 lib_init
 PHASE_NAME=init; PHASE_LOG="$LOG_DIR/quick-init.log"
 trap 'trap_fail $?' ERR

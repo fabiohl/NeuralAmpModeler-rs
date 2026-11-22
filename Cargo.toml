@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 [package]
 name = "NeuralAmpModeler-rs"
-version = "3.0.0"
+version = "4.0.0"
 edition = "2024"
 rust-version = "1.99.0"
 autobins = false
@@ -238,6 +238,11 @@ required-features = []
 [[example]]
 name = "cabsim"
 path = "examples/cabsim.rs"
+required-features = []
+
+[[example]]
+name = "streaming_partial"
+path = "examples/streaming_partial.rs"
 required-features = []
 
 [[example]]

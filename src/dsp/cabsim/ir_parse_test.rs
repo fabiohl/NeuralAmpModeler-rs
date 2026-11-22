@@ -65,8 +65,8 @@ fn find_chunk_returns_none_after_scan_cap() {
         data.extend_from_slice(&0u32.to_le_bytes());
     }
 
-    assert!(find_chunk(&data, b"fmt ", 12).is_none());
-    assert!(find_chunk(&data, &junk_id, 12).is_some());
+    assert!(find_chunk(&data, b"fmt ", 12, data.len()).is_none());
+    assert!(find_chunk(&data, &junk_id, 12, data.len()).is_some());
 }
 
 #[test]
@@ -645,4 +645,185 @@ fn odd_inter_chunk_padding_and_cabsim_load_from_memory_convolution_parity() {
         output[0],
         ir.samples[0]
     );
+}
+
+#[test]
+fn odd_inter_chunk_junk_between_fmt_and_data_is_padded_and_parsed() {
+    let mut wav = Vec::new();
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&0u32.to_le_bytes());
+    wav.extend_from_slice(b"WAVE");
+    wav.extend_from_slice(b"fmt ");
+    wav.extend_from_slice(&16u32.to_le_bytes());
+    wav.extend_from_slice(&WAV_FORMAT_PCM.to_le_bytes());
+    wav.extend_from_slice(&1u16.to_le_bytes());
+    wav.extend_from_slice(&48_000u32.to_le_bytes());
+    wav.extend_from_slice(&(48_000u32 * 2).to_le_bytes());
+    wav.extend_from_slice(&2u16.to_le_bytes());
+    wav.extend_from_slice(&16u16.to_le_bytes());
+    wav.extend_from_slice(b"JUNK");
+    wav.extend_from_slice(&5u32.to_le_bytes());
+    wav.extend_from_slice(&[1, 2, 3, 4, 5, 0]);
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&4u32.to_le_bytes());
+    wav.extend_from_slice(&0x4000i16.to_le_bytes());
+    wav.extend_from_slice(&(-0x4000i16).to_le_bytes());
+    let total = (wav.len() - 8) as u32;
+    wav[4..8].copy_from_slice(&total.to_le_bytes());
+
+    let (samples, rate) =
+        parse_wav(&wav).expect("odd JUNK with pad byte between fmt and data must parse");
+    assert_eq!(rate, 48_000);
+    assert_eq!(samples.len(), 2);
+    assert!((samples[0] - 0.5).abs() < 1e-4);
+    assert!((samples[1] + 0.5).abs() < 1e-4);
+}
+
+// — F05 / T5.4: every read is restricted to the declared RIFF container ——
+
+fn patch_riff_size(wav: &mut [u8], riff_size: u32) {
+    wav[4..8].copy_from_slice(&riff_size.to_le_bytes());
+}
+
+fn assert_invalid_data(res: io::Result<(Vec<f32>, u32)>, ctx: &str) {
+    let err = res.expect_err(ctx);
+    assert_eq!(err.kind(), io::ErrorKind::InvalidData, "{ctx}: {err}");
+}
+
+#[test]
+fn riff_size_below_header_is_rejected() {
+    let mut wav = build_wav_with_data(WAV_FORMAT_PCM, 16, 2, &[0x00, 0x40]);
+    for size in [0u32, 1, 3] {
+        patch_riff_size(&mut wav, size);
+        assert_invalid_data(parse_wav(&wav), "riff_size below header");
+    }
+}
+
+#[test]
+fn riff_size_beyond_buffer_is_rejected() {
+    let mut wav = build_wav_with_data(WAV_FORMAT_PCM, 16, 2, &[0x00, 0x40]);
+    let beyond = wav.len() as u32;
+    patch_riff_size(&mut wav, beyond);
+    assert_invalid_data(parse_wav(&wav), "riff_size beyond buffer");
+}
+
+/// Acceptance case from F05: a physically valid 46-byte WAV that declares a
+/// 12-byte container must be rejected instead of reading `fmt`/`data` that
+/// live outside the declared RIFF.
+#[test]
+fn declared_twelve_byte_container_rejected() {
+    let mut wav = build_wav_with_data(WAV_FORMAT_PCM, 16, 2, &[0x00, 0x40]);
+    assert_eq!(wav.len(), 46);
+    patch_riff_size(&mut wav, 12);
+    assert_invalid_data(parse_wav(&wav), "46-byte WAV with 12-byte container");
+}
+
+#[test]
+fn fmt_and_data_crossing_container_are_rejected() {
+    let mut wav = build_wav_with_data(WAV_FORMAT_PCM, 16, 4, &[0; 8]);
+    // Container ending inside the `fmt ` payload.
+    patch_riff_size(&mut wav, 20);
+    assert_invalid_data(parse_wav(&wav), "fmt crossing container end");
+
+    // Container ending inside the `data` payload (header fits, payload does not).
+    let wav = build_wav_with_data(WAV_FORMAT_PCM, 16, 4, &[0; 8]);
+    let data_header_end = wav.len() - 8;
+    let mut truncated = wav.clone();
+    patch_riff_size(&mut truncated, (data_header_end + 1 - 8) as u32);
+    assert_invalid_data(parse_wav(&truncated), "data crossing container end");
+}
+
+#[test]
+fn residual_bytes_after_container_do_not_change_audio() {
+    let base = build_wav_with_data(WAV_FORMAT_PCM, 16, 4, &[0x00, 0x40, 0x00, 0xC0]);
+    let (expected, _) = parse_wav(&base).expect("valid container");
+    let mut with_residual = base.clone();
+    with_residual.extend_from_slice(b"RIFFdataJUNKgarbage");
+
+    let (samples, rate) = parse_wav(&with_residual).expect("residual bytes are ignored");
+    assert_eq!(rate, 48_000);
+    assert_eq!(samples, expected);
+}
+
+#[test]
+fn odd_intermediate_junk_requires_padding() {
+    fn build(padded: bool) -> Vec<u8> {
+        let mut wav = Vec::new();
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&0u32.to_le_bytes());
+        wav.extend_from_slice(b"WAVE");
+        wav.extend_from_slice(b"fmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&WAV_FORMAT_PCM.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&48_000u32.to_le_bytes());
+        wav.extend_from_slice(&96_000u32.to_le_bytes());
+        wav.extend_from_slice(&2u16.to_le_bytes());
+        wav.extend_from_slice(&16u16.to_le_bytes());
+        wav.extend_from_slice(b"JUNK");
+        wav.extend_from_slice(&3u32.to_le_bytes());
+        wav.extend_from_slice(&[0xAA, 0xBB, 0xCC]);
+        if padded {
+            wav.push(0x00);
+        }
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&2u32.to_le_bytes());
+        wav.extend_from_slice(&0x4000i16.to_le_bytes());
+        let total = (wav.len() - 8) as u32;
+        wav[4..8].copy_from_slice(&total.to_le_bytes());
+        wav
+    }
+
+    let padded = build(true);
+    let (samples, _) = parse_wav(&padded).expect("padded odd JUNK must parse");
+    assert_eq!(samples.len(), 1);
+    assert_invalid_data(parse_wav(&build(false)), "unpadded odd JUNK");
+}
+
+#[test]
+fn odd_terminal_data_without_padding_is_tolerated_only_at_container_end() {
+    // PCM24: one sample = 3 bytes (odd).
+    let base = build_wav_with_data(WAV_FORMAT_PCM, 24, 3, &[0x00, 0x00, 0x40]);
+    let (expected, _) = parse_wav(&base).expect("terminal odd data at container end");
+
+    // The same fixture with a pad byte physically present but excluded from the
+    // declared container still reads only the declared payload.
+    let mut with_outside_pad = base.clone();
+    with_outside_pad.push(0x00);
+    let (samples, _) = parse_wav(&with_outside_pad).expect("pad outside container is ignored");
+    assert_eq!(samples, expected);
+
+    // A declared container that includes the pad byte is also valid.
+    let mut padded_inside = with_outside_pad;
+    let new_size = (padded_inside.len() - 8) as u32;
+    patch_riff_size(&mut padded_inside, new_size);
+    let (samples, _) = parse_wav(&padded_inside).expect("pad inside container is valid RIFF");
+    assert_eq!(samples, expected);
+}
+
+#[test]
+fn valid_pcm_and_float_fixtures_keep_impulse_convolution() {
+    let cases: [(u16, u16, &[u8]); 2] = [
+        (WAV_FORMAT_PCM, 16, &[0x00, 0x60]),
+        (
+            WAV_FORMAT_IEEE_FLOAT,
+            32,
+            &[0.75f32.to_le_bytes()[0], 0, 0, 0x3F],
+        ),
+    ];
+    for (fmt, bits, payload) in cases {
+        let wav = build_wav_with_data(fmt, bits, payload.len() as u32, payload);
+        let ir = crate::prelude::CabSimIr::load_from_memory(&wav, 0, false)
+            .expect("valid fixture must load");
+        assert_eq!(ir.samples.len(), 1);
+        let mut conv = crate::prelude::ConvEngine::new(&ir.samples, 64).expect("conv engine");
+        let mut input = [0.0f32; 64];
+        input[0] = 1.0;
+        let mut output = [0.0f32; 64];
+        conv.process(&input, &mut output, None);
+        assert!(
+            (output[0] - ir.samples[0]).abs() < 1e-5,
+            "fmt={fmt} bits={bits}: impulse response mismatch"
+        );
+    }
 }

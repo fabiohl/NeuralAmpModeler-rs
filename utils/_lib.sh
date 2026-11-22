@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 # _lib.sh — helpers locais de NeuralAmpModeler-rs. Sem cópia pinada, sem hash.
-# Orçamento: 189          # wc -l + 10: lib_init com marcador RUN: de rodada local
+# Orçamento: 205          # wc -l + 10: fecho de help/uso inválido via finish sem carrier (D-01)
 
 LOG_DIR=target/logs
 NAM_RUN_ID="${NAM_RUN_ID:-}"
@@ -17,10 +17,24 @@ SETUP_THIRD_PARTY_SH="$PROJECT_DIR/utils/setup-third-party.sh"
 
 warn() { echo "WARN: $*" >&2; }
 die()  { echo "ERROR: $*" >&2; exit 1; }
-usage_fail() { printf 'RESULT: FAIL (0s) fails=uso gaps=none (%s)\n' "$1"; exit 2; }
+
+# Fecho sem persistência (D-01): help e uso inválido emitem exatamente um RESULT
+# via finish, sem gravar carrier nem summary.txt; a evidência anterior fica intacta.
+NO_CARRIER=0
+usage_close() {
+  NO_CARRIER=1
+  case "$1" in
+    PASS) finish || true ;;
+    *)    FAILS+=("$2"); finish || true ;;
+  esac
+  return 0
+}
+usage_fail() { echo "ERROR: $1" >&2; usage_close FAIL uso; exit 2; }
+help_exit() { if [ $# -gt 0 ]; then printf '%s\n' "$*"; fi; usage_close PASS; exit 0; }
 
 # lib_init — único ponto que cria target/logs, trunca summary.txt e remove o carrier obsoleto (§5, §9.46).
 lib_init() {
+  [ "${NO_CARRIER:-0}" = 1 ] && return 0
   mkdir -p "$LOG_DIR" || die "cannot create $LOG_DIR"
   local fresh=0
   if [ -z "$NAM_RUN_ID" ]; then NAM_RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"; fresh=1; fi
@@ -86,13 +100,13 @@ finish() {
   [ ${#GAPS[@]} -gt 0 ] && s=PASS_WITH_GAPS
   { [ ${#FAILS[@]} -gt 0 ] || { [ "$STRICT" = 1 ] && [ ${#GAPS[@]} -gt 0 ]; }; } && s=FAIL
   [ "$EMIT_RC" -ne 0 ] && { FAILS+=("emit"); s=FAIL; }
-  if ! carrier_write "$s"; then
+  if [ "${NO_CARRIER:-0}" != 1 ] && ! carrier_write "$s"; then
     echo "ERROR: cannot write status carrier $sf" >&2; emit "PHASE: carrier FAIL path=$sf"
     FAILS+=("carrier"); s=FAIL; e=1
   fi
   f_csv="$(IFS=,; echo "${FAILS[*]:-none}")"; g_csv="$(IFS=,; echo "${GAPS[*]:-none}")"
   line="RESULT: $s ($((SECONDS - T0))s) fails=$f_csv gaps=$g_csv scope=${SCOPE:-full}"
-  if [ "${lib_quiet:-}" != "1" ] && ! printf '%s\n' "$line" >> "$LOG_DIR/summary.txt" 2>/dev/null; then
+  if [ "${NO_CARRIER:-0}" != 1 ] && [ "${lib_quiet:-}" != "1" ] && ! printf '%s\n' "$line" >> "$LOG_DIR/summary.txt" 2>/dev/null; then
     echo "ERROR: cannot append summary.txt" >&2; EMIT_RC=1; e=1; FAILS+=("emit"); s=FAIL
     f_csv="$(IFS=,; echo "${FAILS[*]:-none}")"; carrier_write "$s" || true
     line="RESULT: $s ($((SECONDS - T0))s) fails=$f_csv gaps=$g_csv scope=${SCOPE:-full}"

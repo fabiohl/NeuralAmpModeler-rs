@@ -9,7 +9,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 . utils/_lib.sh
 
-case "${1:-}" in "") ;; -h|--help) echo "Uso: utils/lints.sh"; exit 0 ;; *) usage_fail "lints.sh não aceita argumentos ($*)" ;; esac
+case "${1:-}" in "") ;; -h|--help) help_exit "Uso: utils/lints.sh" ;; *) usage_fail "lints.sh não aceita argumentos ($*)" ;; esac
 lib_init
 xtrace_side_channel "$LOG_DIR/lints-xtrace.log"
 trap 'trap_fail $?' ERR
@@ -83,10 +83,16 @@ run_step spdx phase_spdx
 
 phase_policies() {
   if git grep -nF "#[test]" tests/common/ >/dev/null 2>&1; then echo "ERROR: #[test] in tests/common/" >&2; exit 1; fi
-  local cargo_ver cargo_msrv
+  local cargo_ver cargo_full cargo_msrv
   cargo_ver=$(grep -m1 '^version = ' Cargo.toml | sed -E 's/version = "([0-9]+\.[0-9]+).*"/\1/')
+  cargo_full=$(grep -m1 '^version = ' Cargo.toml | sed -E 's/version = "([^"]+)"/\1/')
   cargo_msrv=$(grep -m1 '^rust-version = ' Cargo.toml | sed -E 's/rust-version = "([^"]+)"/\1/')
   grep -qE "NeuralAmpModeler-rs = (\"$cargo_ver\"|\{ version = \"$cargo_ver\")" README.md || { echo "README version mismatch" >&2; exit 1; }
+  for f in README.md src/lib.rs; do
+    bad=$(grep -nE 'NeuralAmpModeler-rs = ' "$f" | grep -vE "NeuralAmpModeler-rs = \"$cargo_ver(\.[0-9]+)?\"|version = \"$cargo_ver(\.[0-9]+)?\"" || true)
+    [ -z "$bad" ] || { echo "$f: install snippet diverges from $cargo_ver" >&2; echo "$bad" >&2; exit 1; }
+  done
+  grep -m1 '^## \[' CHANGELOG.md | grep -qF "## [$cargo_full] - " || { echo "CHANGELOG header mismatch (expected $cargo_full)" >&2; exit 1; }
   grep -qE "badge/MSRV-$cargo_msrv" README.md || { echo "README MSRV mismatch" >&2; exit 1; }
   doc_cfg=$(git grep -h 'doc(cfg(' src/)
   for feat in $(grep -o -E 'feature = "[^"]+"' <<<"$doc_cfg" | sed -E 's/.*"([^"]+)".*/\1/' | sort -u); do

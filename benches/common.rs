@@ -139,13 +139,14 @@ pub fn make_wavenet_a2_dyn_data() -> NamModelData {
 
     let channels = 4usize;
     let bottleneck = 4usize;
+    let conv_out = 2 * bottleneck;
     let head_k = neural_amp_modeler_rs::models::a2::params::A2_HEAD_KERNEL_SIZE;
 
     let mut total_weights = channels;
     for &ksize in A2_KERNEL_SIZES.iter() {
-        total_weights += channels * bottleneck * ksize;
-        total_weights += bottleneck;
-        total_weights += bottleneck;
+        total_weights += channels * conv_out * ksize;
+        total_weights += conv_out;
+        total_weights += conv_out;
         total_weights += bottleneck * channels;
         total_weights += channels;
     }

@@ -27,10 +27,13 @@ pub const MAX_LAYERS: usize = 8;
 /// Universal OOM guard applied immediately after JSON deserialization.
 pub const MAX_HIDDEN_SIZE: usize = 512;
 
-/// Maximum size of the `metadata.training` field in bytes.
-const MAX_TRAINING_BYTES: usize = 1024 * 1024; // 1 MiB
+/// Maximum aggregate cost of the `metadata.training` tree, in the historical
+/// cost units documented on [`LimitedValueVisitor`] (D-02). These units
+/// approximate the source JSON text and are not an exact byte or memory
+/// measurement; the name is kept for compatibility with existing references.
+const MAX_TRAINING_BYTES: usize = 1024 * 1024; // 1_048_576 cost units
 
-/// Maximum depth of the JSON tree in `metadata.training`.
+/// Maximum number of nested containers in `metadata.training` (D-02).
 const MAX_TRAINING_DEPTH: usize = 16;
 
 /// Maximum number of submodels in a SlimmableContainer.
@@ -455,16 +458,35 @@ where
 /// JSON tree visitor for `metadata.training` with depth and size limits.
 ///
 /// Limits are enforced during **deserialization** (not afterwards) to prevent
-/// memory exhaustion before validation completes.  The 1 MiB aggregate limit
+/// memory exhaustion before validation completes. The 1 MiB aggregate limit
 /// protects against DoS via deeply nested or overly verbose training metadata.
 ///
-/// Uses `std::cell::Cell<usize>` so that child visitors share the size counter
-/// with the parent, avoiding bypass of the 1 MiB aggregate limit.
+/// Uses `Rc<Cell<usize>>` so that every child visitor shares the *same* size
+/// counter with the parent and with its siblings. This makes the ceiling a
+/// per-tree aggregate: independent sub-trees can no longer each spend the full
+/// budget.
+///
+/// # Cost metric (D-02: historical units, preserved)
+///
+/// The counter approximates the size of the JSON *text* that produced each
+/// value, not the in-memory representation, so it stays invariant across
+/// parsers:
+///
+/// - strings are charged `decoded_len + 2` (decoded bytes, so a `\n` escape
+///   counts as one byte, plus the surrounding quotes);
+/// - object keys are charged `key_len + 4` (decoded key bytes, quotes, colon
+///   and separator);
+/// - numbers and booleans are charged `16` and `4`/`5` respectively;
+/// - containers are charged `2` (brackets/braces) plus `1` per entry or pair;
+/// - `null` is charged `0`, as in the historical metric.
+///
+/// Consequently an object with two string/string pairs costs exactly
+/// `N + M + 20` for string lengths `N` and `M`.
 struct LimitedValueVisitor {
     depth: usize,
     max_depth: usize,
     max_size: usize,
-    current_size: std::cell::Cell<usize>,
+    current_size: Rc<Cell<usize>>,
 }
 
 impl LimitedValueVisitor {
@@ -473,7 +495,7 @@ impl LimitedValueVisitor {
             depth: 0,
             max_depth,
             max_size,
-            current_size: std::cell::Cell::new(0),
+            current_size: Rc::new(Cell::new(0)),
         }
     }
 
@@ -482,13 +504,12 @@ impl LimitedValueVisitor {
             depth: self.depth + 1,
             max_depth: self.max_depth,
             max_size: self.max_size,
-            current_size: self.current_size.clone(),
+            current_size: Rc::clone(&self.current_size),
         }
     }
 
     fn add_size(&self, bytes: usize) -> Result<(), serde_json::Error> {
-        let new = self.current_size.get() + bytes;
-        self.current_size.set(new);
+        let new = self.current_size.get().saturating_add(bytes);
         if new > self.max_size {
             record_last_typed_parse_error(JsonError::TrainingTooLarge {
                 size: new,
@@ -499,11 +520,15 @@ impl LimitedValueVisitor {
                 max_size: self.max_size,
             }));
         }
+        self.current_size.set(new);
         Ok(())
     }
 
     fn check_depth(&self) -> Result<(), serde_json::Error> {
-        if self.depth > self.max_depth {
+        // `depth` is zero-based: the root container is depth 0, so a tree with
+        // exactly `max_depth` nested containers reaches depth `max_depth - 1`.
+        // Reject the container that would make it `max_depth + 1` levels deep.
+        if self.depth >= self.max_depth {
             record_last_typed_parse_error(JsonError::TrainingTooDeep {
                 depth: self.depth,
                 max_depth: self.max_depth,
@@ -630,9 +655,9 @@ impl<'de> serde::de::Visitor<'de> for LimitedValueVisitor {
                     let key_len = key.len() + 4;
                     self.add_size(key_len).map_err(serde::de::Error::custom)?;
                     let val: serde_json::Value = map.next_value_seed(self.child())?;
-                    obj.insert(key, val);
                     // +1 for the comma between key-value pairs
                     self.add_size(1).map_err(serde::de::Error::custom)?;
+                    obj.insert(key, val);
                 }
                 Ok(None) => break,
                 Err(e) => return Err(e),

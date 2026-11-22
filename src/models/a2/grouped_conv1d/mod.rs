@@ -242,7 +242,7 @@ impl A2GroupedConv1d {
             }
         }
 
-        Ok(Self {
+        let conv = Self {
             weights,
             bias,
             do_bias,
@@ -255,7 +255,84 @@ impl A2GroupedConv1d {
             num_blocks_per_group,
             total_blocks,
             kernel,
-        })
+        };
+        if !conv.is_sound() {
+            return Err(NamErrorCode::InvalidModelTopology);
+        }
+        Ok(conv)
+    }
+
+    /// Returns whether this grouped convolution still satisfies every invariant
+    /// the unchecked SIMD kernels rely on.
+    ///
+    /// The fields are private and only the constructor mutates them, but this
+    /// predicate is the shared release-stable gate used by the safe
+    /// single-frame helper, which may receive a grouped conv through the public
+    /// `A2Conv1d` wrappers. It also cross-checks the derived layout fields
+    /// (`in_per_group`, `out_per_group`, `num_blocks_per_group`,
+    /// `total_blocks`) that the kernels index directly against the canonical
+    /// geometry, so a future layout change cannot silently pass validation with
+    /// a buffer smaller than the kernel reads.
+    #[inline]
+    pub(crate) fn is_sound(&self) -> bool {
+        let groups = self.groups;
+        if groups == 0 || self.in_ch == 0 || self.out_ch == 0 {
+            return false;
+        }
+        if !self.in_ch.is_multiple_of(groups) || !self.out_ch.is_multiple_of(groups) {
+            return false;
+        }
+        if self.kernel == 0 || self.kernel > MAX_KERNEL {
+            return false;
+        }
+        if self
+            .dilation
+            .checked_mul(self.kernel.saturating_sub(1))
+            .is_none()
+        {
+            return false;
+        }
+
+        let in_per_group = self.in_ch / groups;
+        let out_per_group = self.out_ch / groups;
+        let blocks_per_group = out_per_group.div_ceil(4);
+        if self.in_per_group != in_per_group
+            || self.out_per_group != out_per_group
+            || self.num_blocks_per_group != blocks_per_group
+        {
+            return false;
+        }
+        let Some(total_blocks) = groups.checked_mul(blocks_per_group) else {
+            return false;
+        };
+        if self.total_blocks != total_blocks {
+            return false;
+        }
+        let Some(interleaved) = total_blocks
+            .checked_mul(4)
+            .and_then(|total| total.checked_mul(in_per_group))
+            .and_then(|total| total.checked_mul(self.kernel))
+        else {
+            return false;
+        };
+        let required = if groups == self.in_ch && groups == self.out_ch {
+            let Some(soa) = self.kernel.checked_mul(self.in_ch) else {
+                return false;
+            };
+            let Some(total) = interleaved.checked_add(soa) else {
+                return false;
+            };
+            total
+        } else {
+            interleaved
+        };
+        if self.weights.len() < required {
+            return false;
+        }
+        if self.do_bias && self.bias.len() < self.out_ch {
+            return false;
+        }
+        true
     }
 
     /// Returns the grouped-interleaved weight slice.

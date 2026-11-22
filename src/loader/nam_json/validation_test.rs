@@ -218,6 +218,23 @@ fn test_training_deeply_nested_rejected() {
     );
 }
 
+#[test]
+fn test_training_at_exact_size_limit_accepted() {
+    let first = 524_278usize;
+    let second = 524_278usize;
+    let json = format!(
+        r#"{{"metadata": {{"ab": "{}", "cd": "{}"}}}}"#,
+        "x".repeat(first),
+        "y".repeat(second)
+    );
+    let parsed: TrainingWrapper =
+        serde_json::from_str(&json).expect("training at the exact size budget must parse");
+    let v = parsed.metadata.unwrap();
+    let obj = v.as_object().unwrap();
+    assert_eq!(obj["ab"].as_str().unwrap().len(), first);
+    assert_eq!(obj["cd"].as_str().unwrap().len(), second);
+}
+
 // — Submodels visitor tests ————————————————————————————————————————
 
 #[derive(Debug, serde::Deserialize)]
@@ -760,4 +777,246 @@ fn test_streaming_parser_preserves_invalid_envelope_classification() {
             other => panic!("expected InvalidEnvelope for {json}, got: {other:?}"),
         }
     }
+}
+
+// — F04 / T5.2: aggregate `metadata.training` budget across the whole tree ——
+
+/// Documents and pins D-02's historical metric: an object with two
+/// string/string pairs costs exactly `N + M + 20` (brace pair, two key charges
+/// of `len + 4`, two string charges of `len + 2`, two pair separators).
+/// Mirrors the private `MAX_TRAINING_BYTES` ceiling (1 MiB).
+const TRAINING_LIMIT: usize = 1024 * 1024;
+
+fn training_two_pairs(first: usize, second: usize) -> String {
+    format!(
+        r#"{{"metadata": {{"ab": "{}", "cd": "{}"}}}}"#,
+        "x".repeat(first),
+        "y".repeat(second)
+    )
+}
+
+#[test]
+fn test_training_metric_two_pairs_boundary() {
+    // N + M + 20 is the exact aggregate cost for two string pairs.
+    let base = TRAINING_LIMIT - 20;
+    for (total, accepted) in [
+        (base - 1, true),  // cost = limit - 1
+        (base, true),      // cost = limit
+        (base + 1, false), // cost = limit + 1
+    ] {
+        let n = total / 2;
+        let m = total - n;
+        let json = training_two_pairs(n, m);
+        let result: Result<TrainingWrapper, _> = serde_json::from_str(&json);
+        if accepted {
+            result.expect("training at or below the documented limit must parse");
+        } else {
+            let err = result.expect_err("training above the limit must be rejected");
+            let msg = err.to_string();
+            assert!(
+                msg.contains("too large") || msg.contains("TrainingTooLarge"),
+                "unexpected error: {msg}"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_training_sibling_subtrees_share_one_budget() {
+    // Two sibling 600 KiB strings each fit individually but together exceed
+    // the 1 MiB aggregate. Before the shared counter, each sibling branch got
+    // its own copy of the budget and the document was accepted.
+    let json = format!(
+        r#"{{"metadata": {{"p": "{}", "q": "{}"}}}}"#,
+        "x".repeat(600_000),
+        "y".repeat(600_000)
+    );
+    let err = serde_json::from_str::<TrainingWrapper>(&json)
+        .expect_err("sibling sub-trees must share the aggregate budget");
+    assert!(err.to_string().contains("too large") || err.to_string().contains("TrainingTooLarge"));
+}
+
+#[test]
+fn test_training_nested_subtrees_share_one_budget() {
+    // Three nested 400 KiB strings: every branch fits alone, the aggregate
+    // (1.2 MiB) does not.
+    let json = format!(
+        r#"{{"metadata": {{"a": {{"s": "{}"}}, "b": {{"s": "{}"}}, "c": {{"s": "{}"}}}}}}"#,
+        "x".repeat(400_000),
+        "y".repeat(400_000),
+        "z".repeat(400_000)
+    );
+    let err = serde_json::from_str::<TrainingWrapper>(&json)
+        .expect_err("nested sub-trees must share the aggregate budget");
+    assert!(err.to_string().contains("too large") || err.to_string().contains("TrainingTooLarge"));
+}
+
+fn nested_training_value(depth: usize) -> String {
+    let mut value = String::from("\"deep\"");
+    for _ in 0..depth {
+        value = format!(r#"{{"x": {value}}}"#);
+    }
+    value
+}
+
+#[test]
+fn test_training_depth_16_accepted_and_17_rejected() {
+    for (depth, accepted) in [(16usize, true), (17, false)] {
+        let json = format!(r#"{{"metadata": {}}}"#, nested_training_value(depth));
+        let result: Result<TrainingWrapper, _> = serde_json::from_str(&json);
+        if accepted {
+            result.expect("16 nested containers must be accepted");
+        } else {
+            let err = result.expect_err("17 nested containers must be rejected");
+            let msg = err.to_string();
+            assert!(
+                msg.contains("too deep") || msg.contains("TrainingTooDeep"),
+                "unexpected error: {msg}"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_training_null_charges_nothing_and_absence_null_forms() {
+    // `null` costs zero in the historical metric: a document whose only
+    // content is nulls stays accepted.
+    let nulls = (0..1000)
+        .map(|i| format!("\"k{i}\": null"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let json = format!(r#"{{"metadata": {{{nulls}}}}}"#);
+    let parsed: TrainingWrapper = serde_json::from_str(&json).expect("nulls are free");
+    assert!(parsed.metadata.is_some());
+
+    // `training` absent and explicit `null` both map to `None`.
+    assert!(
+        serde_json::from_str::<TrainingWrapper>(r#"{}"#)
+            .expect("absent")
+            .metadata
+            .is_none()
+    );
+    assert!(
+        serde_json::from_str::<TrainingWrapper>(r#"{"metadata": null}"#)
+            .expect("null")
+            .metadata
+            .is_none()
+    );
+}
+
+#[test]
+fn test_training_metric_counts_decoded_bytes_for_escapes() {
+    // Two strings whose *decoded* lengths are exactly limit - 20 are accepted,
+    // even though their JSON text is roughly twice as large because every
+    // character is a `\n` escape. This pins the decoded-bytes metric.
+    let base = TRAINING_LIMIT - 20;
+    let first = "\\n".repeat(base / 2);
+    let second = "\\t".repeat(base - base / 2);
+    let json = format!(r#"{{"metadata": {{"ab": "{first}", "cd": "{second}"}}}}"#);
+    let parsed: TrainingWrapper =
+        serde_json::from_str(&json).expect("escapes are charged by decoded length");
+    let obj = parsed.metadata.unwrap();
+    assert_eq!(obj["ab"].as_str().unwrap().len(), base / 2);
+    assert_eq!(obj["cd"].as_str().unwrap().len(), base - base / 2);
+}
+
+/// Builds a minimal but complete `.nam` JSON envelope whose training payload
+/// is supplied verbatim.
+fn nam_envelope_with_training(training: &str) -> String {
+    format!(
+        r#"{{"version":"0.5.4","architecture":"LSTM","config":{{"layers":[]}},"weights":[],"metadata":{{"training":{training}}}}}"#
+    )
+}
+
+/// Builds a `.namb` v1 file (valid header + CRC) carrying `json` as metadata
+/// and `weights` as the binary weight section.
+fn build_namb_v1(json: &str, weights: &[f32]) -> Vec<u8> {
+    use crate::loader::namb::{NambHeader, crc32_ieee};
+    let header_size = std::mem::size_of::<NambHeader>();
+    let weights_offset = header_size + json.len();
+    let mut data = vec![0u8; weights_offset + weights.len() * 4];
+    data[header_size..weights_offset].copy_from_slice(json.as_bytes());
+    for (i, w) in weights.iter().enumerate() {
+        let off = weights_offset + i * 4;
+        data[off..off + 4].copy_from_slice(&w.to_le_bytes());
+    }
+
+    data[0..4].copy_from_slice(&0x4E41_4D42u32.to_le_bytes());
+    data[4..6].copy_from_slice(&1u16.to_le_bytes());
+    let wo = std::mem::offset_of!(NambHeader, weights_offset);
+    data[wo..wo + 4].copy_from_slice(&(weights_offset as u32).to_le_bytes());
+    let sr = std::mem::offset_of!(NambHeader, sample_rate);
+    data[sr..sr + 4].copy_from_slice(&48_000.0f32.to_le_bytes());
+    let crc_off = std::mem::offset_of!(NambHeader, crc32);
+    let crc = crc32_ieee(&data[weights_offset..]);
+    data[crc_off..crc_off + 4].copy_from_slice(&crc.to_le_bytes());
+    data
+}
+
+#[test]
+fn test_training_budget_on_real_nam_namb_and_peek_paths() {
+    let over = format!(
+        r#"{{"p": "{}", "q": "{}"}}"#,
+        "x".repeat(600_000),
+        "y".repeat(600_000)
+    );
+    let under = format!(r#"{{"p": "{}"}}"#, "x".repeat(1024));
+
+    // Raw `.nam` JSON parser.
+    match super::parse::parse_nam_json(&nam_envelope_with_training(&over)) {
+        Err(crate::loader::nam_json::JsonError::TrainingTooLarge { .. }) => {}
+        other => panic!("parse_nam_json must reject over-budget training: {other:?}"),
+    }
+    let ok = super::parse::parse_nam_json(&nam_envelope_with_training(&under))
+        .expect("valid training below the limit must parse");
+    assert!(ok.metadata.as_ref().unwrap().training.is_some());
+
+    // `.nam` file-loading path (parse fails before any model build).
+    let sys = crate::SystemSnapshot::capture();
+    match crate::loader::load_and_build_model_from_bytes(
+        nam_envelope_with_training(&over).as_bytes(),
+        &sys,
+        false,
+        crate::loader::LoadOptions::default(),
+    ) {
+        // The file-loading path aggregates size-class JSON rejections into its
+        // own `ModelTooLarge` variant; the typed cause is logged with E1207.
+        Err(crate::loader::LoadError::ModelTooLarge) => {}
+        other => panic!(".nam loading path must surface ModelTooLarge: {other:?}"),
+    }
+
+    // `.namb` with a valid v1 header and CRC32.
+    match crate::loader::namb::parse_namb_typed(&build_namb_v1(
+        &nam_envelope_with_training(&over),
+        &[0.5],
+    )) {
+        Err(crate::loader::NambError::MetadataJson(
+            crate::loader::nam_json::JsonError::TrainingTooLarge { .. },
+        )) => {}
+        other => panic!(".namb metadata path must surface TrainingTooLarge: {other:?}"),
+    }
+    crate::loader::namb::parse_namb_typed(&build_namb_v1(
+        &nam_envelope_with_training(&under),
+        &[0.5],
+    ))
+    .expect("valid .namb metadata below the limit must parse");
+
+    // Metadata peek (top-level `metadata` only).
+    // The peek path streams through serde without the typed-error side channel,
+    // so the cause is preserved as `Serde` text rather than the typed variant.
+    let peek_err = crate::loader::peek_metadata_from_reader(
+        nam_envelope_with_training(&over).as_bytes(),
+        u64::MAX,
+    )
+    .expect_err("peek must reject over-budget training");
+    assert!(
+        peek_err.to_string().contains("too large"),
+        "peek error must report the training size limit: {peek_err}"
+    );
+    let meta = crate::loader::peek_metadata_from_reader(
+        nam_envelope_with_training(&under).as_bytes(),
+        u64::MAX,
+    )
+    .expect("peek accepts valid training below the limit");
+    assert!(meta.training.is_some());
 }

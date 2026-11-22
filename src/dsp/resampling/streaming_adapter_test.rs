@@ -491,6 +491,41 @@ fn test_process_over_max_block_is_safe_and_detectable() {
 }
 
 #[test]
+fn test_process_exact_max_block_cadence_valid_input() {
+    let max_block = 256usize;
+    let iterations = 32usize;
+    let mut stream = StreamingResampleBuffer::new(44_100, 48_000, max_block).expect("new failed");
+    let latency = stream.latency_samples() as u64;
+
+    let in_l = vec![0.5f32; max_block];
+    let in_r = vec![0.25f32; max_block];
+    let mut out_l = vec![f32::NAN; max_block];
+    let mut out_r = vec![f32::NAN; max_block];
+
+    let mut real_total: u64 = 0;
+    let mut padded_total: u64 = 0;
+
+    for _ in 0..iterations {
+        let result = stream.process(&in_l, &in_r, &mut out_l, &mut out_r, passthrough_model);
+        assert_eq!(result.consumed, max_block);
+        assert_eq!(result.written, max_block);
+        assert_eq!(result.real + result.padded, max_block);
+        assert!(!result.underflow);
+        assert!(out_l.iter().all(|x| x.is_finite()));
+        assert!(out_r.iter().all(|x| x.is_finite()));
+        assert_eq!(stream.input_pending(), 0);
+        real_total += result.real as u64;
+        padded_total += result.padded as u64;
+    }
+
+    let pushed = stream.input_total();
+    assert_eq!(pushed, (iterations * max_block) as u64);
+    assert_eq!(real_total, pushed - latency);
+    assert_eq!(padded_total, latency);
+    assert_eq!(stream.underflow_total(), 0);
+}
+
+#[test]
 #[ignore = "long: sweep / soak de reamostragem multirate"]
 fn test_waveform_alignment_after_latency() {
     // The adapter must deliver the raw resampler round-trip signal (`ro`)

@@ -9,7 +9,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 . utils/_lib.sh
 
-case "${1:-}" in "") ;; -h|--help) echo "Uso: utils/consumer-smoke.sh"; exit 0 ;; *) usage_fail "consumer-smoke.sh não aceita argumentos ($*)" ;; esac
+case "${1:-}" in "") ;; -h|--help) help_exit "Uso: utils/consumer-smoke.sh" ;; *) usage_fail "consumer-smoke.sh não aceita argumentos ($*)" ;; esac
 lib_init
 trap 'trap_fail $?' ERR
 

@@ -10,7 +10,7 @@ cd "$(dirname "$0")/.."
 . utils/_lib.sh
 case "$#:${1:-}" in
     0:) ;;
-    1:-h|1:--help) echo "Usage: utils/ensure_namcore_render.sh"; exit 0 ;;
+    1:-h|1:--help) help_exit "Usage: utils/ensure_namcore_render.sh" >&2 ;;
     *) usage_fail "ensure_namcore_render.sh não aceita argumentos ($*)" >&2 ;;
 esac
 

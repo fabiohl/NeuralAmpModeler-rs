@@ -10,7 +10,7 @@ cd "$(dirname "$0")/.."
 . utils/_lib.sh
 case "$#:${1:-}" in
   0:) ;;
-  1:-h|1:--help) echo "Usage: utils/render-a2-dumps.sh"; exit 0 ;;
+  1:-h|1:--help) help_exit "Usage: utils/render-a2-dumps.sh" ;;
   *) usage_fail "render-a2-dumps.sh não aceita argumentos ($*)" ;;
 esac
 lib_init
