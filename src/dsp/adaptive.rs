@@ -807,6 +807,27 @@ impl AdaptiveCompute {
         self.wavenet_slimmable_capable = capable;
     }
 
+    /// Forgets the WaveNet topology used for slimmable rebuilds.
+    ///
+    /// Installed when the active model is not a dynamically slimmable WaveNet
+    /// (e.g. LSTM, a fixed preset WaveNet, or no model at all): a stale
+    /// topology would otherwise let the FSM publish channel requests derived
+    /// from a model that is no longer loaded.
+    ///
+    /// RT-safe: clears the inline scalar state and deactivates the vector
+    /// bookkeeping by flag. The retained `Vec` buffers are reclaimed by the
+    /// next off-RT registration, so this call performs zero heap allocation and
+    /// zero deallocation.
+    #[inline]
+    pub fn clear_wavenet_registration_rt(&mut self) {
+        self.wavenet_full_ch = None;
+        self.wavenet_targets_current.clear();
+        self.wavenet_mono_rt = true;
+        self.wavenet_rt_target_ch = None;
+        self.wavenet_allowed_channels_active = false;
+        self.wavenet_slimmable_capable = false;
+    }
+
     /// Registers full WaveNet topology and allowed_channels metadata.
     ///
     /// Off-RT only: takes and frees the metadata buffers.

@@ -160,6 +160,14 @@ pub struct WaveNetA2Dyn {
     pub(crate) receptive_field_size: usize,
     /// Maximum frames per processing block.
     pub(crate) max_buffer_size: usize,
+    /// Largest block size this instance has been sized for. Distinct from
+    /// [`Self::max_buffer_size`], which stays capped at
+    /// `WAVENET_MAX_NUM_FRAMES` because the internal rings never inflate.
+    /// Tracking the negotiated maximum makes a later smaller request (e.g.
+    /// the host block after the loader's `MAX_RESAMP_BUF` sizing) a true
+    /// no-op, so it cannot silently wipe stabilized state (including the
+    /// nested `condition_dsp`).
+    pub(crate) negotiated_max_buffer_size: usize,
 
     /// Raw JSON for the single layer array.
     pub(crate) layer_raw: Option<Value>,
@@ -447,6 +455,7 @@ impl WaveNetA2Dyn {
             groups_input: 1,
             receptive_field_size: rf,
             max_buffer_size: max_buf,
+            negotiated_max_buffer_size: max_buf,
             layer_raw: None,
             condition_size: 1,
             z_scratch: AlignedVec::new(bottleneck * 2, 0.0f32)?,
@@ -765,18 +774,26 @@ impl WaveNetA2Dyn {
     /// per-layer `MirroredBuffer`s and scratch buffers never need capacity above
     /// `max_lookback + WAVENET_MAX_NUM_FRAMES + 1`.
     ///
-    /// If `max_buf` is smaller than the current capacity, this is a no-op.
-    /// Otherwise state variables are reset and all buffers are zero-filled
-    /// in-place — avoiding heap allocation on the RT thread (F9 / RT-Safety).
+    /// A request no larger than the largest size this instance was already
+    /// sized for is a no-op, including equality: the negotiated size is
+    /// idempotent so a host quantum that repeats the loader's `MAX_RESAMP_BUF`
+    /// sizing cannot wipe stabilized/prewarmed state. Callers that need a
+    /// deliberate reset must call [`Self::reset`] or `clear_state`. Only a
+    /// genuine growth re-zeroes state in-place — avoiding heap allocation on
+    /// the RT thread (F9 / RT-Safety).
     pub fn set_max_buffer_size(&mut self, max_buf: usize) -> anyhow::Result<()> {
+        if max_buf <= self.negotiated_max_buffer_size {
+            return Ok(());
+        }
         if let Some(ref mut cond_dsp) = self.condition_dsp {
             crate::models::NamModel::set_max_buffer_size(
                 &mut **cond_dsp,
                 max_buf.min(WAVENET_MAX_NUM_FRAMES),
             )?;
-        }
-        if max_buf < self.max_buffer_size {
-            return Ok(());
+            // A genuine growth invalidates temporal state. The capped child may
+            // already sit at the same negotiated size (idempotent no-op), so
+            // clear it explicitly for the same coherent reset semantics.
+            crate::models::NamModel::clear_state(&mut **cond_dsp);
         }
         let rf = self.receptive_field_size;
         let ha_len = self.head_accum.len();
@@ -791,6 +808,7 @@ impl WaveNetA2Dyn {
         self.layer_in[..li_len].fill(0.0);
         let cd_len = self.condition_dsp_output.len();
         self.condition_dsp_output[..cd_len].fill(0.0);
+        self.negotiated_max_buffer_size = max_buf;
         Ok(())
     }
 

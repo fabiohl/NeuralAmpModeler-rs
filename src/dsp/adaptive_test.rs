@@ -877,4 +877,37 @@ mod tests {
         assert_eq!(legacy.peek_slimmable_rebuild(), None);
         assert_eq!(rt.wavenet_current_ch(), Some(4));
     }
+
+    #[test]
+    fn clear_wavenet_registration_rt_forgets_stale_topology_without_allocating() {
+        use crate::common::alloc_audit::{
+            TrackingGuard, get_alloc_count, get_dealloc_count, get_realloc_count,
+        };
+
+        let flags = rt_flags();
+        let budget = 1000;
+        let mut adaptive = AdaptiveCompute::new(AdaptiveComputeMode::Conservative);
+        // Off-RT registration allocates the tracking buffers up front.
+        adaptive.set_wavenet_slimmable_info(vec![8, 8], Some(vec![vec![2, 4, 8], vec![]]), true);
+        assert!(adaptive.wavenet_slimmable_ch_target().is_some());
+
+        // Drive the FSM so a slimmable request is pending before the clear.
+        for _ in 0..6 {
+            let latency = above_threshold(budget, 0.90);
+            adaptive.update(latency, budget, 48_000, &flags);
+        }
+        assert!(adaptive.peek_slimmable_rebuild().is_some());
+
+        let _guard = TrackingGuard::new();
+        adaptive.clear_wavenet_registration_rt();
+        assert_eq!(get_alloc_count(), 0, "clear must not allocate");
+        assert_eq!(get_realloc_count(), 0, "clear must not reallocate");
+        assert_eq!(get_dealloc_count(), 0, "clear must not deallocate");
+
+        assert_eq!(adaptive.wavenet_current_ch(), None);
+        assert_eq!(adaptive.wavenet_slimmable_ch_target(), None);
+        assert_eq!(adaptive.peek_slimmable_ch_rebuild(), None);
+        assert_eq!(adaptive.peek_slimmable_rebuild(), None);
+        assert_eq!(adaptive.wavenet_full_ch, None);
+    }
 }

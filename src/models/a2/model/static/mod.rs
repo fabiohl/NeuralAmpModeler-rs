@@ -87,6 +87,13 @@ pub struct WaveNetA2<const CH: usize> {
 
     /// Maximum frames per processing block (= `WAVENET_MAX_NUM_FRAMES`).
     pub(crate) max_buffer_size: usize,
+    /// Largest block size this instance has been sized for. Distinct from
+    /// [`Self::max_buffer_size`], which stays capped at
+    /// `WAVENET_MAX_NUM_FRAMES` because the internal rings never inflate.
+    /// Tracking the negotiated maximum makes a later smaller request (e.g.
+    /// the host block after the loader's `MAX_RESAMP_BUF` sizing) a true
+    /// no-op, so it cannot silently wipe stabilized state.
+    pub(crate) negotiated_max_buffer_size: usize,
 
     /// Raw JSON for the single layer array, preserved for FiLM config parsing.
     /// `None` when the model is constructed directly (not via JSON deserialization).
@@ -152,6 +159,7 @@ impl<const CH: usize> WaveNetA2<CH> {
             layer_in: AlignedVec::new(CH * max_buf, 0.0f32)?,
             receptive_field_size: rf,
             max_buffer_size: max_buf,
+            negotiated_max_buffer_size: max_buf,
             layer_raw: None,
             z_scratch: AlignedVec::new(CH, 0.0f32)?,
             rt_status: None,
@@ -191,6 +199,19 @@ impl<const CH: usize> WaveNetA2<CH> {
             Some(_) => {}
             None => self.rt_status = Some(Arc::clone(rt_status)),
         }
+    }
+
+    /// Test/tooling hook: whether the stored status is exactly `other`.
+    ///
+    /// Lets a host-agnostic consumer verify, without touching the private
+    /// field, that the off-RT pre-injection landed the canonical instance
+    /// (the RT hand-off then reduces to a `ptr_eq` no-op).
+    #[cfg(any(test, feature = "testing"))]
+    #[cfg_attr(docsrs, doc(cfg(feature = "testing")))]
+    pub fn rt_status_ptr_eq(&self, other: &Arc<crate::common::spsc::RtStatusFlags>) -> bool {
+        self.rt_status
+            .as_ref()
+            .is_some_and(|stored| Arc::ptr_eq(stored, other))
     }
 
     /// Returns the total receptive field size.
@@ -303,11 +324,15 @@ impl<const CH: usize> WaveNetA2<CH> {
     /// 23 per-layer `MirroredBuffer`s, `layer_in`, and `head_accum` never need
     /// capacity above `max_lookback + WAVENET_MAX_NUM_FRAMES + 1`.
     ///
-    /// If `max_buf` is smaller than the current `max_buffer_size`, this is a
-    /// no-op. Otherwise state variables are reset and all buffers are
-    /// zero-filled in-place — zero heap allocation (F9 / RT-Safety).
+    /// A request no larger than the largest size this instance was already
+    /// sized for is a no-op, including equality: the negotiated size is
+    /// idempotent so a host quantum that repeats the loader's `MAX_RESAMP_BUF`
+    /// sizing cannot wipe stabilized/prewarmed state. Callers that need a
+    /// deliberate reset must call [`Self::reset`] or `clear_state`. Only a
+    /// genuine growth re-zeroes state in-place — zero heap allocation
+    /// (F9 / RT-Safety).
     pub fn set_max_buffer_size(&mut self, max_buf: usize) -> anyhow::Result<()> {
-        if max_buf < self.max_buffer_size {
+        if max_buf <= self.negotiated_max_buffer_size {
             return Ok(());
         }
         let rf = self.receptive_field_size;
@@ -321,6 +346,7 @@ impl<const CH: usize> WaveNetA2<CH> {
             .copy_from_slice(&self.layer_ring_sizes);
         let li_len = self.layer_in.len();
         self.layer_in[..li_len].fill(0.0);
+        self.negotiated_max_buffer_size = max_buf;
         Ok(())
     }
 

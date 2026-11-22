@@ -411,6 +411,14 @@ impl NamModel for ContainerModel {
         for (_, model) in &mut self.submodels {
             model.set_max_buffer_size(max_buffer_size)?;
         }
+        // `set_max_buffer_size` is idempotent (equality is a no-op), so reset
+        // semantics must not rely on it to wipe an inactive member. Clear the
+        // inactive members explicitly; only the active member is prewarmed.
+        for (idx, (_, model)) in self.submodels.iter_mut().enumerate() {
+            if idx != self.active_index {
+                model.clear_state();
+            }
+        }
         self.submodels[self.active_index]
             .1
             .reset(sample_rate, max_buffer_size)

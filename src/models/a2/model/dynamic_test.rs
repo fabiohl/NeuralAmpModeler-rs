@@ -286,6 +286,34 @@ fn test_wavenet_a2_dyn_set_max_buffer_size_preserves_rings_and_propagates_cond()
 }
 
 #[test]
+fn test_wavenet_a2_dyn_set_max_buffer_size_equal_is_idempotent() {
+    let mut model = WaveNetA2Dyn::new(
+        1,
+        8,
+        8,
+        1,
+        8,
+        8,
+        crate::models::a2::params::A2_HEAD_KERNEL_SIZE,
+        &A2_KERNEL_SIZES,
+        &A2_DILATIONS,
+        make_standard_activations(A2_NUM_LAYERS),
+        make_standard_gating(A2_NUM_LAYERS),
+        make_standard_secondary(A2_NUM_LAYERS),
+    )
+    .unwrap();
+    model.set_max_buffer_size(8192).unwrap();
+    model.head_accum.fill(0.5);
+    model.head_write_pos = 7;
+    model.layer_in.fill(0.25);
+    // Equality is an idempotent resize: stabilized state survives.
+    model.set_max_buffer_size(8192).unwrap();
+    assert!(model.head_accum.iter().all(|&v| v == 0.5));
+    assert_eq!(model.head_write_pos, 7);
+    assert!(model.layer_in.iter().all(|&v| v == 0.25));
+}
+
+#[test]
 fn test_wavenet_a2_dyn_has_weights_false_initially() {
     let model = WaveNetA2Dyn::new(
         1,

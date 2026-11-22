@@ -128,6 +128,22 @@ fn test_wavenet_a2_set_max_buffer_size_preserves_ring_capacity_and_clears() {
 }
 
 #[test]
+fn test_wavenet_a2_set_max_buffer_size_equal_is_idempotent() {
+    let mut model = WaveNetA2::<8>::new().unwrap();
+    // Negotiate the loader's sizing first, then dirty stabilized state.
+    model.set_max_buffer_size(8192).unwrap();
+    model.head_accum.fill(0.5);
+    model.head_write_pos = 7;
+    model.layer_in.fill(0.25);
+    // The host quantum can repeat the negotiated size: equality must preserve
+    // prewarmed/steady state instead of re-zeroing it.
+    model.set_max_buffer_size(8192).unwrap();
+    assert!(model.head_accum.iter().all(|&v| v == 0.5));
+    assert_eq!(model.head_write_pos, 7);
+    assert!(model.layer_in.iter().all(|&v| v == 0.25));
+}
+
+#[test]
 fn test_wavenet_a2_default_creates_valid_model() {
     let model = WaveNetA2::<3>::new().unwrap();
     assert_eq!(model.channels(), 3);

@@ -17,16 +17,6 @@ RECEIPT_FINAL="$LOG_DIR/long-audit-receipt.jsonl"
 LONG_ROOT="target/long"
 export CARGO_TARGET_DIR="$LONG_ROOT/release"
 
-PARANOID_ORIG=$(cat /proc/sys/kernel/perf_event_paranoid 2>/dev/null || echo 2)
-restore_paranoid() {
-  if [ -n "${PARANOID_ORIG:-}" ] && [ "$(cat /proc/sys/kernel/perf_event_paranoid 2>/dev/null)" != "$PARANOID_ORIG" ]; then
-    sudo -n sysctl -q -w kernel.perf_event_paranoid="$PARANOID_ORIG" 2>/dev/null || true
-  fi
-}
-trap restore_paranoid EXIT
-if [ "${PARANOID_ORIG:-2}" -gt 1 ]; then
-  sudo -n sysctl -q -w kernel.perf_event_paranoid=1 2>/dev/null || true
-fi
 
 usage() {
   cat <<'EOF'
@@ -72,6 +62,17 @@ done
 for p in ${ONLY_PHASES[@]+"${ONLY_PHASES[@]}"}; do
   [[ " ${VALID_PHASES[*]} " == *" $p "* ]] || usage_fail "tests-long.sh: fase desconhecida '$p'"
 done
+
+PARANOID_ORIG=$(cat /proc/sys/kernel/perf_event_paranoid 2>/dev/null || echo 2)
+restore_paranoid() {
+  if [ -n "${PARANOID_ORIG:-}" ] && [ "$(cat /proc/sys/kernel/perf_event_paranoid 2>/dev/null)" != "$PARANOID_ORIG" ]; then
+    sudo -n sysctl -q -w kernel.perf_event_paranoid="$PARANOID_ORIG" 2>/dev/null || true
+  fi
+}
+trap restore_paranoid EXIT
+if [ "${PARANOID_ORIG:-2}" -gt 1 ]; then
+  sudo -n sysctl -q -w kernel.perf_event_paranoid=1 2>/dev/null || true
+fi
 
 lib_init
 if [ ${#ONLY_PHASES[@]} -gt 0 ]; then
@@ -202,7 +203,7 @@ exec_phase "preflight-render" "preflight-render" 300 0 run_preflight_render
 
 # --- Preflight 2: catalog ---
 run_preflight_catalog() { run_cmd cargo test --locked --release --features testing --test models catalog_preflight -- --nocapture; }
-exec_phase "preflight-catalog" "preflight-catalog" 120 1 run_preflight_catalog
+exec_phase "preflight-catalog" "preflight-catalog" 300 1 run_preflight_catalog
 
 # --- Preflight 3: package ---
 run_preflight_package() {

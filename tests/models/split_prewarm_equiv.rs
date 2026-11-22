@@ -232,6 +232,62 @@ fn split_equiv_a2_dynamic_odd_chunks() {
     }
 }
 
+/// Fresh-build steady state (loader prewarm) versus a fractionated reset after
+/// dirty processing, both resized to the host block and replayed through the
+/// same wet warm-up blocks a host uses before its probe.
+///
+/// The fresh path deliberately skips `reset()`: it represents the model state
+/// a host observes after a plain load. The split path must reproduce that
+/// state from `prewarm_reset` + `prewarm_step` chunks only, so a mismatch
+/// isolates the deferred stabilization feed from the plugin's surrounding
+/// stream/resampler state.
+#[test]
+fn split_equiv_a2_container_fresh_vs_reset_window() {
+    let name = "a2_example.nam";
+    if !fixture_exists(name) {
+        eprintln!("[STATUS] SKIP_CAPABILITY: model_not_found:{name}");
+        return;
+    }
+    const BLOCK: usize = 256;
+    const PREWARM_STEP: usize = 1024;
+    let silence = vec![0.0f32; BLOCK];
+    let probe = probe_input(BLOCK, 0x243F_6A88_85A3_08D3);
+    let dirt = probe_input(BLOCK, 0x9E37_79B9_7F4A_7C15);
+
+    // Fresh: build prewarm, host-size resize (a no-op above the capped ring
+    // geometry), then the two wet silence blocks the plugin replays before
+    // its first post-convergence probe.
+    let mut fresh = load(name);
+    fresh.set_max_buffer_size(BLOCK).expect("fresh resize");
+    run(&mut fresh, &silence);
+    run(&mut fresh, &silence);
+    let expected = run(&mut fresh, &probe);
+
+    // Split: dirty the state, converge only through the amortized feed, then
+    // replay the same wet warm-up blocks.
+    let mut split = load(name);
+    split.set_max_buffer_size(BLOCK).expect("split resize");
+    run(&mut split, &dirt);
+    split.prewarm_reset();
+    assert!(
+        !split.prewarm_complete(),
+        "{name}: split must arm pending work"
+    );
+    while !split.prewarm_complete() {
+        split.prewarm_step(PREWARM_STEP);
+    }
+    run(&mut split, &silence);
+    run(&mut split, &silence);
+    let got = run(&mut split, &probe);
+
+    for (i, (a, b)) in expected.iter().zip(got.iter()).enumerate() {
+        assert!(
+            a.to_bits() == b.to_bits(),
+            "{name}: fresh-vs-split bit mismatch at {i}: {a} vs {b}"
+        );
+    }
+}
+
 /// T5.4-4 [R]: a split reset after a **dirty** run must converge to the same
 /// state as the integral `reset`, including the cascade-level scratch and the
 /// nested `condition_dsp` temporal state. Those are *not* zeroed by the

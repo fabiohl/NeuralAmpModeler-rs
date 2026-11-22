@@ -39,6 +39,21 @@ impl StaticModel {
         }
     }
 
+    /// Test/tooling hook: whether this model stores exactly `rt_status`.
+    ///
+    /// Only the static A2 variants store a status; every other variant reports
+    /// `false`. See
+    /// [`WaveNetA2::rt_status_ptr_eq`](crate::models::a2::WaveNetA2::rt_status_ptr_eq).
+    #[cfg(any(test, feature = "testing"))]
+    #[cfg_attr(docsrs, doc(cfg(feature = "testing")))]
+    pub fn rt_status_ptr_eq(&self, rt_status: &Arc<crate::common::spsc::RtStatusFlags>) -> bool {
+        match self {
+            Self::WavenetA2Full(m) => m.rt_status_ptr_eq(rt_status),
+            Self::WavenetA2Lite(m) => m.rt_status_ptr_eq(rt_status),
+            _ => false,
+        }
+    }
+
     /// Returns whether the model is capable of dynamic channel slimming (slimmable rebuilds).
     ///
     /// Conventional WaveNet models (fixed topology, no slimmable metadata) return `false`.

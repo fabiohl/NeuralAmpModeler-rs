@@ -27,6 +27,31 @@ unsafe fn silence_output_planes(out_channels: usize, output: *const *mut f32, nu
     }
 }
 
+/// Convolves a contiguous `MirroredBuffer` chunk for a small constant receptive
+/// field (`1 <= RF < 8`) in exact left-to-right IEEE-754 order.
+#[inline(always)]
+fn convolve_direct_small_chunk<const RF: usize>(
+    hist: &[f32],
+    weights: &[f32],
+    bias: f32,
+    out: &mut [f32],
+) {
+    let n = out.len();
+    if n == 0 || hist.len() < n + RF - 1 || weights.len() < RF {
+        return;
+    }
+    let w: [f32; RF] = core::array::from_fn(|k| weights[k]);
+    for (i, dst) in out.iter_mut().enumerate() {
+        let mut dot = 0.0f32;
+        for (k, &wk) in w.iter().enumerate() {
+            // SAFETY: `i < n` and `k < RF`, so `i + k < n + RF - 1 <= hist.len()`.
+            let x = unsafe { *hist.get_unchecked(i + k) };
+            dot += wk * x;
+        }
+        *dst = bias + dot;
+    }
+}
+
 impl super::LinearModel {
     /// Processes a single audio sample using the Linear model.
     ///
@@ -122,29 +147,45 @@ impl super::LinearModel {
                 let rf = self.receptive_field;
                 let weights_ptr = self.weights.as_ptr();
                 if rf < 8 {
-                    for i in 0..n {
-                        self.history[self.write_pos] = input[i];
+                    // Process in contiguous mirror-buffer chunks: hoists ring-wrap,
+                    // bounds checks, and `rf` dispatch out of the per-sample loop
+                    // while staying bit-exact with `M::convolve_mono`.
+                    let hist_size = self.history.size();
+                    let double_limit = self.double_limit;
+                    let bias = self.bias;
+                    let weights = &self.weights[..rf];
+                    // Leave the `rf - 1` pre-existing history slots untouched in the
+                    // mirrored ring so `write_slice_at` cannot overwrite them via aliasing.
+                    let max_chunk = hist_size.saturating_sub(rf.saturating_sub(1));
+                    let mut offset = 0usize;
+                    while offset < n && max_chunk > 0 {
+                        let avail = (double_limit - self.write_pos)
+                            .min(max_chunk)
+                            .min(n - offset);
+                        let write_start = self.write_pos;
+                        let base = write_start + 1 - rf;
 
-                        self.write_pos += 1;
-                        if self.write_pos >= self.double_limit {
-                            self.write_pos -= self.history.size();
+                        let in_chunk = &input[offset..offset + avail];
+                        self.history.write_slice_at(write_start, in_chunk);
+
+                        let hist = &self.history[base..base + avail + rf - 1];
+                        let out_chunk = &mut output[offset..offset + avail];
+                        match rf {
+                            1 => convolve_direct_small_chunk::<1>(hist, weights, bias, out_chunk),
+                            2 => convolve_direct_small_chunk::<2>(hist, weights, bias, out_chunk),
+                            3 => convolve_direct_small_chunk::<3>(hist, weights, bias, out_chunk),
+                            4 => convolve_direct_small_chunk::<4>(hist, weights, bias, out_chunk),
+                            5 => convolve_direct_small_chunk::<5>(hist, weights, bias, out_chunk),
+                            6 => convolve_direct_small_chunk::<6>(hist, weights, bias, out_chunk),
+                            7 => convolve_direct_small_chunk::<7>(hist, weights, bias, out_chunk),
+                            _ => {}
                         }
 
-                        let start = self.write_pos - rf;
-                        let window = &self.history[start..self.write_pos];
-                        // Sequential scalar loop is bit-exact with `M::convolve_mono`
-                        // when rf < 8, because `convolve_mono` initializes zero YMM/ZMM,
-                        // skips vector chunks (< 8 taps), reduces 0.0, and executes this
-                        // exact sequential loop. Hoisting/avoiding the SIMD function setup
-                        // and horizontal zero-reduction saves cycles on small receptive fields.
-                        let mut dot = 0.0f32;
-                        let win_ptr = window.as_ptr();
-                        for k in 0..rf {
-                            // SAFETY: `self.weights` has length `receptive_field` (rf), and
-                            // `window` has length `rf` from `history` bounds; `k < rf`.
-                            dot += unsafe { *weights_ptr.add(k) * *win_ptr.add(k) };
+                        self.write_pos += avail;
+                        if self.write_pos >= double_limit {
+                            self.write_pos -= hist_size;
                         }
-                        output[i] = self.bias + dot;
+                        offset += avail;
                     }
                 } else {
                     for i in 0..n {

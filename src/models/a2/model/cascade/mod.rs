@@ -42,6 +42,11 @@ pub struct WaveNetA2Cascade {
     intermediate_head_output: AlignedVec<f32>,
     /// Maximum frames per processing block.
     max_buffer_size: usize,
+    /// Largest block size this cascade has been sized for. Distinct from
+    /// [`Self::max_buffer_size`] (capped at `WAVENET_MAX_NUM_FRAMES`); keeping
+    /// the negotiated maximum makes a later smaller request a true no-op, so
+    /// it cannot silently wipe stabilized array/condition state.
+    negotiated_max_buffer_size: usize,
     /// Model-level head scale multiplier applied to final output (C++ NAMCore `WaveNet::_head_scale`).
     pub head_scale: f32,
     /// Zeroed-sample stabilization work still pending for the deferred split
@@ -99,6 +104,7 @@ impl WaveNetA2Cascade {
             prewarm_on_reset: true,
             intermediate_head_output: AlignedVec::new(max_hs * WAVENET_MAX_NUM_FRAMES, 0.0f32)?,
             max_buffer_size: WAVENET_MAX_NUM_FRAMES,
+            negotiated_max_buffer_size: WAVENET_MAX_NUM_FRAMES,
             head_scale: 1.0f32,
             prewarm_pending: 0,
         })
@@ -255,18 +261,26 @@ impl WaveNetA2Cascade {
 
     /// Resets internal state without inflating scratch or subarray ring buffers
     /// beyond `WAVENET_MAX_NUM_FRAMES` (64), propagating the capped block size
-    /// to `condition_dsp` if present.
+    /// to `condition_dsp` if present. A request smaller than the largest size
+    /// already negotiated is a no-op, including equality (idempotent sizing so
+    /// a repeated host quantum cannot wipe stabilized state). Callers that
+    /// need a deliberate reset must call [`Self::reset`].
     pub fn set_max_buffer_size(&mut self, max_buf: usize) -> anyhow::Result<()> {
+        if max_buf <= self.negotiated_max_buffer_size {
+            return Ok(());
+        }
         for arr in &mut self.arrays {
             arr.set_max_buffer_size(max_buf)?;
         }
         if let Some(ref mut cond_dsp) = self.condition_dsp {
             cond_dsp.set_max_buffer_size(max_buf.min(WAVENET_MAX_NUM_FRAMES))?;
+            // The capped child may be a no-op at the same negotiated size;
+            // growth must still reset its temporal state coherently.
+            crate::models::NamModel::clear_state(&mut **cond_dsp);
         }
-        if max_buf >= self.max_buffer_size {
-            self.condition_dsp_output.fill(0.0);
-            self.intermediate_head_output.fill(0.0);
-        }
+        self.condition_dsp_output.fill(0.0);
+        self.intermediate_head_output.fill(0.0);
+        self.negotiated_max_buffer_size = max_buf;
         Ok(())
     }
 

@@ -1618,3 +1618,88 @@ fn test_linear_prewarm_clears_dirty_state_direct_and_fft_with_bias() {
         }
     }
 }
+
+#[test]
+fn test_direct_small_rf_chunked_bit_exact_and_wrap_around() {
+    for rf in 1..=7 {
+        let weights: Vec<f32> = (0..rf)
+            .map(|k| ((k as f32 + 1.0) * 0.173) * if k % 2 == 0 { 1.0 } else { -1.0 })
+            .collect();
+        let bias = -0.125;
+        let mut block_model =
+            LinearModel::new(weights.clone(), bias, LinearImplementation::Direct).unwrap();
+        let mut ref_model = LinearModel::new(weights, bias, LinearImplementation::Direct).unwrap();
+        block_model.prewarm(0);
+        ref_model.prewarm(0);
+
+        let hist_size = block_model.history.size();
+        // First exercise `write_pos == rf` (< hist_size) with a block spanning
+        // past `hist_size` and `double_limit` so mirror aliasing cannot clobber
+        // the `rf - 1` prior history taps before they are read.
+        let full_span_len = hist_size * 2 + 13;
+        let full_span_in: Vec<f32> = (0..full_span_len)
+            .map(|i| ((i * 3 % 31) as f32 - 15.0) * 0.04)
+            .collect();
+        let mut full_span_out = vec![0.0f32; full_span_len];
+        // SAFETY: buffers match in length and freshly prewarmed model state is valid.
+        unsafe { block_model.process(&full_span_in, &mut full_span_out) };
+        for (i, &s) in full_span_in.iter().enumerate() {
+            // SAFETY: reference model is prewarmed and Avx2Math matches host baseline.
+            let r = unsafe { ref_model.process_sample::<Avx2Math>(s) };
+            assert_eq!(
+                full_span_out[i].to_bits(),
+                r.to_bits(),
+                "rf={rf} full-span idx={i}: block={} ref={r}",
+                full_span_out[i]
+            );
+        }
+
+        // Advance both models to within 7 samples of `double_limit`, then cross
+        // the mirror seam mid-block and run a multi-wrap block (`hist_size + 73`).
+        let warmup_len = (block_model.double_limit - block_model.write_pos).saturating_sub(7);
+        let warmup_in: Vec<f32> = (0..warmup_len)
+            .map(|i| ((i % 29) as f32 - 14.0) * 0.03)
+            .collect();
+        let mut warmup_out = vec![0.0f32; warmup_len];
+        // SAFETY: buffers match in length and model state was validated/prewarmed.
+        unsafe { block_model.process(&warmup_in, &mut warmup_out) };
+        let mut ref_warmup_out = Vec::with_capacity(warmup_len);
+        for &s in &warmup_in {
+            // SAFETY: reference model is prewarmed and Avx2Math matches host baseline.
+            ref_warmup_out.push(unsafe { ref_model.process_sample::<Avx2Math>(s) });
+        }
+        assert_eq!(
+            warmup_out.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+            ref_warmup_out
+                .iter()
+                .map(|v| v.to_bits())
+                .collect::<Vec<_>>(),
+            "rf={rf} warmup mismatch"
+        );
+
+        for len in [0usize, 1, 19, 64, hist_size + 73] {
+            let input: Vec<f32> = (0..len)
+                .map(|i| ((i * 7 % 41) as f32 - 20.0) * 0.025)
+                .collect();
+            let mut block_out = vec![0.0f32; len];
+            // SAFETY: buffers match in length and model state is valid across wraps.
+            unsafe { block_model.process(&input, &mut block_out) };
+            let mut ref_out = Vec::with_capacity(len);
+            for &s in &input {
+                // SAFETY: reference model is prewarmed and Avx2Math matches host baseline.
+                ref_out.push(unsafe { ref_model.process_sample::<Avx2Math>(s) });
+            }
+            for (i, (&b, &r)) in block_out.iter().zip(&ref_out).enumerate() {
+                assert_eq!(
+                    b.to_bits(),
+                    r.to_bits(),
+                    "rf={rf} len={len} idx={i}: block={b} ref={r}"
+                );
+            }
+            assert_eq!(
+                block_model.write_pos, ref_model.write_pos,
+                "rf={rf} len={len}"
+            );
+        }
+    }
+}
