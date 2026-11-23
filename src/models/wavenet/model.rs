@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
+//! Const-generic two-array WaveNet A1 model (`WaveNetModel`).
+
 use super::common::WAVENET_MAX_NUM_FRAMES;
 use super::layer_array::WaveNetLayerArray;
 use crate::common::diagnostics::NamErrorCode;

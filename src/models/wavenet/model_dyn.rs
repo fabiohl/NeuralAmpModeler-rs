@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
+//! Dynamic WaveNet A1 model (`WaveNetModelDyn`) with `condition_dsp` and multi-stage post-stack head support.
+
 use super::common::WAVENET_MAX_NUM_FRAMES;
 use super::layer_array_dyn::WaveNetLayerArrayDyn;
 use super::post_stack_head::PostStackHead;

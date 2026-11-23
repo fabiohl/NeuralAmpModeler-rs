@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
+//! Scalar reference polyphase stereo/mono convolution kernels for resampler verification.
+
 /// Stereo Convolution (used in the Resampler).
 /// Convolution is like applying a filter (like an equalizer).
 /// Here we do it for the Left (L) and Right (R) channels simultaneously.

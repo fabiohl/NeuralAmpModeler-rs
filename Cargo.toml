@@ -18,6 +18,7 @@ include = [
     "/benches/",
     "/examples/",
     "/src/bin/nam_perf_gate.rs",
+    "/src/bin/nam_perf_gate/",
     "/src/bin/simd_probe.rs",
     "/src/arch/",
     "/src/common/",

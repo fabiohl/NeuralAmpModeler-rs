@@ -314,44 +314,28 @@ fn process_model_core(
                     ctx.rt_status,
                 );
             }
-        } else {
-            // Layer counts are unchanged; evaluate standard path with oversampling.
-            model_process_stereo_with_os(
-                ctx.os_l,
-                ctx.os_r,
-                ctx.active_model_l,
-                ctx.active_model_r,
-                model_in_l,
-                model_in_r,
-                os_in_l,
-                os_in_r,
-                os_model_l,
-                os_model_r,
-                m_out_l,
-                m_out_r,
-                *ctx.process_mono,
-                Some(ctx.rt_status),
-            );
+            return;
         }
-    } else {
-        // Path 3: Standard Inference with optional oversampling.
-        model_process_stereo_with_os(
-            ctx.os_l,
-            ctx.os_r,
-            ctx.active_model_l,
-            ctx.active_model_r,
-            model_in_l,
-            model_in_r,
-            os_in_l,
-            os_in_r,
-            os_model_l,
-            os_model_r,
-            m_out_l,
-            m_out_r,
-            *ctx.process_mono,
-            Some(ctx.rt_status),
-        );
     }
+
+    // Standard inference with optional oversampling (also used when adaptive
+    // crossfade has not changed the active layer count).
+    model_process_stereo_with_os(
+        ctx.os_l,
+        ctx.os_r,
+        ctx.active_model_l,
+        ctx.active_model_r,
+        model_in_l,
+        model_in_r,
+        os_in_l,
+        os_in_r,
+        os_model_l,
+        os_model_r,
+        m_out_l,
+        m_out_r,
+        *ctx.process_mono,
+        Some(ctx.rt_status),
+    );
 }
 
 /// Stage 2: Neural Inference and Resampling.
@@ -795,9 +779,11 @@ pub fn run_inference_streaming(
                     .min(m_out_l.len())
                     .min(m_out_r.len())
             };
+            // Split model-rate audio into `MAX_RESAMP_BUF` slices so internal scratch buffers never overflow.
             let mut inner = 0;
             while inner < total {
                 let inner_chunk = (total - inner).min(MAX_RESAMP_BUF);
+                // Omit right-channel slices in mono mode so downstream avoids redundant R processing.
                 let m_in_r = if process_mono {
                     &[][..]
                 } else {

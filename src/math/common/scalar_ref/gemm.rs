@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
+//! Scalar reference GEMV and batched GEMM kernels for cross-ISA validation.
+
 /// Batch Matrix Processing (GEMM).
 /// GEMM stands for "General Matrix Multiplication". It's the heart of neural networks.
 /// This function processes multiple audio "frames" at once.

@@ -5,6 +5,8 @@
 // and bounds-checked pointer offsets.
 #![warn(clippy::undocumented_unsafe_blocks)]
 
+//! POSIX virtual memory mirroring backend (`memfd_create`/`shm_open` + dual `mmap`).
+
 #[cfg(target_os = "linux")]
 use super::HUGEPAGE_STATE_HUGETLB;
 #[cfg(target_os = "linux")]

@@ -927,6 +927,39 @@ where
 /// This validation is reusable for both top-level model files and child model
 /// definitions in `Sequential` containers (NC-3). Error messages never leak
 /// local file system paths.
+fn require_envelope_field(
+    obj: &serde_json::Map<String, serde_json::Value>,
+    field: &str,
+    predicate: fn(&serde_json::Value) -> bool,
+    expected_desc: &str,
+) -> Result<(), JsonError> {
+    match obj.get(field) {
+        None => Err(JsonError::InvalidEnvelope {
+            reason: format!("missing required field '{field}'"),
+        }),
+        Some(serde_json::Value::Null) => Err(JsonError::InvalidEnvelope {
+            reason: format!("field '{field}' cannot be null"),
+        }),
+        Some(v) if !predicate(v) => Err(JsonError::InvalidEnvelope {
+            reason: format!("field '{field}' must be {expected_desc}"),
+        }),
+        Some(_) => Ok(()),
+    }
+}
+
+/// Validates the top-level or child envelope of a `.nam` model JSON representation.
+///
+/// Ensures that:
+/// - The value is a JSON object.
+/// - Required fields `version`, `architecture`, `config`, and `weights` are present and non-null.
+/// - `version` is a JSON string.
+/// - `architecture` is a JSON string.
+/// - `config` is a JSON object.
+/// - `weights` is a JSON array.
+///
+/// This validation is reusable for both top-level model files and child model
+/// definitions in `Sequential` containers (NC-3). Error messages never leak
+/// local file system paths.
 pub fn validate_envelope(value: &serde_json::Value) -> Result<(), JsonError> {
     let Some(obj) = value.as_object() else {
         return Err(JsonError::InvalidEnvelope {
@@ -934,81 +967,20 @@ pub fn validate_envelope(value: &serde_json::Value) -> Result<(), JsonError> {
         });
     };
 
-    match obj.get("version") {
-        None => {
-            return Err(JsonError::InvalidEnvelope {
-                reason: "missing required field 'version'".to_string(),
-            });
-        }
-        Some(serde_json::Value::Null) => {
-            return Err(JsonError::InvalidEnvelope {
-                reason: "field 'version' cannot be null".to_string(),
-            });
-        }
-        Some(v) if !v.is_string() => {
-            return Err(JsonError::InvalidEnvelope {
-                reason: "field 'version' must be a JSON string".to_string(),
-            });
-        }
-        _ => {}
-    }
-
-    match obj.get("architecture") {
-        None => {
-            return Err(JsonError::InvalidEnvelope {
-                reason: "missing required field 'architecture'".to_string(),
-            });
-        }
-        Some(serde_json::Value::Null) => {
-            return Err(JsonError::InvalidEnvelope {
-                reason: "field 'architecture' cannot be null".to_string(),
-            });
-        }
-        Some(v) if !v.is_string() => {
-            return Err(JsonError::InvalidEnvelope {
-                reason: "field 'architecture' must be a JSON string".to_string(),
-            });
-        }
-        _ => {}
-    }
-
-    match obj.get("config") {
-        None => {
-            return Err(JsonError::InvalidEnvelope {
-                reason: "missing required field 'config'".to_string(),
-            });
-        }
-        Some(serde_json::Value::Null) => {
-            return Err(JsonError::InvalidEnvelope {
-                reason: "field 'config' cannot be null".to_string(),
-            });
-        }
-        Some(v) if !v.is_object() => {
-            return Err(JsonError::InvalidEnvelope {
-                reason: "field 'config' must be a JSON object".to_string(),
-            });
-        }
-        _ => {}
-    }
-
-    match obj.get("weights") {
-        None => {
-            return Err(JsonError::InvalidEnvelope {
-                reason: "missing required field 'weights'".to_string(),
-            });
-        }
-        Some(serde_json::Value::Null) => {
-            return Err(JsonError::InvalidEnvelope {
-                reason: "field 'weights' cannot be null".to_string(),
-            });
-        }
-        Some(v) if !v.is_array() => {
-            return Err(JsonError::InvalidEnvelope {
-                reason: "field 'weights' must be a JSON array".to_string(),
-            });
-        }
-        _ => {}
-    }
+    require_envelope_field(
+        obj,
+        "version",
+        serde_json::Value::is_string,
+        "a JSON string",
+    )?;
+    require_envelope_field(
+        obj,
+        "architecture",
+        serde_json::Value::is_string,
+        "a JSON string",
+    )?;
+    require_envelope_field(obj, "config", serde_json::Value::is_object, "a JSON object")?;
+    require_envelope_field(obj, "weights", serde_json::Value::is_array, "a JSON array")?;
 
     Ok(())
 }

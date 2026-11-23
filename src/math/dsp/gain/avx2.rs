@@ -4,6 +4,8 @@
 // Specialized AVX2 gain processing kernels.
 #![allow(unsafe_op_in_unsafe_fn, clippy::too_many_arguments)]
 
+//! AVX2 vectorized gain, dither, soft-clipping, and clipping-detection kernels.
+
 use crate::arch::simd::*;
 use crate::gain_kernel_avx2;
 use crate::gain_simd_avx2;

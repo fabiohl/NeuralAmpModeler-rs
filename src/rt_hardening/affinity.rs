@@ -96,6 +96,7 @@ pub fn try_parse_cpu_list(text: &str) -> Result<Vec<usize>, CpuListError> {
         if trimmed.is_empty() {
             continue;
         }
+        // Handle `start-end` CPU range syntax while enforcing total entry and index bounds.
         if let Some((start_s, end_s)) = trimmed.split_once('-') {
             let (Ok(start), Ok(end)) = (
                 start_s.trim().parse::<usize>(),
@@ -120,6 +121,7 @@ pub fn try_parse_cpu_list(text: &str) -> Result<Vec<usize>, CpuListError> {
             }
             cpus.extend(start..=end);
         } else if let Ok(cpu) = trimmed.parse::<usize>() {
+            // Single CPU index entry.
             if cpu >= MAX_CPU_LIST_ENTRIES {
                 return Err(CpuListError::CpuIndexOutOfRange {
                     cpu,

@@ -101,7 +101,7 @@ The CLI tool [`utils/check-model.sh`](../utils/check-model.sh) (backed by [`exam
 
 ## 3. Model Inventory & Provenance Registry
 
-The single source of truth for model identities and architectural categorization is [`src/testing/catalog.rs::MODEL_CATALOG`](../src/testing/catalog.rs) (51 unique SHA-256 identities) and `reference_architectures()` ([`ArchitectureFamily`](../src/testing/catalog.rs)).
+The single source of truth for model identities and architectural categorization is [`src/testing/catalog/models.rs::MODEL_CATALOG`](../src/testing/catalog/models.rs) (51 unique SHA-256 identities) and `reference_architectures()` ([`ArchitectureFamily`](../src/testing/catalog/architectures.rs)).
 
 ### Model Provenance & Classification
 
@@ -129,7 +129,7 @@ The single source of truth for model identities and architectural categorization
 | `wavenet_post_head_k13.nam`             | Synthetic      | WaveNet A1 + canonical head [1,3]    | Apache-2.0 / `generate_post_stack_head_fixtures.py` | Post-stack head ordering, pre-head scale, bias and multi-stage parity.   |
 | `wavenet_post_head_single_k3.nam`       | Synthetic      | WaveNet A1 + canonical head [3]      | Apache-2.0 / `generate_post_stack_head_fixtures.py` | Single-stage canonical head with ReLU and positive scale.                |
 | `wavenet_post_head_multistage.nam`      | Synthetic      | WaveNet A1 + canonical head [3,1,3]  | Apache-2.0 / `generate_post_stack_head_fixtures.py` | Three-stage canonical head with distinct intermediate width.             |
-| `wavenet_per_layer_kernels.nam`         | Synthetic      | WaveNet A1 + per-layer `kernel_sizes`| Apache-2.0 / `generate_wavenet_geometry_fixtures.py` | C++ per-layer kernel geometry parity (distinct kernel per layer, S10/P17).|
+| `wavenet_per_layer_kernels.nam`         | Synthetic      | WaveNet A1 + per-layer `kernel_sizes`| Apache-2.0 / `generate_wavenet_geometry_fixtures.py` | C++ per-layer kernel geometry parity (distinct kernel per layer).       |
 | `convnet_test.nam`                      | Synthetic      | ConvNet (CH=8, 6 blocks, Tanh)       | Apache-2.0 / `generate_b1_2_fixtures.py`         | ConvNet baseline architecture parity.                                   |
 | `convnet_nobn.nam`                      | Synthetic      | ConvNet (CH=8, no BatchNorm)         | Apache-2.0 / `generate_fixtures.py`              | ConvNet batchnorm bypass topology validation.                           |
 | `convnet_relu.nam`                      | Synthetic      | ConvNet (CH=8, ReLU activation)      | Apache-2.0 / `generate_fixtures.py`              | ConvNet ReLU activation path validation.                                |
@@ -169,7 +169,7 @@ The single source of truth for model identities and architectural categorization
    - Official flagship model; production×C++ parity verified (V1 SNR 135.90 dB, V2 SNR 135.97 dB) and triple parity closed against the double-precision `f64` oracle (Case A, SNR > 136 dB across all pairs). Active CI gate. Detailed analysis in [`docs/cpp_parity_map.md`](cpp_parity_map.md) §4.3.
 2. **`wavenet_condition_lstm.nam` (Concordant Rejection — LSTM `condition_dsp`):**
    - WaveNet outer model with an embedded LSTM `condition_dsp` (rejection probe).
-   - Rejected by both oracles, so no golden can be generated: Rust refuses LSTM-as-`condition_dsp` fail-closed by policy; C++ NAMCore rejects at construction because layer `condition_size` (3) $\neq$ condition DSP output channels (1, the default `out_channels`). Tracked via `skip_reason` in [`src/testing/catalog.rs`](../src/testing/catalog.rs) and the stable receipt id `known_gap:condition_lstm_rejected_by_both`; tests skip gracefully when the golden is absent. Analysis in [`docs/cpp_parity_map.md`](cpp_parity_map.md) §7.5.
+   - Rejected by both oracles, so no golden can be generated: Rust refuses LSTM-as-`condition_dsp` fail-closed by policy; C++ NAMCore rejects at construction because layer `condition_size` (3) $\neq$ condition DSP output channels (1, the default `out_channels`). Tracked via `skip_reason` in [`src/testing/catalog/golden.rs`](../src/testing/catalog/golden.rs) and the stable receipt id `known_gap:condition_lstm_rejected_by_both`; tests skip gracefully when the golden is absent. Analysis in [`docs/cpp_parity_map.md`](cpp_parity_map.md) §7.5.
 3. **`slimmable_wavenet.nam` (Heterogeneous Slicing & Parity):**
    - Upstream NAMCore example fixture with declared `slimmable` metadata (`slice_channels_uniform`, `allowed_channels: [1, 2, 3]`); catalogued as `KnownGap` while the multi-size parity gate matures. Supported for dynamic channel-sliced inference across layer arrays with union breakpoint resolution. Cross-validated against upstream C++ `render --slim <ratio>` and a single-precision sliced-vs-prefix-masked equivalence oracle. Invariant: slicing strictly reduces channels, never expands beyond the loaded full model.
 4. **`BossWN-lite.nam` (Obsolete):**
@@ -201,7 +201,7 @@ Golden vectors capture the deterministic output of `NeuralAmpModelerCore`'s `ren
 
 ### V2 Multi-Sample-Rate Scopes
 
-Governed by [`src/testing/catalog.rs::GOLDEN_GEN_CATALOG`](../src/testing/catalog.rs) (39 total entries: 24 active in V2, 15 V1-only):
+Governed by [`src/testing/catalog/golden.rs::GOLDEN_GEN_CATALOG`](../src/testing/catalog/golden.rs) (39 total entries: 24 active in V2, 15 V1-only):
 
 | Scope               | Sample Rates                 | Target Models                                                                                                                                         | Architectural Rationale                                                                                                                                                                       |
 |:------------------- |:---------------------------- |:----------------------------------------------------------------------------------------------------------------------------------------------------- |:--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -274,16 +274,16 @@ The impulse response cabsim engine ([`src/dsp/cabsim/conv.rs`](../src/dsp/cabsim
 
 - Generated by [`tests/fixtures/scripts/validate_oracle_f64.py`](../tests/fixtures/scripts/validate_oracle_f64.py) using an independent 64-bit floating-point NumPy implementation.
 - Evaluates 256-sample chirp inputs across WaveNet, A2, A2+FiLM, ConvNet, and LSTM architectures.
-- Consumed by [`tests/models/reference_oracle_f64.rs`](../tests/models/reference_oracle_f64.rs) to verify that the Rust `f64` oracle achieves $\text{ESR} < 10^{-12}$ against ground truth before decomposing `f32` numerical error budgets.
-- `post_stack_head_256_input.bin` plus `wavenet_post_head_{k13,single_k3,multistage}_256_f64.bin` are generated by [`tests/fixtures/generate_post_stack_head_fixtures.py`](../tests/fixtures/generate_post_stack_head_fixtures.py) (S09/P14). They anchor the canonical post-stack head contract independently of the Rust parser and are consumed by [`tests/models/post_stack_head_parity_test.rs`](../tests/models/post_stack_head_parity_test.rs).
-- `wavenet_geometry_256_input.bin` plus `wavenet_per_layer_kernels_256_f64.bin` are generated by [`tests/fixtures/generate_wavenet_geometry_fixtures.py`](../tests/fixtures/generate_wavenet_geometry_fixtures.py) (S10/P17). They anchor the per-layer `kernel_sizes` contract independently of the Rust parser and are consumed by [`tests/models/wavenet_geometry_parity_test.rs`](../tests/models/wavenet_geometry_parity_test.rs).
+- Consumed by [`tests/parity/reference_oracle_f64.rs`](../tests/parity/reference_oracle_f64.rs) to verify that the Rust `f64` oracle achieves $\text{ESR} < 10^{-12}$ against ground truth before decomposing `f32` numerical error budgets.
+- `post_stack_head_256_input.bin` plus `wavenet_post_head_{k13,single_k3,multistage}_256_f64.bin` are generated by [`tests/fixtures/generate_post_stack_head_fixtures.py`](../tests/fixtures/generate_post_stack_head_fixtures.py). They anchor the canonical post-stack head contract independently of the Rust parser and are consumed by [`tests/models/post_stack_head_parity_test.rs`](../tests/models/post_stack_head_parity_test.rs).
+- `wavenet_geometry_256_input.bin` plus `wavenet_per_layer_kernels_256_f64.bin` are generated by [`tests/fixtures/generate_wavenet_geometry_fixtures.py`](../tests/fixtures/generate_wavenet_geometry_fixtures.py). They anchor the per-layer `kernel_sizes` contract independently of the Rust parser and are consumed by [`tests/models/wavenet_geometry_parity_test.rs`](../tests/models/wavenet_geometry_parity_test.rs).
 - **Residual floor is arithmetic, not a clamp.** The `.bin` payloads are genuine `f64` (`[u32 count][f64 × count]`); both the NumPy script and the Rust oracle load weights as `f32` and compute in `f64`, and `compute_esr_f64` has no clamp. The recurring `ESR ≈ 5.00e-16` (`-153 dB`) reported for `wavenet_official`, the A2 Lite/Blended/FiLM/Gated paths, and `condition_lstm` is a reproducible ~`1.6e-9` absolute rounding residual between the two independent `f64` implementations on those paths; the remaining topologies (`convnet` `5.23e-33`, `condition_dsp` `3.18e-32`, `a2_generic` `5.79e-32`, `lstm` `3.49e-30`) agree to the `f64` agreement floor, proving the harness can match near-exactly and the `5.00e-16` is path-specific. It is ≥3 orders of magnitude below the `< 1e-12` gate and is recorded per model as `// Measured:` in the consuming tests. Anchors are **not** regenerated: they are already `f64`, and regenerating without a C++ golden would be circular (regeneration policy in [`docs/cpp_parity_map.md`](cpp_parity_map.md) §4.5.1).
 
 ### Resampler Reference Vectors
 
-- Generated by [`tests/fixtures/generate_resampler_reference.py`](../tests/fixtures/generate_resampler_reference.py) using `libsoxr` via `ffmpeg` (33-bit precision, Chebyshev passband). Reference-engine fingerprint (S12): ffmpeg 8.0.1-3ubuntu2 with libsoxr 0.1.3 (host package 0.1.3-4.1) — record the host fingerprint when regenerating.
+- Generated by [`tests/fixtures/generate_resampler_reference.py`](../tests/fixtures/generate_resampler_reference.py) using `libsoxr` via `ffmpeg` (33-bit precision, Chebyshev passband). Reference-engine fingerprint: ffmpeg 8.0.1-3ubuntu2 with libsoxr 0.1.3 (host package 0.1.3-4.1) — record the host fingerprint when regenerating.
 - Files: `resampler_input_{rate}.f32` (10 log-spaced tones) and `resampler_ref_{from}_to_{to}.f32`.
-- Covers conversions across 44100 Hz, 48000 Hz, and 96000 Hz. Verified by Goertzel tone analysis in [`src/dsp/resampler_test.rs`](../src/dsp/resampler_test.rs) and by the S12 cross-engine characterization in [`tests/resampler_cross_engine.rs`](../tests/resampler_cross_engine.rs) (see [`docs/benchmarks.md`](benchmarks.md) § 13).
+- Covers conversions across 44100 Hz, 48000 Hz, and 96000 Hz. Verified by Goertzel tone analysis in [`src/dsp/resampler_test.rs`](../src/dsp/resampler_test.rs) and by the cross-engine characterization in [`tests/resampler_cross_engine.rs`](../tests/resampler_cross_engine.rs) (see [`docs/benchmarks.md`](benchmarks.md) § 13).
 
 ### EBU Tech 3341 / R 128 Compliance Sequences
 

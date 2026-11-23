@@ -7,6 +7,8 @@
     clippy::too_many_arguments
 )]
 
+//! AVX2 fused 4-gate LSTM GEMV kernel (gate-major `[Gate][IH][Hidden]` layout).
+
 use crate::arch::simd::*;
 use crate::gemv_4gate_inner_dual_avx2;
 use crate::gemv_4gate_simd_outer_avx2;

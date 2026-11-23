@@ -4,6 +4,8 @@
 // Reference oracle mirrors mathematical formulas without requiring public docs.
 #![allow(missing_docs)]
 
+//! Dynamic WaveNet A2 `f64` reference oracle evaluation (arbitrary channels, FiLM, gating, cascades).
+
 use crate::loader::nam_json::model::NamModelData;
 
 use super::super::*;

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
+//! AVX2 and scalar maximum absolute difference kernels for signal comparison.
+
 use crate::arch::simd::*;
 
 /// Computes the maximum absolute difference between two blocks via AVX2,

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
+//! Dynamic fallback builder (`LstmModelDyn`) for non-standard and multi-I/O LSTM topologies.
+
 use super::super::WeightCursor;
 use super::weights::{read_lstm_head_multi, read_lstm_layer_dyn};
 use crate::common::diagnostics::NamErrorCode;

@@ -577,12 +577,20 @@ impl ToolchainFingerprint {
 
     /// Probe the current host for the same toolchain fields.
     pub fn current() -> Self {
+        #[cfg(target_os = "linux")]
+        let (glibc, os) = (
+            first_line_of_command(&["ldd", "--version"])
+                .or_else(|| first_line_of_command(&["getconf", "GNU_LIBC_VERSION"])),
+            first_line_of_command(&["uname", "-r"]),
+        );
+        #[cfg(not(target_os = "linux"))]
+        let (glibc, os) = (None, None);
+
         Self {
             cxx: first_line_of_command(&[cxx_compiler().as_str(), "--version"]),
             cmake: first_line_of_command(&["cmake", "--version"]),
-            glibc: first_line_of_command(&["ldd", "--version"])
-                .or_else(|| first_line_of_command(&["getconf", "GNU_LIBC_VERSION"])),
-            os: first_line_of_command(&["uname", "-r"]),
+            glibc,
+            os,
             cxx_flags: None,
         }
     }

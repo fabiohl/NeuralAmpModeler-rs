@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
+//! Scalar reference utilities for BF16 conversion, activations, dither/gain, and reductions.
+
 /// Converts high-precision decimal numbers (f32) to the compact format (BF16).
 /// This saves a lot of memory and is used to store neural network "weights".
 // SAFETY: Preconditions (alignment, bounds, size) are guaranteed by caller of this SIMD/unsafe function.

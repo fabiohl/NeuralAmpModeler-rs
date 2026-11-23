@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
+//! AVX-512 single-precision (`f32`) GEMV and batched-GEMM micro-kernels.
+
 use core::arch::x86_64::*;
 
 const SMALL_IN_LEN_THRESHOLD_AVX512: usize = 4;

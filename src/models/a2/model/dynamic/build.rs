@@ -402,6 +402,7 @@ impl WaveNetA2Dyn {
             &format!("layer[{i}].head1x1_w"),
         )?;
         let h1_w = if h1_is_grouped {
+            // Grouped head1x1 keeps contiguous per-group `[out_per_g][in_per_g]` rows.
             let mut w = AlignedVec::new(h1_w_count, 0.0f32)
                 .map_err(|e| format!("A2 weight buffer allocation failed: {e}"))?;
             let out_per_g = h1_out / h1_groups;
@@ -419,6 +420,7 @@ impl WaveNetA2Dyn {
             }
             w
         } else {
+            // Un-grouped dense head1x1 transposes `[out][in]` -> `[in][out]` for GEMV SIMD loads.
             let mut w = AlignedVec::new(h1_w_count, 0.0f32)
                 .map_err(|e| format!("A2 weight buffer allocation failed: {e}"))?;
             transpose_dense_f32(h1_w_f32, &mut w, h1_in, h1_out);

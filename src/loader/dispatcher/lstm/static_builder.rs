@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
+//! Const-generic static LSTM builders (`LstmModel1`, `LstmModel2`) for canonical hidden sizes.
+
 use super::super::WeightCursor;
 use super::weights::{read_lstm_head, read_lstm_layer};
 use crate::loader::loaded_model_pair::DEFAULT_SAMPLE_RATE;

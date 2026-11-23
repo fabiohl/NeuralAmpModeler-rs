@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
+//! Supported SIMD [`InstructionSet`] enumeration and human-readable labels.
+
 /// Enumerates the supported instruction sets in the public API.
 ///
 /// Note: There is no scalar `Fallback` variant in this enum. The crate strictly

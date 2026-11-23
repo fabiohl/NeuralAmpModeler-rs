@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-//! Prewarm/reset cost characterization for the S11 cache decision.
+//! Prewarm/reset cost characterization for the prewarm-cache decision (DEC-05).
 //!
 //! Compares, per model family, the four stabilization paths a consumer can
 //! choose between on a reset:
@@ -10,12 +10,12 @@
 //! - `clear_state`: the zero phase alone (what the RT thread runs inline).
 //! - `prewarm_only`: the integral stabilization without the clear phase.
 //! - `reset_split_1024`: `prewarm_reset` + `prewarm_step(1024)` until converged
-//!   (the amortized path `NAM-Plug` uses).
+//!   (the amortized path interactive hosts use).
 //!
 //! A cached steady-state snapshot would only be worth its memory and RT risk
 //! if the stabilization columns are a meaningful share of the reset budget;
 //! see [`docs/benchmarks.md`](../docs/benchmarks.md) for the recorded run and
-//! the S11 non-adoption rationale.
+//! the non-adoption rationale.
 //!
 //! ```sh
 //! # Build under the host cgroup guard, then run unconstrained on the bench core:
@@ -35,7 +35,7 @@ const BLOCK: usize = 64;
 const SPLIT_STEP: usize = 1024;
 
 /// Fixtures covering every stabilization strategy: A1 backfill, A2 zero-feed,
-/// LSTM recurrence, Linear FFT ring, ConvNet, and the S09 post-stack head.
+/// LSTM recurrence, Linear FFT ring, ConvNet, and the canonical post-stack head.
 const FIXTURES: &[&str] = &[
     "BossWN-standard.nam",
     "wavenet_a2_full.nam",

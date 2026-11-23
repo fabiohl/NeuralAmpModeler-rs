@@ -220,6 +220,7 @@ pub(crate) fn oracle_condition_dsp_channels(
 // Precision Configuration
 // =============================================================================
 
+/// Weight precision simulation mode for oracle error decomposition.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WeightPrecision {
     /// Full f64 precision (weights converted from f32).
@@ -289,11 +290,13 @@ pub fn pade_tanh_f64(x: f64) -> f64 {
     (num / den).clamp(-1.0, 1.0)
 }
 
+/// Exact IEEE-754 `f64` hyperbolic tangent.
 #[inline]
 pub fn exact_tanh_f64(x: f64) -> f64 {
     x.tanh()
 }
 
+/// Evaluates `tanh` in `f64` according to the selected oracle activation mode.
 #[inline]
 pub fn oracle_tanh(x: f64, mode: ActivationMode) -> f64 {
     match mode {
@@ -302,11 +305,13 @@ pub fn oracle_tanh(x: f64, mode: ActivationMode) -> f64 {
     }
 }
 
+/// Exact IEEE-754 `f64` logistic sigmoid `1 / (1 + exp(-x))`.
 #[inline]
 pub fn exact_sigmoid_f64(x: f64) -> f64 {
     1.0 / (1.0 + (-x).exp())
 }
 
+/// Degree-17 Lawson minimax odd-polynomial sigmoid approximation evaluated in `f64`.
 #[inline]
 pub fn minimax_sigmoid_f64(x: f64) -> f64 {
     let c0 = 2.4885319190e-01_f64;
@@ -331,6 +336,7 @@ pub fn minimax_sigmoid_f64(x: f64) -> f64 {
     (xc.mul_add(p, 0.5)).clamp(0.0, 1.0)
 }
 
+/// Evaluates `sigmoid` in `f64` according to the selected oracle activation mode.
 #[inline]
 pub fn oracle_sigmoid(x: f64, mode: ActivationMode) -> f64 {
     match mode {
@@ -427,6 +433,7 @@ fn mul_add_f64(a: f64, b: f64, c: f64, mode: AccumulationMode) -> f64 {
 // ESR
 // =============================================================================
 
+/// Computes Error-to-Signal Ratio (`sum((ref - test)^2) / sum(ref^2)`) in `f64`.
 pub fn compute_esr_f64(reference: &[f64], test: &[f64]) -> f64 {
     let len = reference.len().min(test.len());
     if len == 0 {
@@ -446,6 +453,7 @@ pub fn compute_esr_f64(reference: &[f64], test: &[f64]) -> f64 {
     }
 }
 
+/// Converts a linear ESR value to decibels (`10 * log10(esr)`), returning `-inf` for `<= 0`.
 pub fn esr_to_db_f64(esr: f64) -> f64 {
     if esr <= 0.0 {
         f64::NEG_INFINITY
@@ -629,36 +637,51 @@ fn oracle_apply_activation(data: &mut [f64], activation: &str, config: &Precisio
 // Decomposition
 // =============================================================================
 
+/// Per-source ESR error decomposition comparing production `f32` against the `f64` oracle.
 #[derive(Debug)]
 pub struct DecompositionResult {
+    /// Human-readable fixture label.
     pub label: String,
+    /// Model architecture identifier.
     pub architecture: String,
+    /// Total ESR between the production `f32` engine and the exact `f64` oracle.
     pub esr_f32_vs_f64: f64,
+    /// Isolated ESR contribution from F16C weight quantization, if applicable.
     pub esr_quant_f16c: Option<f64>,
+    /// Isolated ESR contribution from BF16 weight quantization, if applicable.
     pub esr_quant_bf16: Option<f64>,
+    /// Isolated ESR contribution from approximate activation kernels, if applicable.
     pub esr_activation: Option<f64>,
+    /// Isolated ESR contribution from `f32` accumulation order, if applicable.
     pub esr_accumulation: Option<f64>,
+    /// Combined ESR when all simulated error sources are enabled together.
     pub esr_combined: Option<f64>,
 }
 
 impl DecompositionResult {
+    /// Returns `esr_quant_f16c` for table rendering, defaulting to `0.0` when unmeasured.
     pub fn esr_quant_f16c_display(&self) -> f64 {
         self.esr_quant_f16c.unwrap_or(0.0)
     }
+    /// Returns `esr_quant_bf16` for table rendering, defaulting to `0.0` when unmeasured.
     pub fn esr_quant_bf16_display(&self) -> f64 {
         self.esr_quant_bf16.unwrap_or(0.0)
     }
+    /// Returns `esr_activation` for table rendering, defaulting to `0.0` when unmeasured.
     pub fn esr_activation_display(&self) -> f64 {
         self.esr_activation.unwrap_or(0.0)
     }
+    /// Returns `esr_accumulation` for table rendering, defaulting to `0.0` when unmeasured.
     pub fn esr_accumulation_display(&self) -> f64 {
         self.esr_accumulation.unwrap_or(0.0)
     }
+    /// Returns `esr_combined` for table rendering, defaulting to `0.0` when unmeasured.
     pub fn esr_combined_display(&self) -> f64 {
         self.esr_combined.unwrap_or(0.0)
     }
 }
 
+/// Runs a full error-source decomposition across weight precision, activation, and accumulation modes.
 pub fn run_decomposition(
     label: &str,
     architecture: &str,

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
+//! Dynamic 1x1 dense channel-mixing layer (`DenseLayerDyn`) with runtime dimensions.
+
 use crate::math::common::{AlignedVec, SimdMath};
 
 /// 1x1 Dense Layer (The Channel Mixer) with runtime dimensions.

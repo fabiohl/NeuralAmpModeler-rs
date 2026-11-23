@@ -4,6 +4,8 @@
 // OS virtual memory operations reside in private `posix` and `windows` submodules.
 #![warn(clippy::undocumented_unsafe_blocks)]
 
+//! Shared alignment math and platform backend dispatch for [`MirroredBuffer`].
+
 use super::{MirrorSafe, MirroredBuffer};
 #[cfg(unix)]
 #[cfg(target_os = "linux")]
@@ -55,7 +57,7 @@ pub(super) fn allocation_granularity() -> std::io::Result<usize> {
 }
 
 fn effective_granularity() -> std::io::Result<(usize, bool)> {
-    #[cfg(all(test, target_os = "linux"))]
+    #[cfg(test)]
     {
         let override_val = super::mirror_buf_test::granularity_override();
         if override_val > 0 {
@@ -148,12 +150,7 @@ impl<T: MirrorSafe> MirroredBuffer<T> {
         }
 
         #[cfg(unix)]
-        let ptr = {
-            let p = super::posix::alloc_mirrored(size_bytes)?;
-            #[cfg(all(test, target_os = "linux"))]
-            super::mirror_buf_test::record_test_alloc(requested_bytes, size_bytes);
-            p
-        };
+        let ptr = super::posix::alloc_mirrored(size_bytes)?;
         #[cfg(all(not(miri), windows))]
         let ptr = super::windows::alloc_mirrored(size_bytes)?;
         #[cfg(not(any(unix, all(not(miri), windows))))]
@@ -164,6 +161,9 @@ impl<T: MirrorSafe> MirroredBuffer<T> {
                 "MirroredBuffer is only supported on Unix and Windows",
             ));
         };
+
+        #[cfg(test)]
+        super::mirror_buf_test::record_test_alloc(requested_bytes, size_bytes);
 
         Ok(Self {
             ptr: ptr as *mut T,

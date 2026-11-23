@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
+//! Reference Padé Newton-Raphson (`NR1` / `NR2`) `tanh` variants retained for comparative accuracy benchmarks.
+
 // ══════════════════════════════════════════════════════════════════════════════
 // Reference Variants — Padé NR1 / NR2
 // ══════════════════════════════════════════════════════════════════════════════

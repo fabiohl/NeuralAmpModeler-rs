@@ -1,514 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-//! Human-facing dashboard renderer.
-//!
-//! Pure `QualityReport → String`: no I/O, no cargo, no environment access —
-//! the renderer only formats a typed report. The dashboard bash wrapper and
-//! the `nam_quality render` binary both pipe this output; the long/perf
-//! suites never call it (they stay WARNING/ERROR + forensic JSONL only).
-//!
-//! The `QualityReport` is the typed superset of the verify report: on top of
-//! the `verify.rs` phase/fidelity/latency streams it carries the extra
-//! oracle/ISA/activation/coverage kinds that the verification sink writes
-//! (`f64_table`, `f64_decomp`, `activation`, `isa`, `coverage_matrix`,
-//! `test_counts`) plus the `build_metadata` provenance record.
-//!
-//! Design invariants:
-//! - Section order matches the current dashboard: header → quick summary →
-//!   fidelity details → performance → ISA parity → activation precision →
-//!   f64 decomposition → spectral summary → coverage matrix → footer.
-//! - English-only (unified to international English).
-//! - `NOT_VERIFIED` performance is **never** rendered green.
-//! - ESR / CPU-budget colors follow the qualitative thresholds of the old
-//!   bash render (green < 1e-5, yellow < 1e-1, red ≥ 1e-1; CPU headroom
-//!   green > 50 %, yellow > 25 %, red otherwise).
-//! - The f64-decomposition cold-start note is emitted in English.
+//! ANSI/Plain section renderers for the quality dashboard.
 
-use serde_json::Value;
+use super::super::metrics::{FidelityRecord, MetricValue};
+use super::super::phases;
+use super::super::verify::LatencyRecord;
+use super::types::{ActivationRow, IsaRow, QualityReport, RenderStyle};
 
-use super::metrics::{FidelityRecord, MetricValue, fidelity_from_json};
-use super::verify::{LatencyRecord, PhaseRecord, parse_record_counts};
-
-/// Output style of the renderer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RenderStyle {
-    /// ANSI color escape sequences (terminal).
-    Ansi,
-    /// Plain text, no escape sequences (visual dump / golden snapshots).
-    Plain,
-}
-
-/// Machine/toolchain header of the report (parsed from `build_metadata`).
-#[non_exhaustive]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReportHeader {
-    /// Full git commit hash (or `unknown`).
-    pub git_commit: String,
-    /// Whether the tree was dirty at measurement time.
-    pub git_dirty: bool,
-    /// Dashboard run id.
-    pub run_id: String,
-    /// Canonical ISA string of the engine dispatch active during measurement (R-09).
-    pub effective_isa: String,
-    /// Host CPU ISA probed from `/proc/cpuinfo` (present when it differs from or qualifies `effective_isa`).
-    pub host_isa: Option<String>,
-    /// Active engine SIMD backend label (`SIMD_MATH.name`), if recorded.
-    pub engine_backend: Option<String>,
-    /// `rustc --version` output.
-    pub rustc: String,
-    /// Cargo build profile (e.g. `release`).
-    pub cargo_profile: String,
-    /// Host target triple.
-    pub target_triple: String,
-    /// Optional ISO-8601 measurement timestamp (absent in the current sink).
-    pub measured_at: Option<String>,
-    /// Optional CPU model name (absent in the current `build_metadata`).
-    pub cpu_model: Option<String>,
-}
-
-impl Default for ReportHeader {
-    fn default() -> Self {
-        Self {
-            git_commit: "unknown".into(),
-            git_dirty: false,
-            run_id: String::new(),
-            effective_isa: "unknown".into(),
-            host_isa: None,
-            engine_backend: None,
-            rustc: "unknown".into(),
-            cargo_profile: "release".into(),
-            target_triple: "unknown".into(),
-            measured_at: None,
-            cpu_model: None,
-        }
-    }
-}
-
-/// One `f64_table` record (f64-oracle summary row).
-#[non_exhaustive]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct F64TableRow {
-    /// Oracle fixture filename (e.g. `BossWN-standard.nam`).
-    pub filename: String,
-    /// Model family label.
-    pub family: String,
-    /// Linear ESR against the f64 oracle.
-    pub esr: MetricValue,
-    /// ESR in dB.
-    pub esr_db: MetricValue,
-}
-
-/// One `f64_decomp` record (error-source decomposition of one model).
-#[non_exhaustive]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct F64Decomp {
-    /// Model label.
-    pub label: String,
-    /// Architecture family (e.g. `LSTM`, `WaveNet`).
-    pub architecture: String,
-    /// Total ESR (f32 vs f64 oracle).
-    pub esr_f32_vs_f64: MetricValue,
-    /// F16C quantization term (omitted when unmeasured).
-    pub esr_quant_f16c: Option<MetricValue>,
-    /// BF16 quantization term (omitted when unmeasured).
-    pub esr_quant_bf16: Option<MetricValue>,
-    /// Activation-approximation term (omitted when unmeasured).
-    pub esr_activation: Option<MetricValue>,
-    /// Accumulation term (omitted when unmeasured).
-    pub esr_accumulation: Option<MetricValue>,
-    /// Combined term (F16C + Padé + F32).
-    pub esr_combined: Option<MetricValue>,
-}
-
-/// One `activation` record (Fast Padé vs exact-grade SNR).
-#[non_exhaustive]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ActivationRow {
-    /// Model label.
-    pub model: String,
-    /// Reference oracle or test regime (`namcore`, `f64`, etc.).
-    pub oracle: Option<String>,
-    /// SNR of the Fast (Padé) path in dB.
-    pub snr_fast_db: MetricValue,
-    /// SNR of the Standard (exact) path in dB.
-    pub snr_exact_db: MetricValue,
-    /// Gain (`exact − fast`).
-    pub gain_db: MetricValue,
-}
-
-/// One `isa` record (cross-ISA or self-consistency check).
-#[non_exhaustive]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct IsaRow {
-    /// Model label.
-    pub label: String,
-    /// Reference ISA.
-    pub ref_isa: String,
-    /// ISA under test.
-    pub test_isa: String,
-    /// Mean squared error (always present).
-    pub mse: MetricValue,
-    /// Linear ESR (cross-ISA only).
-    pub esr: Option<MetricValue>,
-    /// Maximum absolute error (cross-ISA only).
-    pub max_abs_err: Option<MetricValue>,
-    /// Error budget (cross-ISA only).
-    pub budget: Option<MetricValue>,
-}
-
-/// `coverage_matrix` record — per-axis coverage counts (governance).
-#[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct CoverageMatrix {
-    /// NAMCore parity records.
-    pub namcore_parity: u64,
-    /// f64-oracle paired records.
-    pub f64_oracle: u64,
-    /// ISA-optimization records.
-    pub isa_optimizations: u64,
-    /// Spectral-baseline records.
-    pub spectral_baselines: u64,
-    /// Real-time performance records.
-    pub rt_performance: u64,
-}
-
-/// `test_counts` record — phase-status tallies (governance, F-25 note).
-#[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct TestCounts {
-    /// Phases with PASS status.
-    pub passed: u64,
-    /// Phases with FAIL status.
-    pub failed: u64,
-    /// Ignored-test tallies (unused by the receipt, kept for schema parity).
-    pub ignored: u64,
-    /// Filtered-test tallies (unused by the receipt, kept for schema parity).
-    pub filtered: u64,
-    /// Phases with SKIP_CAPABILITY / SKIP_OPTIONAL_FIXTURE status.
-    pub skip_capability: u64,
-}
-
-/// Typed superset of the dashboard report (all ingest kinds).
-#[non_exhaustive]
-#[derive(Debug, Clone, PartialEq)]
-pub struct QualityReport {
-    /// Provenance header (`build_metadata`).
-    pub header: ReportHeader,
-    /// Phase outcome records.
-    pub phases: Vec<PhaseRecord>,
-    /// Fidelity metric records.
-    pub fidelity: Vec<FidelityRecord>,
-    /// Latency records.
-    pub latency: Vec<LatencyRecord>,
-    /// f64-oracle summary rows.
-    pub f64_table: Vec<F64TableRow>,
-    /// f64-oracle decomposition blocks.
-    pub f64_decomp: Vec<F64Decomp>,
-    /// Activation-precision rows.
-    pub activation: Vec<ActivationRow>,
-    /// ISA-parity rows.
-    pub isa: Vec<IsaRow>,
-    /// Coverage matrix (last record wins).
-    pub coverage: Option<CoverageMatrix>,
-    /// Test counts (last record wins).
-    pub test_counts: Option<TestCounts>,
-}
-
-impl QualityReport {
-    /// Status of one phase (last matching record; absent ⇒ `NOT_RUN`).
-    pub fn phase_status(&self, phase_id: &str) -> &str {
-        self.phases
-            .iter()
-            .rev()
-            .find(|p| p.phase_id == phase_id)
-            .map(|p| p.status.as_str())
-            .unwrap_or("NOT_RUN")
-    }
-
-    /// Whether the performance domain is `NOT_VERIFIED` (never green).
-    pub fn performance_not_verified(&self) -> bool {
-        self.phase_status("regression_gate") != "PASS"
-    }
-}
-
-/// Typed error of the report ingest.
-#[derive(Debug, thiserror::Error)]
-pub enum ReportError {
-    /// A report line is not valid JSON.
-    #[error("malformed report line {line}: {source}")]
-    MalformedLine {
-        /// 1-based line number in the report.
-        line: usize,
-        /// The underlying JSON parse error.
-        source: serde_json::Error,
-    },
-    /// A coverage/test-counts record carries non-integer fields.
-    #[error("record on line {line} must carry integer fields")]
-    InvalidCounts {
-        /// 1-based line number in the report.
-        line: usize,
-    },
-}
-
-/// Parses a full dashboard report (JSONL) into the typed [`QualityReport`].
-///
-/// Routing mirrors `verify.rs::parse_verify_report` and extends it:
-/// records with `phase_id` are phase records, records with a `kind` are
-/// routed to the corresponding section (`fidelity`, `latency`, `f64_table`,
-/// `f64_decomp`, `activation`, `isa`, `coverage_matrix`, `test_counts`,
-/// `build_metadata`), and everything else goes through the fidelity
-/// canonicalization. Malformed lines fail the whole parse (fail-closed).
-pub fn parse_quality_report(input: &str) -> Result<QualityReport, ReportError> {
-    let mut report = QualityReport {
-        header: ReportHeader::default(),
-        phases: Vec::new(),
-        fidelity: Vec::new(),
-        latency: Vec::new(),
-        f64_table: Vec::new(),
-        f64_decomp: Vec::new(),
-        activation: Vec::new(),
-        isa: Vec::new(),
-        coverage: None,
-        test_counts: None,
-    };
-    for (line_no, raw_line) in input.lines().enumerate() {
-        let line = raw_line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let value: Value =
-            serde_json::from_str(line).map_err(|source| ReportError::MalformedLine {
-                line: line_no + 1,
-                source,
-            })?;
-        if value.get("phase_id").is_some() {
-            if let Some(phase) = phase_from_json(&value) {
-                report.phases.push(phase);
-            }
-            continue;
-        }
-        match value.get("kind").and_then(Value::as_str) {
-            Some("build_metadata") => report.header = header_from_json(&value),
-            Some("latency") => {
-                if let Some(record) = latency_from_json(&value) {
-                    report.latency.push(record);
-                }
-            }
-            Some("f64_table") => {
-                if let Some(row) = f64_table_from_json(&value) {
-                    report.f64_table.push(row);
-                }
-            }
-            Some("f64_decomp") => {
-                if let Some(block) = f64_decomp_from_json(&value) {
-                    report.f64_decomp.push(block);
-                }
-            }
-            Some("activation") => {
-                if let Some(row) = activation_from_json(&value) {
-                    report.activation.push(row);
-                }
-            }
-            Some("isa") => {
-                if let Some(row) = isa_from_json(&value) {
-                    report.isa.push(row);
-                }
-            }
-            Some("coverage_matrix") => {
-                report.coverage = Some(coverage_from_json(&value, line_no + 1)?);
-            }
-            Some("test_counts") => {
-                report.test_counts = Some(test_counts_from_json(&value, line_no + 1)?);
-            }
-            _ => {
-                // Fidelity (kind "fidelity" or absent, label-bearing) plus the
-                // `median_latency_us`-only latency shape of legacy fixtures.
-                if value.get("median_latency_us").is_some() {
-                    if let Some(record) = latency_from_json(&value) {
-                        report.latency.push(record);
-                    }
-                } else if let Some(record) = fidelity_from_json(&value) {
-                    report.fidelity.push(record);
-                }
-            }
-        }
-    }
-    Ok(report)
-}
-
-/// Parses a full dashboard report file, fail-closed on unreadable input.
-pub fn parse_quality_report_file(
-    path: impl AsRef<std::path::Path>,
-) -> Result<QualityReport, ReportError> {
-    let input = std::fs::read_to_string(path).map_err(|source| ReportError::MalformedLine {
-        line: 0,
-        source: serde_json::Error::io(source),
-    })?;
-    parse_quality_report(&input)
-}
-
-fn phase_from_json(value: &Value) -> Option<PhaseRecord> {
-    let phase_id = value.get("phase_id")?.as_str()?.to_string();
-    let status = value.get("status")?.as_str()?.to_string();
-    let (observed_records, expected_records) = parse_record_counts(value);
-    Some(PhaseRecord {
-        phase_id,
-        status,
-        observed_records,
-        expected_records,
-    })
-}
-
-fn header_from_json(value: &Value) -> ReportHeader {
-    let mut header = ReportHeader::default();
-    if let Some(v) = value.get("git_commit").and_then(Value::as_str) {
-        header.git_commit = v.to_string();
-    }
-    header.git_dirty = value
-        .get("git_dirty_state")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    if let Some(v) = value.get("run_id").and_then(Value::as_str) {
-        header.run_id = v.to_string();
-    }
-    if let Some(v) = value.get("effective_isa").and_then(Value::as_str) {
-        header.effective_isa = v.to_string();
-    }
-    if let Some(v) = value.get("host_isa").and_then(Value::as_str) {
-        header.host_isa = Some(v.to_string());
-    }
-    if let Some(v) = value.get("engine_backend").and_then(Value::as_str) {
-        header.engine_backend = Some(v.to_string());
-    }
-    if let Some(v) = value.get("rustc_version").and_then(Value::as_str) {
-        header.rustc = v.to_string();
-    }
-    if let Some(v) = value.get("cargo_profile").and_then(Value::as_str) {
-        header.cargo_profile = v.to_string();
-    }
-    if let Some(v) = value.get("target_triple").and_then(Value::as_str) {
-        header.target_triple = v.to_string();
-    }
-    if let Some(v) = value.get("measured_at").and_then(Value::as_str) {
-        header.measured_at = Some(v.to_string());
-    }
-    if let Some(v) = value.get("cpu_model").and_then(Value::as_str) {
-        header.cpu_model = Some(v.to_string());
-    }
-    header
-}
-
-fn latency_from_json(value: &Value) -> Option<LatencyRecord> {
-    let label = value.get("label")?.as_str()?.to_string();
-    let median_latency_us = value
-        .get("median_latency_us")?
-        .as_f64()
-        .filter(|v| v.is_finite())?;
-    Some(LatencyRecord {
-        label,
-        median_latency_us,
-    })
-}
-
-fn canon_metric(value: Option<&Value>) -> MetricValue {
-    match value {
-        None | Some(Value::Null) => MetricValue::Na,
-        Some(Value::String(s)) if s.is_empty() => MetricValue::Na,
-        Some(Value::String(s)) => MetricValue::Raw(s.clone()),
-        Some(Value::Number(n)) => MetricValue::Raw(n.to_string()),
-        Some(Value::Bool(b)) => MetricValue::Raw((*b).to_string()),
-        Some(other) => MetricValue::Raw(other.to_string()),
-    }
-}
-
-fn f64_table_from_json(value: &Value) -> Option<F64TableRow> {
-    let filename = value.get("filename")?.as_str()?.to_string();
-    let family = value.get("family")?.as_str()?.to_string();
-    Some(F64TableRow {
-        filename,
-        family,
-        esr: canon_metric(value.get("esr")),
-        esr_db: canon_metric(value.get("esr_db")),
-    })
-}
-
-fn f64_decomp_from_json(value: &Value) -> Option<F64Decomp> {
-    let label = value.get("label")?.as_str()?.to_string();
-    let architecture = value.get("architecture")?.as_str()?.to_string();
-    let opt_metric = |key: &str| value.get(key).map(|v| canon_metric(Some(v)));
-    Some(F64Decomp {
-        label,
-        architecture,
-        esr_f32_vs_f64: canon_metric(value.get("esr_f32_vs_f64")),
-        esr_quant_f16c: opt_metric("esr_quant_f16c"),
-        esr_quant_bf16: opt_metric("esr_quant_bf16"),
-        esr_activation: opt_metric("esr_activation"),
-        esr_accumulation: opt_metric("esr_accumulation"),
-        esr_combined: opt_metric("esr_combined"),
-    })
-}
-
-fn activation_from_json(value: &Value) -> Option<ActivationRow> {
-    let model = value.get("model")?.as_str()?.to_string();
-    let oracle = value
-        .get("oracle")
-        .and_then(|v| v.as_str())
-        .map(ToString::to_string);
-    Some(ActivationRow {
-        model,
-        oracle,
-        snr_fast_db: canon_metric(value.get("snr_fast_db")),
-        snr_exact_db: canon_metric(value.get("snr_exact_db")),
-        gain_db: canon_metric(value.get("gain_db")),
-    })
-}
-
-fn isa_from_json(value: &Value) -> Option<IsaRow> {
-    let label = value.get("label")?.as_str()?.to_string();
-    let ref_isa = value.get("ref_isa")?.as_str()?.to_string();
-    let test_isa = value.get("test_isa")?.as_str()?.to_string();
-    let opt_metric = |key: &str| value.get(key).map(|v| canon_metric(Some(v)));
-    Some(IsaRow {
-        label,
-        ref_isa,
-        test_isa,
-        mse: canon_metric(value.get("mse")),
-        esr: opt_metric("esr"),
-        max_abs_err: opt_metric("max_abs_err"),
-        budget: opt_metric("budget"),
-    })
-}
-
-fn as_u64(value: Option<&Value>) -> Option<u64> {
-    value.and_then(Value::as_u64)
-}
-
-fn coverage_from_json(value: &Value, line: usize) -> Result<CoverageMatrix, ReportError> {
-    let err = || ReportError::InvalidCounts { line };
-    Ok(CoverageMatrix {
-        namcore_parity: as_u64(value.get("namcore_parity")).ok_or_else(err)?,
-        f64_oracle: as_u64(value.get("f64_oracle")).ok_or_else(err)?,
-        isa_optimizations: as_u64(value.get("isa_optimizations")).ok_or_else(err)?,
-        spectral_baselines: as_u64(value.get("spectral_baselines")).ok_or_else(err)?,
-        rt_performance: as_u64(value.get("rt_performance")).ok_or_else(err)?,
-    })
-}
-
-fn test_counts_from_json(value: &Value, line: usize) -> Result<TestCounts, ReportError> {
-    let err = || ReportError::InvalidCounts { line };
-    Ok(TestCounts {
-        passed: as_u64(value.get("passed")).ok_or_else(err)?,
-        failed: as_u64(value.get("failed")).ok_or_else(err)?,
-        ignored: as_u64(value.get("ignored")).unwrap_or(0),
-        filtered: as_u64(value.get("filtered")).unwrap_or(0),
-        skip_capability: as_u64(value.get("skip_capability")).unwrap_or(0),
-    })
-}
-
-// ── ANSI palette ────────────────────────────────────────────────────────────
-
-struct Palette {
+pub(super) struct Palette {
     green: &'static str,
     yellow: &'static str,
     red: &'static str,
@@ -517,7 +17,7 @@ struct Palette {
 }
 
 impl Palette {
-    fn new(style: RenderStyle) -> Self {
+    pub(super) fn new(style: RenderStyle) -> Self {
         match style {
             RenderStyle::Ansi => Self {
                 green: "\x1b[0;32m",
@@ -712,7 +212,7 @@ fn cpu_color_class(pct: f64) -> &'static str {
 
 // ── Section renderers ───────────────────────────────────────────────────────
 
-fn render_header(report: &QualityReport, p: &Palette) -> String {
+pub(super) fn render_header(report: &QualityReport, p: &Palette) -> String {
     let mut out = String::new();
     let h = &report.header;
     let dirty = if h.git_dirty { "dirty" } else { "clean" };
@@ -806,7 +306,7 @@ fn latency_by_bench<'a>(latency: &'a [LatencyRecord], bench_id: &str) -> Option<
     latency.iter().find(|record| record.label == bench_id)
 }
 
-fn render_quick_summary(report: &QualityReport, p: &Palette) -> String {
+pub(super) fn render_quick_summary(report: &QualityReport, p: &Palette) -> String {
     let mut out = String::new();
     out.push('\n');
     out.push_str("QUICK SUMMARY (non-specialist)\n");
@@ -876,7 +376,7 @@ fn fidelity_mode(label: &str) -> &str {
     if label.contains(" HQ") { "HQ" } else { "Live" }
 }
 
-fn render_fidelity_details(report: &QualityReport, p: &Palette) -> String {
+pub(super) fn render_fidelity_details(report: &QualityReport, p: &Palette) -> String {
     let mut out = String::new();
     out.push_str("AUDIO FIDELITY — Technical Details\n");
     out.push_str("═════════════════════════════════════════\n\n");
@@ -1023,7 +523,7 @@ fn latency_us(report: &QualityReport, bench_id: &str) -> Option<f64> {
         .map(|record| record.median_latency_us)
 }
 
-fn render_performance(report: &QualityReport, p: &Palette) -> String {
+pub(super) fn render_performance(report: &QualityReport, p: &Palette) -> String {
     let mut out = String::new();
     out.push_str("PERFORMANCE — Block Latency (µs per 64-sample block @ 48kHz)\n");
     out.push_str("══════════════════════════════════════════════════════════\n");
@@ -1122,7 +622,7 @@ fn render_performance(report: &QualityReport, p: &Palette) -> String {
     out
 }
 
-fn render_isa_parity(report: &QualityReport, p: &Palette) -> String {
+pub(super) fn render_isa_parity(report: &QualityReport, p: &Palette) -> String {
     // The QA report must distinguish *self-consistency* (the local
     // dashboard phase `isa_self_consistency`, AVX2 vs AVX2, MSE=0 tautology)
     // from *real cross-ISA parity* (the remote gate `remote-simd-gate.sh`,
@@ -1135,8 +635,8 @@ fn render_isa_parity(report: &QualityReport, p: &Palette) -> String {
 
     if report.isa.is_empty() {
         // No per-model ISA rows: reflect what the phases actually declared.
-        let self_phase = super::phases::ISA_SELF_CONSISTENCY_PHASE;
-        let cross_phase = super::phases::ISA_PARITY_CROSS_ISA_PHASE;
+        let self_phase = phases::ISA_SELF_CONSISTENCY_PHASE;
+        let cross_phase = phases::ISA_PARITY_CROSS_ISA_PHASE;
         if report.phase_status(self_phase) == "PASS" {
             out.push_str(
                 "  (i) isa_self_consistency passed but no per-model metric rows recorded.\n",
@@ -1157,7 +657,7 @@ fn render_isa_parity(report: &QualityReport, p: &Palette) -> String {
                 out.push_str(&p.yellow(&format!(
                     "  (i) cross-ISA parity NOT executed here — declared gap \
                      `{}` (multi-target/remote gate only).\n",
-                    super::phases::CROSS_ISA_GAP_REASON
+                    phases::CROSS_ISA_GAP_REASON
                 )));
             }
             _ => {
@@ -1304,7 +804,7 @@ fn render_activation_table_body<'a>(
     out
 }
 
-fn render_activation_precision(report: &QualityReport, p: &Palette) -> String {
+pub(super) fn render_activation_precision(report: &QualityReport, p: &Palette) -> String {
     if report.activation.is_empty() {
         return render_activation_table_body("ACTIVATION PRECISION", &[], p);
     }
@@ -1363,7 +863,7 @@ fn render_activation_precision(report: &QualityReport, p: &Palette) -> String {
     out
 }
 
-fn render_f64_decomposition(report: &QualityReport, p: &Palette) -> String {
+pub(super) fn render_f64_decomposition(report: &QualityReport, p: &Palette) -> String {
     let mut out = String::new();
     if report.f64_decomp.is_empty() {
         return out;
@@ -1458,7 +958,7 @@ fn render_f64_decomposition(report: &QualityReport, p: &Palette) -> String {
     out
 }
 
-fn render_spectral_summary(report: &QualityReport, p: &Palette) -> String {
+pub(super) fn render_spectral_summary(report: &QualityReport, p: &Palette) -> String {
     let mut out = String::new();
     out.push_str("SPECTRAL FIDELITY\n");
     out.push_str("═════════════════\n\n");
@@ -1481,7 +981,7 @@ fn render_spectral_summary(report: &QualityReport, p: &Palette) -> String {
     out
 }
 
-fn render_coverage_matrix(report: &QualityReport, p: &Palette) -> String {
+pub(super) fn render_coverage_matrix(report: &QualityReport, p: &Palette) -> String {
     let mut out = String::new();
     out.push_str("COVERAGE MATRIX BY AXIS (Governance)\n");
     out.push_str("════════════════════════════════════════════\n\n");
@@ -1541,7 +1041,7 @@ fn render_coverage_matrix(report: &QualityReport, p: &Palette) -> String {
     out
 }
 
-fn render_footer(report: &QualityReport, p: &Palette) -> String {
+pub(super) fn render_footer(report: &QualityReport, p: &Palette) -> String {
     let mut out = String::new();
     out.push_str("───────────────────────────────────────────────────────────────\n");
 
@@ -1556,50 +1056,4 @@ fn render_footer(report: &QualityReport, p: &Palette) -> String {
         out.push_str(&p.red("  One or more dashboard phases failed.\n\n"));
     }
     out
-}
-
-// ── Top-level render ────────────────────────────────────────────────────────
-
-/// Renders the typed report in dashboard section order.
-pub fn render_quality_report(report: &QualityReport, style: RenderStyle) -> String {
-    let p = Palette::new(style);
-    let mut out = String::new();
-    out.push_str(&render_header(report, &p));
-    out.push_str(&render_quick_summary(report, &p));
-    out.push_str(&render_fidelity_details(report, &p));
-    out.push_str(&render_performance(report, &p));
-    out.push_str(&render_isa_parity(report, &p));
-    out.push_str(&render_activation_precision(report, &p));
-    out.push_str(&render_f64_decomposition(report, &p));
-    out.push_str(&render_spectral_summary(report, &p));
-    out.push_str(&render_coverage_matrix(report, &p));
-    out.push_str(&render_footer(report, &p));
-    out
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn render_header_distinguishes_active_and_host_isa_when_different() {
-        let with_host = r#"{"kind":"build_metadata","effective_isa":"x86-64-v3 (AVX2/FMA/F16C/BMI)","host_isa":"AVX-512","engine_backend":"AVX2"}"#;
-        let report = parse_quality_report(with_host).expect("parse build_metadata");
-        assert_eq!(report.header.host_isa.as_deref(), Some("AVX-512"));
-        assert_eq!(report.header.engine_backend.as_deref(), Some("AVX2"));
-        let plain = render_quality_report(&report, RenderStyle::Plain);
-        assert!(
-            plain.contains(
-                "   ISA:    x86-64-v3 (AVX2/FMA/F16C/BMI) (active engine dispatch; host CPU: AVX-512)\n"
-            ),
-            "unexpected header:\n{plain}"
-        );
-
-        let without_host =
-            r#"{"kind":"build_metadata","effective_isa":"x86-64-v3 (AVX2/FMA/F16C/BMI)"}"#;
-        let baseline_report = parse_quality_report(without_host).expect("parse baseline");
-        let baseline = render_quality_report(&baseline_report, RenderStyle::Plain);
-        assert!(baseline.contains("   ISA:    x86-64-v3 (AVX2/FMA/F16C/BMI)\n"));
-        assert!(!baseline.contains("host CPU"));
-    }
 }

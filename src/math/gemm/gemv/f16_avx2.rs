@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
+//! AVX2 + F16C half-precision weight GEMV kernels (dispatched for benchmark/experimental use).
+
 use super::f16_avx2_fused as fused;
 use super::f16_avx2_overwrite as overwrite;
 use crate::arch::simd::*;

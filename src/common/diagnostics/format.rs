@@ -157,6 +157,21 @@ pub(crate) fn redact_path_from_env(
     path_str.to_string()
 }
 
+fn read_redaction_env() -> (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+) {
+    let read = |key: &str| std::env::var_os(key).map(|v| v.to_string_lossy().into_owned());
+    (
+        read("XDG_RUNTIME_DIR"),
+        read("LOCALAPPDATA"),
+        read("USERPROFILE"),
+        read("HOME"),
+    )
+}
+
 /// Helper function to redact paths by replacing `$HOME` with `~`, `$XDG_RUNTIME_DIR`
 /// with `$XDG_RUNTIME_DIR`, `%LOCALAPPDATA%` with `<LOCALAPPDATA>`, and `%USERPROFILE%`
 /// with `<USERPROFILE>`. Returns the raw (unredacted) path if `full` is true.
@@ -165,10 +180,7 @@ pub(crate) fn redact_path(p: &std::path::Path, full: bool) -> String {
     if full {
         return raw.into_owned();
     }
-    let xdg = std::env::var_os("XDG_RUNTIME_DIR").map(|v| v.to_string_lossy().into_owned());
-    let local_app_data = std::env::var_os("LOCALAPPDATA").map(|v| v.to_string_lossy().into_owned());
-    let user_profile = std::env::var_os("USERPROFILE").map(|v| v.to_string_lossy().into_owned());
-    let home = std::env::var_os("HOME").map(|v| v.to_string_lossy().into_owned());
+    let (xdg, local_app_data, user_profile, home) = read_redaction_env();
     redact_path_from_env(
         &raw,
         false,
@@ -328,10 +340,7 @@ pub(crate) fn redact_text(text: &str, full: bool) -> String {
     if full {
         return text.to_string();
     }
-    let xdg = std::env::var_os("XDG_RUNTIME_DIR").map(|v| v.to_string_lossy().into_owned());
-    let local_app_data = std::env::var_os("LOCALAPPDATA").map(|v| v.to_string_lossy().into_owned());
-    let user_profile = std::env::var_os("USERPROFILE").map(|v| v.to_string_lossy().into_owned());
-    let home = std::env::var_os("HOME").map(|v| v.to_string_lossy().into_owned());
+    let (xdg, local_app_data, user_profile, home) = read_redaction_env();
     redact_text_from_env(
         text,
         false,

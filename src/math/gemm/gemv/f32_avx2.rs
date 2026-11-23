@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
+//! AVX2 single-precision (`f32`) GEMV and batched-GEMM micro-kernels.
+
 use crate::arch::simd::*;
 use crate::gemv_f32_inner_loop_avx2;
 

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
+//! Loaded dual-mono model pair, sample-rate metadata, and plausibility bounds.
+
 use crate::common::diagnostics::ModelInfo;
 use crate::models::StaticModel;
 use log::warn;

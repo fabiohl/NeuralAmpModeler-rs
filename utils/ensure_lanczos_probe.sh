@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
-# ensure_lanczos_probe.sh — compila o probe Lanczos C++ de comparação (S12) a partir do espelho vendor. Classe D: stdout é apenas o caminho do binário; RESULT: vai para stderr.
+# ensure_lanczos_probe.sh — compila o probe Lanczos C++ de comparação a partir do espelho vendor. Classe D: stdout é apenas o caminho do binário; RESULT: vai para stderr.
 # Uso: utils/ensure_lanczos_probe.sh [flags canônicas]
 # Orçamento: 64        # +9: fingerprint com espelho plugin/NAMCore + receipt .build_provenance
 set -x; PS4='+ ${BASH_SOURCE##*/}:${LINENO}: '

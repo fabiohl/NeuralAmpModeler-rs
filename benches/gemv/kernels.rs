@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-// Specialized GEMV kernels (AVX2, fully-unrolled by dimension).
-// These are bench prototypes, not yet canonized in the library.
+//! Specialized AVX2 GEMV kernel prototypes unrolled by small matrix dimensions.
 
 use neural_amp_modeler_rs::arch::simd::*;
 use neural_amp_modeler_rs::math::common::half::f16_bits_to_f32_f16c;

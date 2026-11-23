@@ -576,7 +576,7 @@ fn test_resampler_drift_soak_scenario(in_sr: u32, out_sr: u32, label: &str) {
 /// remains consistent after billions of writes.
 #[test]
 #[ignore = "long: teste de soak"]
-#[cfg(any(target_os = "linux", target_vendor = "apple"))]
+#[cfg(any(target_os = "linux", target_vendor = "apple", target_os = "windows"))]
 fn test_mirror_buf_long_run() {
     use neural_amp_modeler_rs::dsp::mirror_buf::MirroredBuffer;
 

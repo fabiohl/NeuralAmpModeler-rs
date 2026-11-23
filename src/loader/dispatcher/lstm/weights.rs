@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
+//! LSTM weight unpacking, gate-major transposition, and layer/head cursor readers.
+
 use super::super::WeightCursor;
 use crate::loader::dispatcher::checked_arith;
 use crate::models::lstm::{LstmLayer, LstmLayerDyn};

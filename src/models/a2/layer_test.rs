@@ -1468,3 +1468,27 @@ fn test_a2_layer_grouped_depthwise_matches_scalar_oracle() {
     assert_grouped_valid(4, 4, 3, 5, 4, 470);
     assert_grouped_valid(8, 8, 6, 3, 8, 471);
 }
+
+#[test]
+fn baseline_backend_is_always_supported() {
+    assert!(isa_supported_by_host(
+        InstructionSet::Avx2,
+        InstructionSet::Avx2
+    ));
+    assert!(isa_supported_by_host(
+        InstructionSet::Avx2,
+        InstructionSet::Avx512
+    ));
+}
+
+#[test]
+fn avx512_is_rejected_when_host_detects_only_baseline() {
+    assert!(!isa_supported_by_host(
+        InstructionSet::Avx512,
+        InstructionSet::Avx2
+    ));
+    assert!(isa_supported_by_host(
+        InstructionSet::Avx512,
+        InstructionSet::Avx512
+    ));
+}

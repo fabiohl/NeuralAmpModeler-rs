@@ -3,6 +3,8 @@
 // Specialized GEMM micro-kernels utilize unsafe SIMD intrinsics and parameter lists.
 #![allow(unsafe_op_in_unsafe_fn, clippy::too_many_arguments)]
 
+//! AVX-512 VNNI BF16 fused 4-gate LSTM GEMV kernel (research/cross-ISA evaluation).
+
 use core::arch::x86_64::*;
 
 /// GEMV 4-gate BF16 kernel AVX-512 for LSTM.

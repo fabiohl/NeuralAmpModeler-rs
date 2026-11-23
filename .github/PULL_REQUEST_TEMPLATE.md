@@ -13,7 +13,7 @@ Fixes #
 ## Subsystem & Scope
 <!-- Check all that apply. For documentation, packaging, or off-RT tooling changes, technical checklists below may be marked N/A. -->
 - [ ] **Neural Network Backbones** (`src/models/wavenet/`, `src/models/lstm/`, `src/models/convnet/`, `src/models/linear/`, `src/models/a2/`, `src/models/sequential.rs`, `src/models/container.rs`)
-- [ ] **SIMD & Math Kernels** (`src/math/gemm/`, `src/math/activations/`, `src/math/dsp/`, `src/math/lstm/`, `src/math/wavenet/`, `src/math/conv/`)
+- [ ] **SIMD & Math Kernels** (`src/math/gemm/`, `src/math/activations/`, `src/math/dsp/`, `src/math/lstm/`, `src/math/wavenet/`, `src/math/common/`)
 - [ ] **DSP Pipeline & Stages** (`src/dsp/pipeline/`, `src/dsp/cabsim/`, `src/dsp/resampler/`, `src/dsp/adaptive.rs`, `src/dsp/oversample.rs`, `src/dsp/gate.rs`)
 - [ ] **Model Loading & Formats** (`src/loader/`, `.nam` JSON parser, `.namb` v1/v2 binary formats, WAV IR loader, dynamic dispatcher)
 - [ ] **Real-Time Host Hardening & OS Thread Isolation** (`src/rt_hardening/`, CPU affinity, PM QoS, `SCHED_FIFO`, `mlockall`, THP disable)
@@ -56,7 +56,7 @@ Fixes #
 - [ ] **N/A**: This PR does not touch DSP models, weights, or loaders.
 - [ ] **C++ NAMCore Parity**: Parity tests (`tests/parity/cpp_parity.rs`) pass within calibrated SNR/ESR/MSE/MR-STFT thresholds (validated locally or by GitHub CI `cpp-parity` job).
 - [ ] **f64 Numerical Oracle**: Ideal numerical behavior is maintained against the reference implementation (`tests/parity/reference_oracle_f64.rs`) without unexpected float drift.
-- [ ] **Block-Invariance & Meta-Coherence**: Block slicing equivalence (`tests/models/block_invariance_test.rs`) and metadata coherence suites (`tests/models/meta_coherence.rs`) pass.
+- [ ] **Block-Invariance & Provenance Coherence**: Block slicing equivalence (`tests/models/block_invariance_test.rs`) and provenance/coherence suites (`tests/models/sample_rate_provenance_test.rs`, `tests/models/thp_coherence.rs`) pass.
 - [ ] **Quality Contract Compliance**: If quality thresholds are affected, measurement comments are provided and `docs/quality-contract.json` is validated via `utils/quality-dashboard.sh --check docs/quality-contract.json`.
 - [ ] **Parser Fuzzing & Property Tests**: If loaders or deserializers were modified, proptest fuzzing suites (`tests/models/proptest_parsers.rs`) pass.
 

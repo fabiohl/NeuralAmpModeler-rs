@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
+//! Const-generic 1x1 dense channel-mixing layer (`DenseLayer<IN, OUT>`).
+
 use crate::math::common::{AlignedVec, SimdMath};
 
 /// 1x1 Dense Layer (The Channel Mixer):
@@ -87,9 +89,8 @@ impl<const IN: usize, const OUT: usize> DenseLayer<IN, OUT> {
         // `effective_instruction_set()` and matches its `#[target_feature]` backend (x86-64-v3
         // is a compile-time guarantee, so no runtime AVX2 rejection exists).
         unsafe {
-            // Slots for which we have specialised const-generic kernels
-            // (endereçamento imediato — no leaq chains). Built from the shared
-            // intrinsic surface, so they serve both x86_64 (AVX2) and aarch64 (NEON).
+            // Slots with specialized const-generic kernels (immediate addressing — no leaq chains).
+            // Built from the shared intrinsic surface, serving both x86_64 (AVX2) and aarch64 (NEON).
             {
                 if IN == 4 && OUT == 4 {
                     crate::math::gemm::gemm_batch::fused_gemm_residual_batch_f32_const::<4, 4>(

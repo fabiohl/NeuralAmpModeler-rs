@@ -525,9 +525,43 @@ pub enum PerfResult {
 /// Verifies a contract against a report — literal port of the bash
 /// `verify_contract` (`quality-dashboard.sh:2113-2488`).
 pub fn verify_contract(contract: &QualityContract, report: &VerifyReport) -> VerifyOutcome {
-    let mut fidelity_violations: u32 = 0;
-    let mut perf_violations: u32 = 0;
-    let mut review_required: u32 = 0;
+    let phase_violations = count_phase_violations(report);
+    let provenance = match phase_status(report, PROVENANCE_PHASE) {
+        "PASS" => ProvenanceVerdict::Ok,
+        "FAIL" => ProvenanceVerdict::Fail,
+        _ => ProvenanceVerdict::NotRun,
+    };
+
+    let (fidelity_checks, entry_violations, review_required) =
+        verify_fidelity_domain(contract, report);
+    let fidelity_violations = phase_violations + entry_violations;
+
+    let (perf_checks, performance) = verify_performance_domain(contract, report);
+
+    let fidelity = if provenance == ProvenanceVerdict::Fail {
+        // D-06: stale fixtures cannot back either a green or a red fidelity
+        // assertion.
+        FidelityVerdict::NotVerified
+    } else if fidelity_violations > 0 {
+        FidelityVerdict::Fail {
+            violations: fidelity_violations,
+        }
+    } else {
+        FidelityVerdict::Ok
+    };
+
+    VerifyOutcome {
+        fidelity,
+        provenance,
+        performance,
+        review_required,
+        fidelity_checks,
+        perf_checks,
+    }
+}
+
+fn count_phase_violations(report: &VerifyReport) -> u32 {
+    let mut violations = 0u32;
 
     // ── Phase scan (PERF-006 / docs §9.3) ─────────────────────────────────
     // `regression_gate` failures belong to the performance domain and
@@ -552,7 +586,7 @@ pub fn verify_contract(contract: &QualityContract, report: &VerifyReport) -> Ver
             && phase.phase_id != REGRESSION_GATE_PHASE
             && phase.phase_id != PROVENANCE_PHASE
         {
-            fidelity_violations += 1;
+            violations += 1;
         }
         let mandatory = MANDATORY_FIDELITY_PHASES.contains(&phase.phase_id.as_str());
         let shortfall =
@@ -563,436 +597,432 @@ pub fn verify_contract(contract: &QualityContract, report: &VerifyReport) -> Ver
             && clean_claim
             && shortfall
         {
-            fidelity_violations += 1;
+            violations += 1;
         }
     }
     for phase_id in MANDATORY_FIDELITY_PHASES {
         let status = phase_status(report, phase_id);
         if status != "PASS" && status != "FAIL" {
-            fidelity_violations += 1;
+            violations += 1;
         }
     }
+    violations
+}
 
-    let provenance = match phase_status(report, PROVENANCE_PHASE) {
-        "PASS" => ProvenanceVerdict::Ok,
-        "FAIL" => ProvenanceVerdict::Fail,
-        _ => ProvenanceVerdict::NotRun,
-    };
+fn verify_fidelity_domain(
+    contract: &QualityContract,
+    report: &VerifyReport,
+) -> (Vec<FidelityCheck>, u32, u32) {
+    let mut violations = 0u32;
+    let mut review_required = 0u32;
+    let mut checks = Vec::new();
 
-    // ── Fidelity domain ────────────────────────────────────────────────────
-    let mut fidelity_checks = Vec::new();
     if contract.fidelity.is_empty() {
-        fidelity_violations += 1;
+        violations += 1;
     }
     for entry in &contract.fidelity {
         if entry.id.trim().is_empty() || entry.label.trim().is_empty() {
-            fidelity_violations += 1;
+            violations += 1;
         }
     }
-    if !contract.fidelity.is_empty() {
-        // Report lookup by label; exact labels win over old-report aliases.
-        let mut report_by_label: HashMap<&str, &FidelityRecord> = HashMap::new();
-        for record in &report.fidelity {
-            report_by_label
-                .entry(record.label.as_str())
-                .or_insert(record);
-        }
-        for record in &report.fidelity {
-            if let Some(canonical) = ids::resolve_fidelity_alias(&record.label) {
-                report_by_label.entry(canonical).or_insert(record);
-            }
-        }
+    if contract.fidelity.is_empty() {
+        return (checks, violations, review_required);
+    }
 
-        let envelopes = &contract.envelopes;
-        for entry in &contract.fidelity {
-            let id = entry.id.clone();
-            let label = entry.label.clone();
-            let Some(record) = report_by_label.get(entry.label.as_str()).copied() else {
-                if entry.optional {
-                    fidelity_checks.push(FidelityCheck {
-                        id,
-                        label,
-                        outcome: FidelityOutcome::OptionalSkipped,
+    // Report lookup by label; exact labels win over old-report aliases.
+    let mut report_by_label: HashMap<&str, &FidelityRecord> = HashMap::new();
+    for record in &report.fidelity {
+        report_by_label
+            .entry(record.label.as_str())
+            .or_insert(record);
+    }
+    for record in &report.fidelity {
+        if let Some(canonical) = ids::resolve_fidelity_alias(&record.label) {
+            report_by_label.entry(canonical).or_insert(record);
+        }
+    }
+
+    for entry in &contract.fidelity {
+        let Some(record) = report_by_label.get(entry.label.as_str()).copied() else {
+            if entry.optional {
+                checks.push(FidelityCheck {
+                    id: entry.id.clone(),
+                    label: entry.label.clone(),
+                    outcome: FidelityOutcome::OptionalSkipped,
+                });
+            } else {
+                violations += 1;
+                checks.push(FidelityCheck {
+                    id: entry.id.clone(),
+                    label: entry.label.clone(),
+                    outcome: FidelityOutcome::MissingLabel,
+                });
+            }
+            continue;
+        };
+
+        let (metrics, entry_violations, entry_reviews) =
+            verify_fidelity_entry(entry, record, &contract.envelopes);
+        violations += entry_violations;
+        review_required += entry_reviews;
+        checks.push(FidelityCheck {
+            id: entry.id.clone(),
+            label: entry.label.clone(),
+            outcome: FidelityOutcome::Measured(metrics),
+        });
+    }
+
+    (checks, violations, review_required)
+}
+
+fn verify_fidelity_entry(
+    entry: &super::FidelityEntry,
+    record: &FidelityRecord,
+    envelopes: &super::Envelopes,
+) -> (Vec<MetricCheck>, u32, u32) {
+    let mut violations = 0u32;
+    let mut review_required = 0u32;
+    let mut metrics = Vec::new();
+    let mut namcore_ok = true;
+
+    // ESR against the NAMCore reference.
+    let esr_baseline = entry.esr_namcore;
+    if esr_baseline.is_finite() {
+        match &record.esr {
+            MetricValue::Na | MetricValue::Null => {
+                violations += 1;
+                namcore_ok = false;
+                metrics.push(MetricCheck {
+                    metric: Metric::EsrNamcore,
+                    outcome: MetricOutcome::Malformed(MalformedReason::Missing),
+                });
+            }
+            MetricValue::Raw(raw) if !is_finite_num(raw) => {
+                violations += 1;
+                namcore_ok = false;
+                metrics.push(MetricCheck {
+                    metric: Metric::EsrNamcore,
+                    outcome: MetricOutcome::Malformed(MalformedReason::NonFinite(raw.clone())),
+                });
+            }
+            MetricValue::Raw(raw) => {
+                let current = parse_finite(raw);
+                let (noise_limit, safety_limit) = esr_limits(esr_baseline, &envelopes.esr_namcore);
+                if current > safety_limit {
+                    violations += 1;
+                    namcore_ok = false;
+                    metrics.push(MetricCheck {
+                        metric: Metric::EsrNamcore,
+                        outcome: MetricOutcome::SafetyCeiling {
+                            current,
+                            limit: safety_limit,
+                            baseline: esr_baseline,
+                        },
+                    });
+                } else if current > noise_limit {
+                    violations += 1;
+                    namcore_ok = false;
+                    metrics.push(MetricCheck {
+                        metric: Metric::EsrNamcore,
+                        outcome: MetricOutcome::NoiseEnvelope {
+                            current,
+                            limit: noise_limit,
+                            baseline: esr_baseline,
+                        },
                     });
                 } else {
-                    fidelity_violations += 1;
-                    fidelity_checks.push(FidelityCheck {
-                        id,
-                        label,
-                        outcome: FidelityOutcome::MissingLabel,
+                    metrics.push(MetricCheck {
+                        metric: Metric::EsrNamcore,
+                        outcome: MetricOutcome::Ok,
                     });
                 }
-                continue;
-            };
-
-            let mut metrics = Vec::new();
-            let mut namcore_ok = true;
-
-            // ESR against the NAMCore reference.
-            let esr_baseline = entry.esr_namcore;
-            if esr_baseline.is_finite() {
-                match &record.esr {
-                    MetricValue::Na | MetricValue::Null => {
-                        fidelity_violations += 1;
-                        namcore_ok = false;
-                        metrics.push(MetricCheck {
-                            metric: Metric::EsrNamcore,
-                            outcome: MetricOutcome::Malformed(MalformedReason::Missing),
-                        });
-                    }
-                    MetricValue::Raw(raw) if !is_finite_num(raw) => {
-                        fidelity_violations += 1;
-                        namcore_ok = false;
-                        metrics.push(MetricCheck {
-                            metric: Metric::EsrNamcore,
-                            outcome: MetricOutcome::Malformed(MalformedReason::NonFinite(
-                                raw.clone(),
-                            )),
-                        });
-                    }
-                    MetricValue::Raw(raw) => {
-                        let current = parse_finite(raw);
-                        let (noise_limit, safety_limit) =
-                            esr_limits(esr_baseline, &envelopes.esr_namcore);
-                        if current > safety_limit {
-                            fidelity_violations += 1;
-                            namcore_ok = false;
-                            metrics.push(MetricCheck {
-                                metric: Metric::EsrNamcore,
-                                outcome: MetricOutcome::SafetyCeiling {
-                                    current,
-                                    limit: safety_limit,
-                                    baseline: esr_baseline,
-                                },
-                            });
-                        } else if current > noise_limit {
-                            fidelity_violations += 1;
-                            namcore_ok = false;
-                            metrics.push(MetricCheck {
-                                metric: Metric::EsrNamcore,
-                                outcome: MetricOutcome::NoiseEnvelope {
-                                    current,
-                                    limit: noise_limit,
-                                    baseline: esr_baseline,
-                                },
-                            });
-                        } else {
-                            metrics.push(MetricCheck {
-                                metric: Metric::EsrNamcore,
-                                outcome: MetricOutcome::Ok,
-                            });
-                        }
-                    }
-                }
             }
+        }
+    }
 
-            // ESR against the f64 oracle + oracle-divergence review.
-            if let Some(f64_baseline) = entry.esr_f64.filter(|v| v.is_finite()) {
-                match record.esr_f64.as_raw() {
-                    None => {
-                        fidelity_violations += 1;
+    // ESR against the f64 oracle + oracle-divergence review.
+    if let Some(f64_baseline) = entry.esr_f64.filter(|v| v.is_finite()) {
+        match record.esr_f64.as_raw() {
+            None => {
+                violations += 1;
+                metrics.push(MetricCheck {
+                    metric: Metric::EsrF64,
+                    outcome: MetricOutcome::Missing,
+                });
+            }
+            Some(raw) => match raw.parse::<f64>() {
+                Err(_) => {
+                    // Fail-closed: the bash awk coerced garbage to 0.
+                    violations += 1;
+                    metrics.push(MetricCheck {
+                        metric: Metric::EsrF64,
+                        outcome: MetricOutcome::Malformed(MalformedReason::NonFinite(
+                            raw.to_string(),
+                        )),
+                    });
+                }
+                Ok(current) => {
+                    let (noise_limit, safety_limit) =
+                        esr_limits(f64_baseline, &envelopes.esr_namcore);
+                    if current > safety_limit {
+                        violations += 1;
+                        if namcore_ok {
+                            review_required += 1;
+                        }
                         metrics.push(MetricCheck {
                             metric: Metric::EsrF64,
-                            outcome: MetricOutcome::Missing,
+                            outcome: MetricOutcome::SafetyCeiling {
+                                current,
+                                limit: safety_limit,
+                                baseline: f64_baseline,
+                            },
                         });
-                    }
-                    Some(raw) => match raw.parse::<f64>() {
-                        Err(_) => {
-                            // Fail-closed: the bash awk coerced garbage to 0.
-                            fidelity_violations += 1;
-                            metrics.push(MetricCheck {
-                                metric: Metric::EsrF64,
-                                outcome: MetricOutcome::Malformed(MalformedReason::NonFinite(
-                                    raw.to_string(),
-                                )),
-                            });
+                    } else if current > noise_limit {
+                        violations += 1;
+                        if namcore_ok {
+                            review_required += 1;
                         }
-                        Ok(current) => {
-                            let (noise_limit, safety_limit) =
-                                esr_limits(f64_baseline, &envelopes.esr_namcore);
-                            if current > safety_limit {
-                                fidelity_violations += 1;
-                                if namcore_ok {
-                                    review_required += 1;
-                                }
-                                metrics.push(MetricCheck {
-                                    metric: Metric::EsrF64,
-                                    outcome: MetricOutcome::SafetyCeiling {
-                                        current,
-                                        limit: safety_limit,
-                                        baseline: f64_baseline,
-                                    },
-                                });
-                            } else if current > noise_limit {
-                                fidelity_violations += 1;
-                                if namcore_ok {
-                                    review_required += 1;
-                                }
-                                metrics.push(MetricCheck {
-                                    metric: Metric::EsrF64,
-                                    outcome: MetricOutcome::NoiseEnvelope {
-                                        current,
-                                        limit: noise_limit,
-                                        baseline: f64_baseline,
-                                    },
-                                });
-                            } else {
-                                if !namcore_ok {
-                                    review_required += 1;
-                                }
-                                metrics.push(MetricCheck {
-                                    metric: Metric::EsrF64,
-                                    outcome: MetricOutcome::Ok,
-                                });
-                            }
-                            // Directional divergence (bash :2363-2379): both
-                            // baselines strictly positive and both currents
-                            // finite; opposite 0.85/1.15 moves need review.
-                            if esr_baseline > 0.0
-                                && let Some(cur_n_raw) = record.esr.as_finite()
-                            {
-                                let cur_n = parse_finite(cur_n_raw);
-                                let rn = cur_n / esr_baseline;
-                                let rf = current / f64_baseline;
-                                if (rn < 0.85 && rf > 1.15) || (rn > 1.15 && rf < 0.85) {
-                                    review_required += 1;
-                                }
-                            }
-                        }
-                    },
-                }
-            }
-
-            // SNR (exact floor: baseline − 6.0 dB).
-            //
-            // A JSON `null` SNR is **not** a violation: the canonical sink
-            // (`tests/common/validation.rs::json_snr_db`) emits `null` for
-            // the positive non-finite SNR — bit-identical perfect parity
-            // (`+∞` dB), which is above any floor (P0.T3). An *absent* or
-            // empty `snr_db` (the `N/A` state) still fails closed, and the
-            // non-finite string sentinels (`"-inf"`, `"nan"`) stay
-            // malformed — the sink never writes them for a positive SNR, so
-            // their presence signals a foreign or corrupt writer.
-            if let Some(snr_baseline) = entry.snr_db.filter(|v| v.is_finite()) {
-                match &record.snr_db {
-                    MetricValue::Null => {
-                        // A null SNR represents positive non-finite SNR — bit-identical
-                        // perfect parity (`+∞` dB), which is above any floor (P0.T3).
-                        // However, SNR = +∞ is mathematically consistent only if ESR == 0.
-                        // If ESR is present and strictly positive, `null` SNR is inconsistent (Malformed).
-                        let esr_is_positive = match &record.esr {
-                            MetricValue::Raw(raw) if is_finite_num(raw) => parse_finite(raw) > 0.0,
-                            _ => false,
-                        };
-                        if esr_is_positive {
-                            fidelity_violations += 1;
-                            metrics.push(MetricCheck {
-                                metric: Metric::SnrDb,
-                                outcome: MetricOutcome::Malformed(MalformedReason::Inconsistent(
-                                    "esr > 0 with snr == null".to_string(),
-                                )),
-                            });
-                        } else {
-                            metrics.push(MetricCheck {
-                                metric: Metric::SnrDb,
-                                outcome: MetricOutcome::Ok,
-                            });
-                        }
-                    }
-                    MetricValue::Na => {
-                        fidelity_violations += 1;
                         metrics.push(MetricCheck {
-                            metric: Metric::SnrDb,
-                            outcome: MetricOutcome::Malformed(MalformedReason::Missing),
+                            metric: Metric::EsrF64,
+                            outcome: MetricOutcome::NoiseEnvelope {
+                                current,
+                                limit: noise_limit,
+                                baseline: f64_baseline,
+                            },
                         });
-                    }
-                    MetricValue::Raw(raw) if !is_finite_num(raw) => {
-                        fidelity_violations += 1;
+                    } else {
+                        if !namcore_ok {
+                            review_required += 1;
+                        }
                         metrics.push(MetricCheck {
-                            metric: Metric::SnrDb,
-                            outcome: MetricOutcome::Malformed(MalformedReason::NonFinite(
-                                raw.clone(),
-                            )),
+                            metric: Metric::EsrF64,
+                            outcome: MetricOutcome::Ok,
                         });
                     }
-                    MetricValue::Raw(raw) => {
-                        let current = parse_finite(raw);
-                        let limit = snr_baseline - envelopes.snr_db_drop;
-                        if current < limit {
-                            fidelity_violations += 1;
-                            metrics.push(MetricCheck {
-                                metric: Metric::SnrDb,
-                                outcome: MetricOutcome::Envelope {
-                                    current,
-                                    limit,
-                                    baseline: snr_baseline,
-                                },
-                            });
-                        } else {
-                            metrics.push(MetricCheck {
-                                metric: Metric::SnrDb,
-                                outcome: MetricOutcome::Ok,
-                            });
+                    // Directional divergence (bash :2363-2379): both
+                    // baselines strictly positive and both currents
+                    // finite; opposite 0.85/1.15 moves need review.
+                    if esr_baseline > 0.0
+                        && let Some(cur_n_raw) = record.esr.as_finite()
+                    {
+                        let cur_n = parse_finite(cur_n_raw);
+                        let rn = cur_n / esr_baseline;
+                        let rf = current / f64_baseline;
+                        if (rn < 0.85 && rf > 1.15) || (rn > 1.15 && rf < 0.85) {
+                            review_required += 1;
                         }
                     }
                 }
-            }
+            },
+        }
+    }
 
-            // MR-STFT (exact ceiling: baseline × 10.0).
-            if entry.mrstft.is_finite() {
-                match &record.mrstft {
-                    MetricValue::Na | MetricValue::Null => {
-                        fidelity_violations += 1;
-                        metrics.push(MetricCheck {
-                            metric: Metric::Mrstft,
-                            outcome: MetricOutcome::Malformed(MalformedReason::Missing),
-                        });
-                    }
-                    MetricValue::Raw(raw) if !is_finite_num(raw) => {
-                        fidelity_violations += 1;
-                        metrics.push(MetricCheck {
-                            metric: Metric::Mrstft,
-                            outcome: MetricOutcome::Malformed(MalformedReason::NonFinite(
-                                raw.clone(),
-                            )),
-                        });
-                    }
-                    MetricValue::Raw(raw) => {
-                        let current = parse_finite(raw);
-                        let limit = entry.mrstft * envelopes.mrstft_mult;
-                        if current > limit {
-                            fidelity_violations += 1;
-                            metrics.push(MetricCheck {
-                                metric: Metric::Mrstft,
-                                outcome: MetricOutcome::Envelope {
-                                    current,
-                                    limit,
-                                    baseline: entry.mrstft,
-                                },
-                            });
-                        } else {
-                            metrics.push(MetricCheck {
-                                metric: Metric::Mrstft,
-                                outcome: MetricOutcome::Ok,
-                            });
-                        }
-                    }
+    // SNR (exact floor: baseline − 6.0 dB).
+    //
+    // A JSON `null` SNR is **not** a violation: the canonical sink
+    // (`tests/common/validation.rs::json_snr_db`) emits `null` for
+    // the positive non-finite SNR — bit-identical perfect parity
+    // (`+∞` dB), which is above any floor (P0.T3). An *absent* or
+    // empty `snr_db` (the `N/A` state) still fails closed, and the
+    // non-finite string sentinels (`"-inf"`, `"nan"`) stay
+    // malformed — the sink never writes them for a positive SNR, so
+    // their presence signals a foreign or corrupt writer.
+    if let Some(snr_baseline) = entry.snr_db.filter(|v| v.is_finite()) {
+        match &record.snr_db {
+            MetricValue::Null => {
+                // A null SNR represents positive non-finite SNR — bit-identical
+                // perfect parity (`+∞` dB), which is above any floor (P0.T3).
+                // However, SNR = +∞ is mathematically consistent only if ESR == 0.
+                // If ESR is present and strictly positive, `null` SNR is inconsistent (Malformed).
+                let esr_is_positive = match &record.esr {
+                    MetricValue::Raw(raw) if is_finite_num(raw) => parse_finite(raw) > 0.0,
+                    _ => false,
+                };
+                if esr_is_positive {
+                    violations += 1;
+                    metrics.push(MetricCheck {
+                        metric: Metric::SnrDb,
+                        outcome: MetricOutcome::Malformed(MalformedReason::Inconsistent(
+                            "esr > 0 with snr == null".to_string(),
+                        )),
+                    });
+                } else {
+                    metrics.push(MetricCheck {
+                        metric: Metric::SnrDb,
+                        outcome: MetricOutcome::Ok,
+                    });
                 }
             }
+            MetricValue::Na => {
+                violations += 1;
+                metrics.push(MetricCheck {
+                    metric: Metric::SnrDb,
+                    outcome: MetricOutcome::Malformed(MalformedReason::Missing),
+                });
+            }
+            MetricValue::Raw(raw) if !is_finite_num(raw) => {
+                violations += 1;
+                metrics.push(MetricCheck {
+                    metric: Metric::SnrDb,
+                    outcome: MetricOutcome::Malformed(MalformedReason::NonFinite(raw.clone())),
+                });
+            }
+            MetricValue::Raw(raw) => {
+                let current = parse_finite(raw);
+                let limit = snr_baseline - envelopes.snr_db_drop;
+                if current < limit {
+                    violations += 1;
+                    metrics.push(MetricCheck {
+                        metric: Metric::SnrDb,
+                        outcome: MetricOutcome::Envelope {
+                            current,
+                            limit,
+                            baseline: snr_baseline,
+                        },
+                    });
+                } else {
+                    metrics.push(MetricCheck {
+                        metric: Metric::SnrDb,
+                        outcome: MetricOutcome::Ok,
+                    });
+                }
+            }
+        }
+    }
 
-            fidelity_checks.push(FidelityCheck {
+    // MR-STFT (exact ceiling: baseline × 10.0).
+    if entry.mrstft.is_finite() {
+        match &record.mrstft {
+            MetricValue::Na | MetricValue::Null => {
+                violations += 1;
+                metrics.push(MetricCheck {
+                    metric: Metric::Mrstft,
+                    outcome: MetricOutcome::Malformed(MalformedReason::Missing),
+                });
+            }
+            MetricValue::Raw(raw) if !is_finite_num(raw) => {
+                violations += 1;
+                metrics.push(MetricCheck {
+                    metric: Metric::Mrstft,
+                    outcome: MetricOutcome::Malformed(MalformedReason::NonFinite(raw.clone())),
+                });
+            }
+            MetricValue::Raw(raw) => {
+                let current = parse_finite(raw);
+                let limit = entry.mrstft * envelopes.mrstft_mult;
+                if current > limit {
+                    violations += 1;
+                    metrics.push(MetricCheck {
+                        metric: Metric::Mrstft,
+                        outcome: MetricOutcome::Envelope {
+                            current,
+                            limit,
+                            baseline: entry.mrstft,
+                        },
+                    });
+                } else {
+                    metrics.push(MetricCheck {
+                        metric: Metric::Mrstft,
+                        outcome: MetricOutcome::Ok,
+                    });
+                }
+            }
+        }
+    }
+
+    (metrics, violations, review_required)
+}
+
+fn verify_performance_domain(
+    contract: &QualityContract,
+    report: &VerifyReport,
+) -> (Vec<PerfCheck>, PerformanceVerdict) {
+    let mut perf_checks = Vec::new();
+    let mut perf_violations = 0u32;
+
+    if contract.performance.is_empty() {
+        return (perf_checks, PerformanceVerdict::Fail { violations: 1 });
+    }
+    if phase_status(report, REGRESSION_GATE_PHASE) != "PASS" {
+        return (perf_checks, PerformanceVerdict::NotVerified);
+    }
+
+    // Hardware compatibility validation (R-12): verify that report architecture
+    // matches the baseline contract provenance class.
+    let hw_compatible = match &report.build_metadata {
+        Some(meta) => {
+            let contract_isa = &contract.provenance.effective_isa;
+            let is_isa_incompatible = !contract_isa.is_empty()
+                && meta.effective_isa != "unknown"
+                && ((contract_isa.contains("x86") && meta.effective_isa.contains("aarch64"))
+                    || (contract_isa.contains("aarch64") && meta.effective_isa.contains("x86")));
+            let is_triple_incompatible = meta.target_triple != "unknown"
+                && ((contract_isa.contains("x86") && meta.target_triple.contains("aarch64"))
+                    || (contract_isa.contains("aarch64") && meta.target_triple.contains("x86_64")));
+            let is_hw_class_incompatible =
+                match (&contract.provenance.hardware_class, &meta.hardware_class) {
+                    (Some(contract_hw), Some(report_hw)) => contract_hw != report_hw,
+                    _ => false,
+                };
+            !is_isa_incompatible && !is_triple_incompatible && !is_hw_class_incompatible
+        }
+        None => false, // missing build_metadata
+    };
+
+    if !hw_compatible {
+        return (perf_checks, PerformanceVerdict::NotVerified);
+    }
+
+    let envelopes = &contract.envelopes;
+    for entry in &contract.performance {
+        if entry.id.trim().is_empty() || entry.label.trim().is_empty() {
+            perf_violations += 1;
+            continue;
+        }
+        let id = entry.id.clone();
+        let label = entry.label.clone();
+        let Some(record) = match_latency(entry, &report.latency) else {
+            perf_violations += 1;
+            perf_checks.push(PerfCheck {
                 id,
                 label,
-                outcome: FidelityOutcome::Measured(metrics),
+                result: PerfResult::MissingLabel,
+            });
+            continue;
+        };
+        let baseline_us = entry.median_latency_us;
+        let limit_us =
+            (baseline_us * envelopes.latency_mult).max(baseline_us + envelopes.latency_floor_us);
+        if record.median_latency_us > limit_us {
+            perf_violations += 1;
+            perf_checks.push(PerfCheck {
+                id,
+                label,
+                result: PerfResult::Regressed {
+                    median_us: record.median_latency_us,
+                    limit_us,
+                    baseline_us,
+                },
+            });
+        } else {
+            perf_checks.push(PerfCheck {
+                id,
+                label,
+                result: PerfResult::Ok {
+                    median_us: record.median_latency_us,
+                },
             });
         }
     }
 
-    // ── Performance domain (PERF-006) ─────────────────────────────────────
-    let mut perf_checks = Vec::new();
-    let performance = if contract.performance.is_empty() {
-        PerformanceVerdict::Fail { violations: 1 }
-    } else if phase_status(report, REGRESSION_GATE_PHASE) != "PASS" {
-        PerformanceVerdict::NotVerified
-    } else {
-        // Hardware compatibility validation (R-12): verify that report architecture
-        // matches the baseline contract provenance class.
-        let hw_compatible = match &report.build_metadata {
-            Some(meta) => {
-                let contract_isa = &contract.provenance.effective_isa;
-                let is_isa_incompatible = !contract_isa.is_empty()
-                    && meta.effective_isa != "unknown"
-                    && ((contract_isa.contains("x86") && meta.effective_isa.contains("aarch64"))
-                        || (contract_isa.contains("aarch64")
-                            && meta.effective_isa.contains("x86")));
-                let is_triple_incompatible = meta.target_triple != "unknown"
-                    && ((contract_isa.contains("x86") && meta.target_triple.contains("aarch64"))
-                        || (contract_isa.contains("aarch64")
-                            && meta.target_triple.contains("x86_64")));
-                let is_hw_class_incompatible =
-                    match (&contract.provenance.hardware_class, &meta.hardware_class) {
-                        (Some(contract_hw), Some(report_hw)) => contract_hw != report_hw,
-                        _ => false,
-                    };
-                !is_isa_incompatible && !is_triple_incompatible && !is_hw_class_incompatible
-            }
-            None => false, // missing build_metadata
-        };
-
-        if !hw_compatible {
-            PerformanceVerdict::NotVerified
-        } else {
-            let envelopes = &contract.envelopes;
-            for entry in &contract.performance {
-                if entry.id.trim().is_empty() || entry.label.trim().is_empty() {
-                    perf_violations += 1;
-                    continue;
-                }
-                let id = entry.id.clone();
-                let label = entry.label.clone();
-                let Some(record) = match_latency(entry, &report.latency) else {
-                    perf_violations += 1;
-                    perf_checks.push(PerfCheck {
-                        id,
-                        label,
-                        result: PerfResult::MissingLabel,
-                    });
-                    continue;
-                };
-                let baseline_us = entry.median_latency_us;
-                let limit_us = (baseline_us * envelopes.latency_mult)
-                    .max(baseline_us + envelopes.latency_floor_us);
-                if record.median_latency_us > limit_us {
-                    perf_violations += 1;
-                    perf_checks.push(PerfCheck {
-                        id,
-                        label,
-                        result: PerfResult::Regressed {
-                            median_us: record.median_latency_us,
-                            limit_us,
-                            baseline_us,
-                        },
-                    });
-                } else {
-                    perf_checks.push(PerfCheck {
-                        id,
-                        label,
-                        result: PerfResult::Ok {
-                            median_us: record.median_latency_us,
-                        },
-                    });
-                }
-            }
-            if perf_violations > 0 {
-                PerformanceVerdict::Fail {
-                    violations: perf_violations,
-                }
-            } else {
-                PerformanceVerdict::Ok
-            }
-        }
-    };
-
-    let fidelity = if provenance == ProvenanceVerdict::Fail {
-        // D-06: stale fixtures cannot back either a green or a red fidelity
-        // assertion.
-        FidelityVerdict::NotVerified
-    } else if fidelity_violations > 0 {
-        FidelityVerdict::Fail {
-            violations: fidelity_violations,
+    let verdict = if perf_violations > 0 {
+        PerformanceVerdict::Fail {
+            violations: perf_violations,
         }
     } else {
-        FidelityVerdict::Ok
+        PerformanceVerdict::Ok
     };
-
-    VerifyOutcome {
-        fidelity,
-        provenance,
-        performance,
-        review_required,
-        fidelity_checks,
-        perf_checks,
-    }
+    (perf_checks, verdict)
 }
 
 /// Status of one phase — the bash `$(...)` assignment keeps the LAST

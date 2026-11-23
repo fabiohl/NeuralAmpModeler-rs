@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
+//! Versioned SPSC payload envelopes transferred from the control thread to the RT thread.
+
 use crate::dsp::adaptive::SlimOverride;
 
 /// Versioned envelope for a pre-built `NamResampler` transported over the

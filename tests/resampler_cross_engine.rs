@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-//  S12 — Cross-engine resampler comparison and characterization (P10).
+//  Cross-engine resampler comparison and characterization.
 //
 //  ## Why this test exists
 //
@@ -9,7 +9,7 @@
 //  with the **Rust** `NamResampler` on both sides of the cross-rate comparison;
 //  the resampler error therefore cancels and that suite measures model
 //  arithmetic parity at the model rate — it does **not** compare resamplers.
-//  This file builds the independent comparison demanded by P10:
+//  This file builds the independent cross-engine comparison:
 //
 //  * **Rust production default** — `NamResampler::new_simple` (minimum-phase
 //    polyphase sinc, `src/dsp/sinc_kernel.rs:25-39`), plus its linear-phase
@@ -22,7 +22,7 @@
 //    `utils/ensure_lanczos_probe.sh`;
 //  * **High-quality reference** — libsoxr via ffmpeg, pinned as fixtures by
 //    `tests/fixtures/generate_resampler_reference.py` (host fingerprint
-//    recorded in `docs/benchmarks.md` § S12).
+//    recorded in `docs/benchmarks.md` §13).
 //
 //  ## Metric separation (criteria documented, never swapped)
 //
@@ -45,12 +45,12 @@
 //    (bit-exact shared-resampler cancellation, minimum-phase pre-ring floor,
 //    image-band rejection of the production default).
 //  * Cross-engine tables need the C++ probe and vendor mirrors → `#[ignore]`
-//    ("long: ...", S12 discipline; operator hosts / nightly).
+//    ("long: ...", long discipline; operator hosts / nightly).
 //
 //  All measurements run off-RT; nothing here is a release gate — the
-//  production default (minimum-phase) is frozen as the S12 baseline and any
+//  production default (minimum-phase) is frozen as the baseline and any
 //  substitution requires a demonstrated benefit plus the audio/performance
-//  gates (T12.2 policy).
+//  gates.
 
 use neural_amp_modeler_rs::dsp::resampler::NamResampler;
 use neural_amp_modeler_rs::testing::{
@@ -914,14 +914,14 @@ fn test_min_phase_image_band_rejection_upsample() {
     }
 }
 
-// ── S12 long: cross-engine characterization ─────────────────────────────────
+// ── Long: cross-engine characterization ────────────────────────────────────
 
 fn scrub_dir(dir: &Path) {
     let _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]
-#[ignore = "long: comparação cross-engine S12 (requer espelho vendor + probe C++)"]
+#[ignore = "long: cross-engine resampler comparison (requires vendor mirror + C++ probe)"]
 fn test_s12_cross_engine_characterization() {
     if !vendor_available() {
         report_skip(
@@ -999,7 +999,7 @@ fn test_s12_cross_engine_characterization() {
             ));
             // Phase linearity (delay + residual) — defined only for the
             // linear-phase engines; the minimum-phase response is nonlinear
-            // by design (S12 characterization note, not a defect claim).
+            // by design (characterization note, not a defect claim).
             let (tau_l, res_l) = phase_linearity(&lan, src, dst);
             let (tau_soxr, res_soxr) = phase_linearity(&soxr, src, dst);
             let (tau_lin, res_lin) = phase_linearity(&r_lin, src, dst);
@@ -1128,7 +1128,7 @@ fn test_s12_cross_engine_characterization() {
 /// cancellation the cpp_parity anchors rely on — or (b/d) independent engine
 /// per side (Rust ↔ container, container both sides).
 #[test]
-#[ignore = "long: âncoras cross-rate / independência S12 (requer vendor + probe C++)"]
+#[ignore = "long: cross-rate anchor independence characterization (requires vendor + C++ probe)"]
 fn test_s12_anchor_independence_cancellation() {
     if !vendor_available() {
         report_skip(
@@ -1204,12 +1204,12 @@ fn test_s12_anchor_independence_cancellation() {
     scrub_dir(&scratch);
 }
 
-/// CPU cost comparison (T12.2): Rust production stages vs the vendor probe —
+/// CPU cost comparison: Rust production stages vs the vendor probe —
 /// same signal body (4 s stress v2), conversions only (construction and
 /// polyphase-bank build excluded on both sides), median ns per emitted
-/// sample. Host bench, off-cgroup; operator-owned (docs/benchmarks.md § S12).
+/// sample. Host bench, off-cgroup; operator-owned (`docs/benchmarks.md` §13).
 #[test]
-#[ignore = "long: custo CPU S12 (bench off-RT; requer vendor + probe C++)"]
+#[ignore = "long: resampler CPU cost comparison (off-RT bench; requires vendor + C++ probe)"]
 fn test_s12_cpu_cost_comparison() {
     if !vendor_available() {
         report_skip(

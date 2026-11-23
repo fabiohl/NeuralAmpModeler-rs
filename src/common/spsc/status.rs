@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
+//! Lock-free atomic status flags, counters, and shutdown coordination between RT and control threads.
+
 use crate::common::atomics::{AtomicI32, AtomicI64, AtomicU32, AtomicU64};
 use core::sync::atomic::Ordering;
 

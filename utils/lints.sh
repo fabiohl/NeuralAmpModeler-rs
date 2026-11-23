@@ -41,11 +41,18 @@ phase_clippy() {
 }
 run_step clippy phase_clippy
 
+cross_clippy() {
+  local target="$1"
+  cargo clippy --locked --lib --target "$target" -- -D warnings
+  cargo clippy --locked --workspace --lib --bins --target "$target" -- -D warnings
+  cargo clippy --locked -p nam-preflight --all-targets --target "$target" -- -D warnings
+}
+
 HOST_ARCH="$(rustc -vV | sed -n 's/^host: //p')"
 if [ "$HOST_ARCH" = aarch64-unknown-linux-gnu ]; then
   PHASE_NAME=clippy-x86_64
   if rustup target list --installed | grep -qx x86_64-unknown-linux-gnu; then
-    run_step clippy-x86_64 cargo clippy --locked --lib --target x86_64-unknown-linux-gnu -- -D warnings
+    run_step clippy-x86_64 cross_clippy x86_64-unknown-linux-gnu
   else
     gap "clippy-x86_64:native-host-x86-target-not-installed"
   fi
@@ -54,13 +61,13 @@ elif ! rustup target list --installed | grep -qx aarch64-unknown-linux-gnu; then
   gap "clippy-aarch64:target-not-installed"
 else
   PHASE_NAME=clippy-aarch64
-  run_step clippy-aarch64 cargo clippy --locked --lib --target aarch64-unknown-linux-gnu -- -D warnings
+  run_step clippy-aarch64 cross_clippy aarch64-unknown-linux-gnu
 fi
 installed_targets="$(rustup target list --installed)"
 for spec in clippy-win-x64:x86_64-pc-windows-msvc clippy-win-arm64:aarch64-pc-windows-msvc; do
   p="${spec%%:*}"; t="${spec#*:}"; PHASE_NAME="$p"
   if printf '%s\n' "$installed_targets" | grep -qx "$t"; then
-    run_step "$p" cargo clippy --locked --lib --target "$t" -- -D warnings
+    run_step "$p" cross_clippy "$t"
   else
     gap "$p:target-not-installed"
   fi

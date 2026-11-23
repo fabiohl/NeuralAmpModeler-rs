@@ -4,6 +4,8 @@
 // adhere to transactional rollback invariants with zero handle/view/placeholder leaks.
 #![warn(clippy::undocumented_unsafe_blocks)]
 
+//! Win32 virtual memory mirroring backend (`VirtualAlloc2` placeholders + `MapViewOfFile3`).
+
 #[cfg(all(not(miri), windows))]
 use super::SIMULATE_FAIL;
 

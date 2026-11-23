@@ -232,7 +232,7 @@ The families with meaningful stabilization cost (A2: ≈ 1.4–1.9 ms; LSTM: ≈
 9.0 ms at 48 kHz) would require a full-state snapshot and provenance-aware
 invalidation, and the split `prewarm_reset`/`prewarm_step` contract already
 amortizes that work without changing audio bits. Measurements, memory bounds and
-the revisit criteria are recorded in [benchmarks.md](benchmarks.md#pre-warm-state-cache-characterization-s11--dec-05).
+the revisit criteria are recorded in [benchmarks.md](benchmarks.md#pre-warm-state-cache-characterization-dec-05).
 
 ---
 

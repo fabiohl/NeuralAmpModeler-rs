@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
+//! Scalar reference 8-lane and 16-lane interleaved dot-product kernels using `mul_add`.
+
 /// F32-native 8-lane interleaved dot product (scalar reference for SIMD validation).
 ///
 /// Uses `mul_add` (FMA3 fused multiply-add) to match the instruction set of the

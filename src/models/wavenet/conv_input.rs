@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
+//! SIMD input/output accumulator load-store helpers for WaveNet Conv1D.
+
 use crate::arch::simd::{_mm_loadu_ps, _mm_storeu_ps, _mm256_loadu_ps, _mm256_storeu_ps};
 
 /// Stores 4 accumulator values back to the output buffer with

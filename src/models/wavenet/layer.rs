@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
+//! Const-generic WaveNet A1 convolutional layer (`WaveNetLayer<COND, CH, K>`).
+
 use super::common::{WAVENET_MAX_NUM_FRAMES, WavenetProcessContext};
 use super::conv1d::Conv1d;
 use super::dense::DenseLayer;
@@ -17,10 +19,15 @@ mod telemetry_vars {
     use std::time::Duration;
 
     thread_local! {
+        /// Cumulative time spent in the conditioning mixin stage (test telemetry).
         pub static ACC_MIXIN: RefCell<Duration> = const { RefCell::new(Duration::ZERO) };
+        /// Cumulative time spent in the dilated Conv1D stage (test telemetry).
         pub static ACC_CONV: RefCell<Duration> = const { RefCell::new(Duration::ZERO) };
+        /// Cumulative time spent in the layer activation stage (test telemetry).
         pub static ACC_TANH: RefCell<Duration> = const { RefCell::new(Duration::ZERO) };
+        /// Cumulative time spent in the 1x1 projection stage (test telemetry).
         pub static ACC_ONE_BY_ONE: RefCell<Duration> = const { RefCell::new(Duration::ZERO) };
+        /// Enables per-stage timing capture on the current thread during tests.
         pub static TELEMETRY_ACTIVE: RefCell<bool> = const { RefCell::new(false) };
     }
 }

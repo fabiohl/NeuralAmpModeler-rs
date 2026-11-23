@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
+//! Post-stack head convolution chain (`PostStackHead`) for WaveNet A1 models.
+
 use crate::common::diagnostics::NamErrorCode;
 use crate::math::common::AlignedVec;
 use crate::math::common::SimdMath;

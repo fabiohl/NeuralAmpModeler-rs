@@ -915,17 +915,21 @@ impl A2Layer {
             }
         }
 
+        // Verify convolution weight/bias lengths and soundness per kernel variant.
         match &self.conv {
             A2Conv1d::Standard(conv) => {
+                // Only 4-, 8-, and 16-wide SIMD weight interleaving layouts are supported.
                 let width = conv.interleave_width;
                 if width != 4 && width != 8 && width != 16 {
                     return Err(A2LayerError::UnsupportedInterleaveWidth { width });
                 }
+                // Guard lookback indexing arithmetic against `isize` pointer-offset overflow.
                 if conv.dilation > isize::MAX as usize
                     || conv.dilation.checked_mul(conv.in_ch).is_none()
                 {
                     return Err(A2LayerError::SizeOverflow);
                 }
+                // Output channels are padded up to the next SIMD block multiple (`width`).
                 let required = conv
                     .out_ch
                     .div_ceil(width)
@@ -950,6 +954,7 @@ impl A2Layer {
                 }
             }
             A2Conv1d::Grouped(conv) => {
+                // Grouped conv requires `groups` to divide both input and output channels evenly.
                 let groups = conv.groups();
                 if groups == 0 || !in_ch.is_multiple_of(groups) || !out_ch.is_multiple_of(groups) {
                     return Err(A2LayerError::InvalidGroupedTopology {
@@ -966,6 +971,7 @@ impl A2Layer {
                     .and_then(|total| total.checked_mul(in_per_group))
                     .and_then(|total| total.checked_mul(kernel))
                     .ok_or(A2LayerError::SizeOverflow)?;
+                // Pure depthwise layers (`groups == in_ch == out_ch`) append a tap-major SoA weight block.
                 let required = if groups == in_ch && groups == out_ch {
                     kernel
                         .checked_mul(in_ch)
@@ -1097,35 +1103,6 @@ pub fn a2_layer_single_frame_scalar_ref(
             }
             layer_in_out[c] += sum;
         }
-    }
-}
-
-#[cfg(test)]
-mod isa_precondition_tests {
-    use super::{InstructionSet, isa_supported_by_host};
-
-    #[test]
-    fn baseline_backend_is_always_supported() {
-        assert!(isa_supported_by_host(
-            InstructionSet::Avx2,
-            InstructionSet::Avx2
-        ));
-        assert!(isa_supported_by_host(
-            InstructionSet::Avx2,
-            InstructionSet::Avx512
-        ));
-    }
-
-    #[test]
-    fn avx512_is_rejected_when_host_detects_only_baseline() {
-        assert!(!isa_supported_by_host(
-            InstructionSet::Avx512,
-            InstructionSet::Avx2
-        ));
-        assert!(isa_supported_by_host(
-            InstructionSet::Avx512,
-            InstructionSet::Avx512
-        ));
     }
 }
 

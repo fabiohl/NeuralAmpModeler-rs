@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
+//! Dynamic WaveNet A1 layer array (`WaveNetLayerArrayDyn`) supporting arbitrary channel and kernel widths.
+
 use super::common::{WAVENET_MAX_NUM_FRAMES, WaveNetLayerState, WavenetProcessContext};
 use super::conv1d_dyn::Conv1dDyn;
 use super::dense_dyn::DenseLayerDyn;

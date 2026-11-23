@@ -182,7 +182,7 @@ pub fn bench_a2_comparison(c: &mut Criterion) {
 }
 
 /// Direct grouped/depthwise Conv1D kernels, isolated from the rest of the A2
-/// model. Covers the two shapes the S05 tap-major repack targets: a general
+/// model. Covers the two shapes the tap-major repack targets: a general
 /// grouped layer (`groups=3`, 3 input channels → 12 output channels) and a
 /// depthwise layer (`groups == in_ch == out_ch = 8`).
 pub fn bench_a2_grouped_conv(c: &mut Criterion) {

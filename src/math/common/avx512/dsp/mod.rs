@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
+//! AVX-512 DSP trait implementation macros (standard `f32` and VNNI BF16).
+
 #[macro_use]
 mod base;
 #[macro_use]

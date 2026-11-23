@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
+//! WaveNet A1/A2 model dispatcher routing canonical profiles to const-generic or dynamic builders.
+
 use crate::loader::nam_json::{NamModelData, is_a2_shape};
 use crate::models::StaticModel;
 use anyhow::bail;

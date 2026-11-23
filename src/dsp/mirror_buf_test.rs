@@ -5,19 +5,16 @@ use super::*;
 use serial_test::serial;
 use std::sync::atomic::Ordering;
 
-#[cfg(target_os = "linux")]
 thread_local! {
     static TEST_GRANULARITY_OVERRIDE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static TEST_ALLOC_RECORD: std::cell::RefCell<Option<Vec<(usize, usize)>>> =
         const { std::cell::RefCell::new(None) };
 }
 
-#[cfg(target_os = "linux")]
 struct GranularityOverrideGuard {
     prev: usize,
 }
 
-#[cfg(target_os = "linux")]
 impl GranularityOverrideGuard {
     fn new(granularity: usize) -> Self {
         let prev = TEST_GRANULARITY_OVERRIDE.with(|c| {
@@ -29,17 +26,14 @@ impl GranularityOverrideGuard {
     }
 }
 
-#[cfg(target_os = "linux")]
 impl Drop for GranularityOverrideGuard {
     fn drop(&mut self) {
         TEST_GRANULARITY_OVERRIDE.with(|c| c.set(self.prev));
     }
 }
 
-#[cfg(target_os = "linux")]
 struct AllocRecordGuard;
 
-#[cfg(target_os = "linux")]
 impl AllocRecordGuard {
     fn start() -> Self {
         TEST_ALLOC_RECORD.with(|r| *r.borrow_mut() = Some(Vec::new()));
@@ -56,19 +50,16 @@ impl AllocRecordGuard {
     }
 }
 
-#[cfg(target_os = "linux")]
 impl Drop for AllocRecordGuard {
     fn drop(&mut self) {
         TEST_ALLOC_RECORD.with(|r| *r.borrow_mut() = None);
     }
 }
 
-#[cfg(target_os = "linux")]
 pub(super) fn granularity_override() -> usize {
     TEST_GRANULARITY_OVERRIDE.with(|c| c.get())
 }
 
-#[cfg(target_os = "linux")]
 pub(super) fn record_test_alloc(requested_bytes: usize, size_bytes: usize) {
     TEST_ALLOC_RECORD.with(|r| {
         if let Some(vec) = r.borrow_mut().as_mut() {
@@ -783,7 +774,6 @@ fn test_win32_native_fault_injection_s0_to_s4() -> Result<(), Box<dyn std::error
     Ok(())
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 #[serial]
 #[cfg_attr(

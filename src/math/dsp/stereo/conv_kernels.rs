@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
+//! Generic SIMD stereo/mono polyphase convolution loop generator macros.
+
 /// Generates a stereo convolution function (single coeff set, two input channels).
 ///
 /// Parameters include SIMD intrinsics as closures and step/alignment constants.

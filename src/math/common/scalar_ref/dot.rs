@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
+//! Scalar reference dot-product and Kahan-compensated summation kernels.
+
 use crate::math::common::half::f16_bits_to_f32;
 use crate::math::common::kahan::Kahan4F32;
 use crate::math::common::kahan::KahanF32;

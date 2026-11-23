@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
+//! Parameterized GEMV FMADD accumulation loop macros for 256-bit and 512-bit lanes.
+
 /// GEMV kernel macro — generates platform-specific FMADD accumulate loops.
 ///
 /// Parameterized by SIMD width (4 = AVX2/256-bit, 8 = AVX-512/512-bit)

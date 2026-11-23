@@ -97,7 +97,7 @@ When NAMcore reports acceptable parity but the f64 oracle diverges significantly
 
 The fixture supply chain and test gates follow a 3-layer architecture detailed in [`docs/fixtures.md`](fixtures.md) and [`docs/testing.md`](testing.md):
 
-- **Layer 0 (Generation):** `tests/fixtures/golden_gen_build.sh` queries the Rust catalog registry (`src/testing/catalog.rs::GOLDEN_GEN_CATALOG`) and executes the C++ `render` tool to emit `.bin` reference files.
+- **Layer 0 (Generation):** `tests/fixtures/golden_gen_build.sh` queries the Rust catalog registry (`src/testing/catalog/golden.rs::GOLDEN_GEN_CATALOG`) and executes the C++ `render` tool to emit `.bin` reference files.
 - **Layer 1 (Committed Goldens):** `tests/models/golden_vectors.rs` validates the Rust engine against pre-committed `.bin` fixtures without requiring a C++ toolchain.
 - **Layer 2 (Live Cross-Validation):** `tests/parity/cpp_parity.rs` builds and executes the C++ `render` tool on the fly, performing live comparison across multiple sample rates.
 - **Integrity Gates:** `tests/fixtures/.golden_manifest.sha256` ensures fixture freshness. Thresholds are defended against regressions by meta-tests in `tests/models/threshold_calibration.rs`.
@@ -194,7 +194,7 @@ Canonical const-generic static profiles (`LstmModel1`, `LstmModel2`) are monomor
 **Status:** Unadjudicated cause.
 Continuous long sequences (e.g., 960,000 samples) at 192 kHz exhibit cumulative drift across recurrent states. To maintain rigorous determinism without unadjudicated baseline divergences:
 
-- 192 kHz is formally excluded from LSTM golden generation and live cross-validation (`V2GenScope::Exclude192k` in `src/testing/catalog.rs`).
+- 192 kHz is formally excluded from LSTM golden generation and live cross-validation (`V2GenScope::Exclude192k` in `src/testing/catalog/golden.rs`).
 - All catalog LSTM captures are verified at `[44100, 48000, 88200, 96000]`.
 
 ### 2.8 Activation Functions & Oracle Divergence Analysis
@@ -265,7 +265,7 @@ NeuralAmpModeler-rs introduces const-generic monomorphization for the four predo
 | `detail::Layer` `layer1x1_post_film` execution (`model.cpp:285-291, 1228-1232`) | `WaveNetA2Dyn::process_frame`, `conv1d_ch{3,8}` simd               | ✅ Unconditionally applied outside gating mode; fails closed if `!layer1x1`                                  |
 | `WaveNet::process` conditioning + stack flow (`model.cpp:744-832`)              | `WaveNetModel::process` / `WaveNetModelDyn::process`               | ✅ Matching cascade flow                                                                                     |
 | Prewarm receptive field calculation (`model.cpp:436-442, 615-620`)              | `FreeWavenetGeometry::receptive_field()`, dynamic prewarm backfill | ✅ Exact match with C++ receptive field summation ($\Sigma dil \cdot (k-1) + dil_{head} \cdot (k_{head}-1)$) |
-| Per-layer `kernel_sizes` array (`model.cpp:1003-1032`)                          | `FreeWavenetGeometry::layer_kernel_sizes`, `build_wavenet_array_dyn` | ✅ Verified — distinct kernel per layer, `kernel_size`↔`kernel_sizes` exclusivity, length/ceiling rejection, C++/f64/NumPy parity (S10/P17) |
+| Per-layer `kernel_sizes` array (`model.cpp:1003-1032`)                          | `FreeWavenetGeometry::layer_kernel_sizes`, `build_wavenet_array_dyn` | ✅ Verified — distinct kernel per layer, `kernel_size`↔`kernel_sizes` exclusivity, length/ceiling rejection, C++/f64/NumPy parity |
 
 ### 3.3 Analytical Prewarm Shortcut
 
@@ -290,7 +290,7 @@ The A1 path rejects configurations declaring A2 features at topology parsing tim
 
 Topologies containing any of the above return `WavenetTopologyResult::Rejected("A2 feature not supported in WaveNet A1")`.
 
-**Per-layer `kernel_sizes` (S10/P17).** The A1 free-geometry path now accepts the canonical NAMCore `kernel_sizes` array (`NAM/wavenet/model.cpp:1003-1032`): one kernel per layer, validated against the array `dilations` length, `kernel_size`/`kernel_sizes` are mutually exclusive, and every kernel must be in `1..=MAX_KERNEL_SIZE`. The dynamic engine reads and processes each layer with its own kernel, the shared receptive-field calculation feeds loader/metadata/prewarm, and a catalog SKU is only matched when all per-layer kernels are homogeneous and equal to `3`. Fixture `tests/fixtures/models/wavenet_per_layer_kernels.nam` is accepted by pinned NAMCore `render` and matches the Rust f32 engine, the Rust f64 oracle and the independent NumPy anchor (`tests/models/wavenet_geometry_parity_test.rs`). The legacy scalar `kernel_size` remains the homogeneous fallback.
+**Per-layer `kernel_sizes`.** The A1 free-geometry path now accepts the canonical NAMCore `kernel_sizes` array (`NAM/wavenet/model.cpp:1003-1032`): one kernel per layer, validated against the array `dilations` length, `kernel_size`/`kernel_sizes` are mutually exclusive, and every kernel must be in `1..=MAX_KERNEL_SIZE`. The dynamic engine reads and processes each layer with its own kernel, the shared receptive-field calculation feeds loader/metadata/prewarm, and a catalog SKU is only matched when all per-layer kernels are homogeneous and equal to `3`. Fixture `tests/fixtures/models/wavenet_per_layer_kernels.nam` is accepted by pinned NAMCore `render` and matches the Rust f32 engine, the Rust f64 oracle and the independent NumPy anchor (`tests/models/wavenet_geometry_parity_test.rs`). The legacy scalar `kernel_size` remains the homogeneous fallback.
 
 **`layer1x1` provenance.** The C++ A1 default is `layer1x1_active = true` (`wavenet/model.cpp:945-954`), and the Rust A1 engine always consumes the 1×1 block, so the default-on configuration `{"active": true, "groups": 1}` (or an absent key) is accepted and produces bit-exact output. Only an explicit `active == false` (which the engine cannot reproduce) or `groups > 1` (grouped 1×1 weights the engine does not build) is rejected, with the message marker `"not supported in the Rust A1 engine"`.
 
@@ -822,11 +822,10 @@ A parent WaveNet conditioned on 3 channels cannot consume a 1-channel condition 
   `[STATUS] KNOWN_GAP id="condition_lstm_rejected_by_both" reason="Concordant rejection by both loaders"`
   The gap stays declared in receipts — it is never promoted to a silent pass.
 
-### Audit follow-up: WaveNet post-stack head — resolved (S09/P14, 2026-11-13)
+### WaveNet post-stack head
 
-The static divergence reported on 2026-11-12 was reproduced with valid NAMCore
-fixtures and then corrected. Canonical NAMCore exports (`config.head.kernel_sizes`
-array) now follow `NAM/wavenet/model.cpp:21-44,86-100,664-673,855-866` exactly:
+Canonical NAMCore exports (`config.head.kernel_sizes`
+array) follow `NAM/wavenet/model.cpp:21-44,86-100,664-673,855-866` exactly:
 
 - one Conv1D per stage, every stage with an implicit bias;
 - `channels` is the intermediate width for non-final stages and `out_channels`
@@ -859,7 +858,7 @@ accepted model's semantics.
 
 End-to-end WaveNet parsing and validation gaps previously noted here are now resolved: secondary activations, `PReLU` bare/scalar/vector forms and channel-dimension validation (`src/loader/nam_json/activation_parser.rs`, `src/models/a2/model/dynamic/mod.rs`), gating precedence (`gating_mode > gated`), FiLM `{}`/`false`/type validation (`src/models/a2/model/set_weights.rs`), and `condition_dsp` parent/output channel validation (`src/loader/dispatcher/wavenet/dynamic.rs`, `src/loader/dispatcher/wavenet/static_factory.rs`) enforce fail-closed semantics with live C++ `namcore_render` and `f64` oracle parity verified in [`tests/models/wavenet_parsing_parity_test.rs`](../tests/models/wavenet_parsing_parity_test.rs). No thresholds, pins or golden data were changed.
 
-### Audit follow-up: WaveNet general geometry — S10/P17–P18 (2026-11-13)
+### WaveNet general geometry
 
 **Implemented — per-layer `kernel_sizes` (A1):** validated array length against
 `dilations`, `kernel_size`/`kernel_sizes` mutual exclusion, kernel ceiling `1..=16`,
@@ -872,7 +871,7 @@ anchor (`4.1e-15`). Corpus scan of the 64 allowed fixtures: 26 WaveNet models,
 0 use a non-Tanh/ReLU A1 activation, 1 uses `head1x1` (A2), 4 use FiLM (A2),
 and 1 is the known-broken `condition_dsp` LSTM probe.
 
-**Retained fail-closed GAPs (deliberately not implemented in S10):**
+**Retained fail-closed GAPs (intentionally unimplemented):**
 
 | Family | Current behavior | Reason / next evidence required |
 |:--- |:--- |:--- |

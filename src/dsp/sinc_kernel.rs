@@ -35,7 +35,7 @@
 //! | 48→96 kHz    | < 0.02 dB       | ≥ 110 dB          | 79.2 dB (gate ≥ 25 dB)    |
 //! | 96→48 kHz    | < 0.02 dB       | ≥ 115 dB          | 62.6 dB (gate ≥ 25 dB)    |
 //!
-//! The historical "~31 dB" figures were re-measured by the S12 cross-engine
+//! The historical "~31 dB" figures were re-measured by the cross-engine
 //! characterization (`docs/benchmarks.md` § 13, `tests/resampler_cross_engine.rs`)
 //! on the same fixture tones and soxr reference; the ≥ 25 dB gate is unchanged.
 //! The linear-phase variant (`new_linear()`, offline) scores significantly higher on

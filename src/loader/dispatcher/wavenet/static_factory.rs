@@ -333,8 +333,8 @@ fn build_wavenet_a2_dynamic(data: &NamModelData) -> anyhow::Result<Box<StaticMod
         }));
     }
 
-    // Validate all arrays (F-02/F-03/F-04: topology vectors are checked before
-    // any allocation; a hostile layer count must never reach the builder).
+    // Validate all array bounds and topologies upfront (before any allocation)
+    // so hostile or malformed layer counts never reach the model builder.
     let mut resolved_topos: Vec<crate::loader::nam_json::A2TopologyVectors> =
         Vec::with_capacity(num_arrays);
     for (ai, layer_cfg) in data.config.layers.iter().enumerate() {
@@ -347,6 +347,7 @@ fn build_wavenet_a2_dynamic(data: &NamModelData) -> anyhow::Result<Box<StaticMod
                 MAX_A2_DYN_CHANNELS
             );
         }
+        // Array 0 consumes the model's root input channels; subsequent cascade arrays consume the previous array's output channels.
         let in_ch = if ai == 0 {
             parent_in_channels
         } else {

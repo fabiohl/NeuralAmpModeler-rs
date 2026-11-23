@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-//! S10 / P17 — WaveNet A1 per-layer `kernel_sizes` geometry parity.
+//! WaveNet A1 per-layer `kernel_sizes` geometry parity.
 //!
 //! Validates the canonical NAMCore per-layer kernel contract
 //! (`NAM/wavenet/model.cpp:1003-1032`) against three independent references:

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
+//! SIMD weight layout transpositions (4/8/16-wide interleaved Conv1D and dense layers) for WaveNet.
+
 use super::super::WeightCursor;
 use super::super::checked_arith;
 use super::traits::{ConvWeightsOutput, DenseWeightsOutput};

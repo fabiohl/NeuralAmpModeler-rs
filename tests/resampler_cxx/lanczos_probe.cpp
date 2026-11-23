@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 //
-// lanczos_probe.cpp — Offline comparison probe for the vendor Lanczos resampler (S12).
+// lanczos_probe.cpp — Offline comparison probe for the vendor Lanczos resampler.
 //
 // Compiles against the READ-ONLY vendor mirrors and uses the REAL production
 // classes — no replicated logic:

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
+//! Shared builder traits unifying static const-generic and dynamic WaveNet layer construction.
+
 use crate::math::common::AlignedVec;
 use crate::models::wavenet::Conv1dDyn;
 use crate::models::wavenet::{Conv1d, DenseLayer, DenseLayerDyn};

@@ -4,6 +4,8 @@
 // Reference oracle mirrors mathematical formulas without requiring public docs.
 #![allow(missing_docs)]
 
+//! Static WaveNet A2 `f64` reference oracle topology parser, FiLM slot evaluator, and forward helpers.
+
 use crate::loader::nam_json::model::{NamLayerConfig, NamModelData};
 use crate::models::a2::weights_layout::{
     FILM_KEYS, film_bias_count, film_bias_count_generic, film_weight_count,

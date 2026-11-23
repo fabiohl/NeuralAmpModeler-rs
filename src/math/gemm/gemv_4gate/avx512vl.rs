@@ -3,6 +3,8 @@
 // Specialized GEMM micro-kernels utilize unsafe SIMD intrinsics and parameter lists.
 #![allow(unsafe_op_in_unsafe_fn, clippy::too_many_arguments)]
 
+//! AVX-512VL (256-bit EVEX) fused 4-gate LSTM GEMV kernel.
+
 use core::arch::x86_64::*;
 
 /// Performs the linear projection for the 4 gates of an LSTM cell simultaneously via AVX-512 VL256.

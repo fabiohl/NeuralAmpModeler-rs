@@ -4,11 +4,12 @@
 //  Live cross-validation tests NeuralAmpModeler-rs ↔ NeuralAmpModelerCore (Layer 2).
 //
 //  ## When it runs
-//  - `utils/tests-quick.sh`: the 15 non-ignored multichannel-linear and WAV-IR
-//    cases run when the oracle capability is available; under
-//    `NAM_REQUIRE_CPP_ORACLE=1` a missing oracle is a hard failure.
-//  - `utils/tests-long.sh` (full slow suite, `--include-ignored`)
-//  - `cargo test --test cpp_parity -- --ignored --nocapture`
+//  - All live C++ oracle parity cases (`render` / `render_multichannel`) are
+//    marked `#[ignore]` so `utils/tests-quick.sh` stays dependency-free and does
+//    not build or spawn C++ tools during the quick discipline.
+//  - `utils/tests-long.sh` (full slow suite, `--include-ignored`; fails closed
+//    under `--strict` / `NAM_REQUIRE_CPP_ORACLE=1`)
+//  - `cargo test --test parity --features testing -- --ignored --nocapture`
 //
 //  ## Pipeline
 //  1. Compiles the `render` tool from NeuralAmpModelerCore on-demand (idempotent, cached)
@@ -2450,30 +2451,35 @@ fn run_linear_multichannel_parity(fixture_filename: &str, label: &str) {
 }
 
 #[test]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn test_linear_multichannel_1x2_direct() {
     // Measured: ESR=2.95e-15, SNR=145.3 dB
     run_linear_multichannel_parity("linear_1x2.nam", "Linear 1x2 Direct (with bias)");
 }
 
 #[test]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn test_linear_multichannel_1x2_direct_nobias() {
     // Measured: ESR=7.54e-14, SNR=131.2 dB
     run_linear_multichannel_parity("linear_1x2_nobias.nam", "Linear 1x2 Direct (no bias)");
 }
 
 #[test]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn test_linear_multichannel_2x1_direct() {
     // Measured: ESR=2.57e-15, SNR=145.9 dB
     run_linear_multichannel_parity("linear_2x1.nam", "Linear 2x1 Direct (with bias)");
 }
 
 #[test]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn test_linear_multichannel_2x1_direct_nobias() {
     // Measured: ESR=2.94e-15, SNR=145.3 dB
     run_linear_multichannel_parity("linear_2x1_nobias.nam", "Linear 2x1 Direct (no bias)");
 }
 
 #[test]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn test_linear_multichannel_2x2_shared_direct() {
     // Measured: ESR=2.56e-15, SNR=145.9 dB
     run_linear_multichannel_parity(
@@ -2483,6 +2489,7 @@ fn test_linear_multichannel_2x2_shared_direct() {
 }
 
 #[test]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn test_linear_multichannel_2x2_shared_direct_nobias() {
     // Measured: ESR=3.93e-15, SNR=144.1 dB
     run_linear_multichannel_parity(
@@ -2492,6 +2499,7 @@ fn test_linear_multichannel_2x2_shared_direct_nobias() {
 }
 
 #[test]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn test_linear_multichannel_1x2_fft() {
     // Measured: ESR=1.19e-13, SNR=129.2 dB
     run_linear_multichannel_parity(
@@ -2501,6 +2509,7 @@ fn test_linear_multichannel_1x2_fft() {
 }
 
 #[test]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn test_linear_multichannel_1x2_fft_nobias() {
     // Measured: ESR=1.52e-13, SNR=128.2 dB
     run_linear_multichannel_parity(
@@ -2510,6 +2519,7 @@ fn test_linear_multichannel_1x2_fft_nobias() {
 }
 
 #[test]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn test_linear_multichannel_2x1_fft() {
     // Measured: ESR=1.49e-13, SNR=128.3 dB
     run_linear_multichannel_parity(
@@ -2519,6 +2529,7 @@ fn test_linear_multichannel_2x1_fft() {
 }
 
 #[test]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn test_linear_multichannel_2x1_fft_nobias() {
     // Measured: ESR=6.19e-14, SNR=132.1 dB
     run_linear_multichannel_parity(
@@ -2528,6 +2539,7 @@ fn test_linear_multichannel_2x1_fft_nobias() {
 }
 
 #[test]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn test_linear_multichannel_2x2_shared_fft() {
     // Measured: ESR=1.54e-13, SNR=128.1 dB
     run_linear_multichannel_parity(
@@ -2537,6 +2549,7 @@ fn test_linear_multichannel_2x2_shared_fft() {
 }
 
 #[test]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn test_linear_multichannel_2x2_shared_fft_nobias() {
     // Measured: ESR=8.09e-14, SNR=130.9 dB
     run_linear_multichannel_parity(
@@ -2850,6 +2863,7 @@ fn run_wav_ir_stereo_parity(ch0_taps: &[f32], ch1_taps: &[f32], sample_rate: u32
 }
 
 #[test]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn test_wav_ir_mono_cpp_parity() {
     // Measured: ESR=6.704e-15, SNR=141.7 dB
     let taps: Vec<f32> = (0..32)
@@ -2859,6 +2873,7 @@ fn test_wav_ir_mono_cpp_parity() {
 }
 
 #[test]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn test_wav_ir_stereo_cpp_parity() {
     // Measured: ch 0: ESR=7.879e-15, SNR=141.0 dB | ch 1: ESR=3.415e-15, SNR=144.7 dB
     let ch0_taps: Vec<f32> = (0..32)
@@ -2871,6 +2886,7 @@ fn test_wav_ir_stereo_cpp_parity() {
 }
 
 #[test]
+#[ignore = "long: paridade C++ (spawn NAMCore)"]
 fn test_wav_ir_cross_rate_mismatch_parity() {
     // Measured: Rust loads 48kHz IR and executes cleanly at 44.1kHz operational SR; C++ rejects mismatched SR with exit code 1.
     let ir_sr = 48000;

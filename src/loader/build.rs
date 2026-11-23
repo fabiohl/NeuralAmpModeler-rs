@@ -650,74 +650,14 @@ fn build_model_pair_from_data(
         "[Loader] Dispatching model build: arch=\"{}\", layout={:?}",
         model_data.architecture, model_data.weights_layout
     );
-    // Pass `prewarm = false` here so architectures with a build-time prewarm
-    // (`SlimmableContainer`) do not run a duplicate pass before the explicit
-    // `set_max_buffer_size` + `prewarm` sequence below.
-    let mut model_l = dispatcher::build_model_with_prewarm(&model_data, false).map_err(
-            |e| {
-                let (code, is_topo) =
-                    if let Some(topo_err) = e.chain().find_map(|c| c.downcast_ref::<TopologyError>()) {
-                        (topo_err.code, true)
-                    } else if let Some(&code) = e.chain().find_map(|c| c.downcast_ref::<NamErrorCode>()) {
-                        let is_topo = matches!(
-                            code,
-                            NamErrorCode::InvalidModelTopology
-                                | NamErrorCode::InvalidFeatureTopology
-                                | NamErrorCode::NamJsonUnknownActivation
-                                | NamErrorCode::NamJsonSampleRateMismatch
-                        );
-                        (code, is_topo)
-                    } else {
-                        (NamErrorCode::ModelBuildFailed, false)
-                    };
-                error!(
-                    "[Loader] Model build failed: file='{}', size={} bytes, code={:?} — \
-             failed to build model (L) (detail: {}).",
-                    source_label, file_size, code, e
-                );
-                if is_topo {
-                    LoadError::InvalidTopology {
-                        code,
-                        reason: e.to_string(),
-                    }
-                } else if code == NamErrorCode::WeightCountMismatch {
-                    LoadError::DimensionMismatch(e.to_string())
-                } else if code == NamErrorCode::NamJsonInvalidSampleRate {
-                    nam_json::JsonError::InvalidSampleRate {
-                        value: model_data.sample_rate.unwrap_or(0.0),
-                        reason: "nested declared sample rate must be a positive integer exactly representable as u32",
-                    }
-                    .into()
-                } else {
-                    LoadError::ModelBuildFailed(e.to_string())
-                }
-            },
-        )?;
-
-    // Pre-allocate scratch containers, crossfade buffers, and delay lines for
-    // the engine's documented maximum block size (`MAX_RESAMP_BUF` = 8192 samples).
-    // INVARIANT: Performing this sizing once off-RT ensures that the audio callback
-    // never triggers buffer growth or memory reallocation on the RT hot-path.
-    model_l
-        .set_max_buffer_size(crate::dsp::pipeline::MAX_RESAMP_BUF)
-        .map_err(|e| LoadError::Internal(e.to_string()))?;
-
-    // Prewarm state history: flushes receptive fields and recurrent cell states to
-    // steady-state before audio processing starts.
-    // INVARIANT: Eliminates cold-start transients, pops, and DC step responses on
-    // the first processed audio block.
-    //
-    // `LoadOptions.prewarm` mirrors the C++ `ScopedPrewarmOnResetDefault`
-    // (`get_dsp.cpp:286-296`): it only controls the *initial* pass performed
-    // here; the model's persistent `prewarm_on_reset` is restored to its
-    // previous value so later host resets still stabilize normally (F-10).
-    let prev_prewarm_l = model_l.prewarm_on_reset();
-    if options.prewarm == Some(false) {
-        model_l.set_prewarm_on_reset(false);
-    } else {
-        model_l.prewarm(model_l.prewarm_samples().max(2048));
-    }
-    model_l.set_prewarm_on_reset(prev_prewarm_l);
+    let model_l = build_and_prewarm_channel(
+        &model_data,
+        file_size,
+        source_label,
+        "L",
+        options.prewarm,
+        true,
+    )?;
 
     #[cfg(feature = "dual-mono")]
     let build_dual_mono = dual_mono;
@@ -736,110 +676,20 @@ fn build_model_pair_from_data(
     // right channel. Both channels run strictly disjoint internal states (ring buffers,
     // delay lines, recurrent memory) to guarantee zero stereo crosstalk.
     let model_r = if build_dual_mono {
-        let mut model = dispatcher::build_model_with_prewarm(&model_data, false).map_err(|e| {
-            let (code, is_topo) = if let Some(topo_err) =
-                e.chain().find_map(|c| c.downcast_ref::<TopologyError>())
-            {
-                (topo_err.code, true)
-            } else if let Some(&code) = e.chain().find_map(|c| c.downcast_ref::<NamErrorCode>()) {
-                let is_topo = matches!(
-                    code,
-                    NamErrorCode::InvalidModelTopology
-                        | NamErrorCode::InvalidFeatureTopology
-                        | NamErrorCode::NamJsonUnknownActivation
-                        | NamErrorCode::NamJsonSampleRateMismatch
-                );
-                (code, is_topo)
-            } else {
-                (NamErrorCode::ModelBuildFailed, false)
-            };
-            error!(
-                "[Loader] Model build failed: file='{}', size={} bytes, code={:?} — \
-                 failed to build model (R) (detail: {}).",
-                source_label, file_size, code, e
-            );
-            if is_topo {
-                LoadError::InvalidTopology {
-                    code,
-                    reason: e.to_string(),
-                }
-            } else if code == NamErrorCode::WeightCountMismatch {
-                LoadError::DimensionMismatch(e.to_string())
-            } else {
-                LoadError::ModelBuildFailed(e.to_string())
-            }
-        })?;
-        model
-            .set_max_buffer_size(crate::dsp::pipeline::MAX_RESAMP_BUF)
-            .map_err(|e| LoadError::Internal(e.to_string()))?;
-        let prev_prewarm_r = model.prewarm_on_reset();
-        if options.prewarm == Some(false) {
-            model.set_prewarm_on_reset(false);
-        } else {
-            model.prewarm(model.prewarm_samples().max(2048));
-        }
-        // F-10: restore the persistent flag (see model L note above).
-        model.set_prewarm_on_reset(prev_prewarm_r);
-        Some(model)
+        Some(build_and_prewarm_channel(
+            &model_data,
+            file_size,
+            source_label,
+            "R",
+            options.prewarm,
+            false,
+        )?)
     } else {
         None
     };
 
     let architecture = model_data.architecture.clone();
-    let topology = if architecture == "WaveNet" {
-        match nam_json::get_wavenet_topology(&model_data) {
-            nam_json::WavenetTopologyResult::Known(nam_json::NamWavenetTopology::Standard) => {
-                "Standard".to_string()
-            }
-            nam_json::WavenetTopologyResult::Known(nam_json::NamWavenetTopology::Lite) => {
-                "Lite".to_string()
-            }
-            nam_json::WavenetTopologyResult::Known(nam_json::NamWavenetTopology::Feather) => {
-                "Feather".to_string()
-            }
-            nam_json::WavenetTopologyResult::Known(nam_json::NamWavenetTopology::Nano) => {
-                "Nano".to_string()
-            }
-            nam_json::WavenetTopologyResult::Free(_) => "WaveNet-Dynamic".to_string(),
-            _ => {
-                if let Some(topo) = nam_json::is_a2_shape(&model_data) {
-                    match topo {
-                        nam_json::A2TopologyResult::KnownFastPath(3) => "A2-Lite".to_string(),
-                        nam_json::A2TopologyResult::KnownFastPath(8) => "A2-Full".to_string(),
-                        nam_json::A2TopologyResult::KnownFastPath(_) => "A2-Unknown".to_string(),
-                        nam_json::A2TopologyResult::Dynamic => "A2-Dynamic".to_string(),
-                    }
-                } else if architecture == "SlimmableContainer" {
-                    "Container".to_string()
-                } else {
-                    "Custom".to_string()
-                }
-            }
-        }
-    } else if architecture == "LSTM" {
-        match nam_json::get_lstm_topology(&model_data) {
-            Ok(Some(topo)) => format!("{}x{}", topo.num_layers, topo.hidden_size),
-            _ => "Custom".to_string(),
-        }
-    } else if architecture == "Linear" {
-        match nam_json::get_linear_topology(&model_data) {
-            Some(topo) => {
-                if topo.has_bias {
-                    format!("RF{} (biased)", topo.receptive_field)
-                } else {
-                    format!("RF{}", topo.receptive_field)
-                }
-            }
-            None => "Custom".to_string(),
-        }
-    } else if architecture == "ConvNet" {
-        match nam_json::get_convnet_topology(&model_data) {
-            Ok(Some(topo)) => format!("B{}", topo.num_blocks),
-            _ => "Custom".to_string(),
-        }
-    } else {
-        "Unknown".to_string()
-    };
+    let topology = format_model_topology(&model_data, &architecture);
     let metadata = model_data.metadata.clone();
     let weights_layout_str = match model_data.weights_layout {
         crate::loader::nam_json::WeightsLayout::Original => "Original".to_string(),
@@ -862,40 +712,9 @@ fn build_model_pair_from_data(
 
     #[cfg(debug_assertions)]
     {
-        let raw_ptr_l = model_l.as_nam_model_ptr();
-        // SAFETY: `raw_ptr_l` is a valid pointer to the allocated `StaticModel`.
-        let (align_l, size_l) = unsafe {
-            (
-                std::mem::align_of_val_raw(raw_ptr_l),
-                std::mem::size_of_val_raw(raw_ptr_l),
-            )
-        };
-        debug_assert!(
-            align_l >= 8,
-            "Model L minimum alignment requirement not met: align={align_l}"
-        );
-        debug_assert!(
-            size_l > 0,
-            "Model L instance memory footprint must be greater than zero: size={size_l}"
-        );
-
+        debug_assert_model_layout(&model_l, "L");
         if let Some(ref r) = model_r {
-            let raw_ptr_r = r.as_nam_model_ptr();
-            // SAFETY: `raw_ptr_r` is a valid pointer to the allocated `StaticModel`.
-            let (align_r, size_r) = unsafe {
-                (
-                    std::mem::align_of_val_raw(raw_ptr_r),
-                    std::mem::size_of_val_raw(raw_ptr_r),
-                )
-            };
-            debug_assert!(
-                align_r >= 8,
-                "Model R minimum alignment requirement not met: align={align_r}"
-            );
-            debug_assert!(
-                size_r > 0,
-                "Model R instance memory footprint must be greater than zero: size={size_r}"
-            );
+            debug_assert_model_layout(r, "R");
         }
     }
 
@@ -910,6 +729,160 @@ fn build_model_pair_from_data(
         metadata,
         weights_layout: weights_layout_str,
     })
+}
+
+fn build_and_prewarm_channel(
+    model_data: &NamModelData,
+    file_size: usize,
+    source_label: &str,
+    channel_label: &str,
+    prewarm_opt: Option<bool>,
+    map_invalid_sample_rate: bool,
+) -> Result<Box<crate::models::StaticModel>, LoadError> {
+    // Pass `prewarm = false` here so architectures with a build-time prewarm
+    // (`SlimmableContainer`) do not run a duplicate pass before the explicit
+    // `set_max_buffer_size` + `prewarm` sequence below.
+    let mut model = dispatcher::build_model_with_prewarm(model_data, false).map_err(|e| {
+        let (code, is_topo) =
+            if let Some(topo_err) = e.chain().find_map(|c| c.downcast_ref::<TopologyError>()) {
+                (topo_err.code, true)
+            } else if let Some(&code) = e.chain().find_map(|c| c.downcast_ref::<NamErrorCode>()) {
+                let is_topo = matches!(
+                    code,
+                    NamErrorCode::InvalidModelTopology
+                        | NamErrorCode::InvalidFeatureTopology
+                        | NamErrorCode::NamJsonUnknownActivation
+                        | NamErrorCode::NamJsonSampleRateMismatch
+                );
+                (code, is_topo)
+            } else {
+                (NamErrorCode::ModelBuildFailed, false)
+            };
+        error!(
+            "[Loader] Model build failed: file='{}', size={} bytes, code={:?} — \
+             failed to build model ({}) (detail: {}).",
+            source_label, file_size, code, channel_label, e
+        );
+        if is_topo {
+            LoadError::InvalidTopology {
+                code,
+                reason: e.to_string(),
+            }
+        } else if code == NamErrorCode::WeightCountMismatch {
+            LoadError::DimensionMismatch(e.to_string())
+        } else if map_invalid_sample_rate && code == NamErrorCode::NamJsonInvalidSampleRate {
+            nam_json::JsonError::InvalidSampleRate {
+                value: model_data.sample_rate.unwrap_or(0.0),
+                reason: "nested declared sample rate must be a positive integer exactly representable as u32",
+            }
+            .into()
+        } else {
+            LoadError::ModelBuildFailed(e.to_string())
+        }
+    })?;
+
+    // Pre-allocate scratch containers, crossfade buffers, and delay lines for
+    // the engine's documented maximum block size (`MAX_RESAMP_BUF` = 8192 samples).
+    // INVARIANT: Performing this sizing once off-RT ensures that the audio callback
+    // never triggers buffer growth or memory reallocation on the RT hot-path.
+    model
+        .set_max_buffer_size(crate::dsp::pipeline::MAX_RESAMP_BUF)
+        .map_err(|e| LoadError::Internal(e.to_string()))?;
+
+    // Prewarm state history: flushes receptive fields and recurrent cell states to
+    // steady-state before audio processing starts.
+    // INVARIANT: Eliminates cold-start transients, pops, and DC step responses on
+    // the first processed audio block.
+    //
+    // `LoadOptions.prewarm` mirrors the C++ `ScopedPrewarmOnResetDefault`
+    // (`get_dsp.cpp:286-296`): it only controls the *initial* pass performed
+    // here; the model's persistent `prewarm_on_reset` is restored to its
+    // previous value so later host resets still stabilize normally (F-10).
+    let prev_prewarm = model.prewarm_on_reset();
+    if prewarm_opt == Some(false) {
+        model.set_prewarm_on_reset(false);
+    } else {
+        model.prewarm(model.prewarm_samples().max(2048));
+    }
+    model.set_prewarm_on_reset(prev_prewarm);
+    Ok(model)
+}
+
+fn format_model_topology(model_data: &NamModelData, architecture: &str) -> String {
+    if architecture == "WaveNet" {
+        match nam_json::get_wavenet_topology(model_data) {
+            nam_json::WavenetTopologyResult::Known(nam_json::NamWavenetTopology::Standard) => {
+                "Standard".to_string()
+            }
+            nam_json::WavenetTopologyResult::Known(nam_json::NamWavenetTopology::Lite) => {
+                "Lite".to_string()
+            }
+            nam_json::WavenetTopologyResult::Known(nam_json::NamWavenetTopology::Feather) => {
+                "Feather".to_string()
+            }
+            nam_json::WavenetTopologyResult::Known(nam_json::NamWavenetTopology::Nano) => {
+                "Nano".to_string()
+            }
+            nam_json::WavenetTopologyResult::Free(_) => "WaveNet-Dynamic".to_string(),
+            _ => {
+                if let Some(topo) = nam_json::is_a2_shape(model_data) {
+                    match topo {
+                        nam_json::A2TopologyResult::KnownFastPath(3) => "A2-Lite".to_string(),
+                        nam_json::A2TopologyResult::KnownFastPath(8) => "A2-Full".to_string(),
+                        nam_json::A2TopologyResult::KnownFastPath(_) => "A2-Unknown".to_string(),
+                        nam_json::A2TopologyResult::Dynamic => "A2-Dynamic".to_string(),
+                    }
+                } else if architecture == "SlimmableContainer" {
+                    "Container".to_string()
+                } else {
+                    "Custom".to_string()
+                }
+            }
+        }
+    } else if architecture == "LSTM" {
+        match nam_json::get_lstm_topology(model_data) {
+            Ok(Some(topo)) => format!("{}x{}", topo.num_layers, topo.hidden_size),
+            _ => "Custom".to_string(),
+        }
+    } else if architecture == "Linear" {
+        match nam_json::get_linear_topology(model_data) {
+            Some(topo) => {
+                if topo.has_bias {
+                    format!("RF{} (biased)", topo.receptive_field)
+                } else {
+                    format!("RF{}", topo.receptive_field)
+                }
+            }
+            None => "Custom".to_string(),
+        }
+    } else if architecture == "ConvNet" {
+        match nam_json::get_convnet_topology(model_data) {
+            Ok(Some(topo)) => format!("B{}", topo.num_blocks),
+            _ => "Custom".to_string(),
+        }
+    } else {
+        "Unknown".to_string()
+    }
+}
+
+#[cfg(debug_assertions)]
+fn debug_assert_model_layout(model: &crate::models::StaticModel, label: &str) {
+    let raw_ptr = model.as_nam_model_ptr();
+    // SAFETY: `raw_ptr` is a valid pointer to the allocated `StaticModel`.
+    let (align, size) = unsafe {
+        (
+            std::mem::align_of_val_raw(raw_ptr),
+            std::mem::size_of_val_raw(raw_ptr),
+        )
+    };
+    debug_assert!(
+        align >= 8,
+        "Model {label} minimum alignment requirement not met: align={align}"
+    );
+    debug_assert!(
+        size > 0,
+        "Model {label} instance memory footprint must be greater than zero: size={size}"
+    );
 }
 
 #[cfg(test)]

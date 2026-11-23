@@ -659,7 +659,7 @@ fn test_f32_specialized_large_values() {
     }
 }
 
-// ── Bit-exactness against the pre-S04 arithmetic order ──────────────────────
+// ── Bit-exactness against the canonical scalar arithmetic order ───────────────
 
 fn legacy_dot_lane(
     in_frames: &[f32],

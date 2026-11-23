@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
+//! [`NamModel`] trait implementation and dispatch methods for [`StaticModel`].
+
 use super::slimmable::SlimmableModel;
 use super::{NamModel, StaticModel};
 use crate::common::diagnostics::NamErrorCode;

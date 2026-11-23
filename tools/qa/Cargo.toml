@@ -32,7 +32,7 @@ path = "src/bin/nam_long_receipt.rs"
 
 [[bin]]
 name = "nam_quality"
-path = "src/bin/nam_quality.rs"
+path = "src/bin/nam_quality/main.rs"
 
 [[bin]]
 name = "nam_remote_simd_receipt"

@@ -19,7 +19,7 @@
 //! SPSC host loop, or a CLI, and must not assume one. Downstream crates emit
 //! these codes through the same diagnostic engine when wiring the core into
 //! their own host surfaces. Changes to this reservation must be synchronized
-//! with `docs/architecture.md` (§7).
+//! with `docs/architecture.md` (§6).
 //!
 //! The **exceptions** to this rule are the constructor validation codes
 //! constructed by the core crate itself:
@@ -192,7 +192,7 @@ pub enum NamErrorCode {
     /// the supported `4_000..=384_000` Hz window; allocation failures surface
     /// separately as [`OutOfMemory`](Self::OutOfMemory). Downstream host
     /// integrations also emit this code for their own generic rebuild
-    /// failures. See `docs/architecture.md` §7 (F-19).
+    /// failures. See `docs/architecture.md` §6.
     ResamplerBuildFailed,
     /// SPSC resampler channel full (rebuild discarded).
     ResamplerChannelFull,
@@ -203,7 +203,7 @@ pub enum NamErrorCode {
     /// one of two exceptions: it is a DSP constructor-parameter validation
     /// error returned by the core crate's own `ConvEngine::new` when a host
     /// passes `partition_size == 0` (transient host init, config reset, or
-    /// incorrect public-API usage). See `docs/architecture.md` §7 (F-19).
+    /// incorrect public-API usage). See `docs/architecture.md` §6.
     InvalidCabsimPartitionSize,
     /// Permission denied for real-time scheduling (no RT privileges).
     RtPriorityDenied,

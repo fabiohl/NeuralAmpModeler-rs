@@ -318,7 +318,7 @@ Signals that routinely appear in runner logs but are **expected**; they must not
 
 ### 4.6 Remote SIMD Gate & ISA Parity Protocol (`utils/remote-simd-gate.sh`)
 
-The AVX-512 backend (`src/dsp/simd/avx512/`) provides opt-in mathematical acceleration (`--features avx512`). Because production execution defaults to single-precision `f32` on the AVX2 (`x86-64-v3`) architecture, AVX-512 is maintained as an opt-in research path. Cross-ISA parity ensures mathematical equivalence between AVX-512 kernels and the AVX2 golden reference.
+The AVX-512 backend (`src/math/common/avx512/`, plus AVX-512 kernels under `src/math/`) provides opt-in mathematical acceleration (`--features avx512`). Because production execution defaults to single-precision `f32` on the AVX2 (`x86-64-v3`) architecture, AVX-512 is maintained as an opt-in research path. Cross-ISA parity ensures mathematical equivalence between AVX-512 kernels and the AVX2 golden reference.
 
 #### 1. Execution Modes and Topology Invariants
 
@@ -353,7 +353,7 @@ The AVX-512 backend (`src/dsp/simd/avx512/`) provides opt-in mathematical accele
 
 #### 2. Fixture Catalog Classification & Hygiene
 
-To maintain strict hygiene across public checkouts, the fixture catalog (`src/testing/catalog.rs`) partitions models and goldens:
+To maintain strict hygiene across public checkouts, the fixture catalog (`src/testing/catalog/mod.rs`) partitions models and goldens:
 
 - **`RequiredLocal`:** Standard models committed to repository git history (`tests/fixtures/models/*.nam`). Their absence hard-fails the preflight gate.
 - **`OptionalExternal`:** Proprietary community models (`EVH-5150-Lite.nam`, `APP-EVH-Stealth100-Dialled-xSTD.nam`, `Boss BD-2 H2O Mod T-12_00 G-12_00.nam`, `SLAMMIN_MARSHALL_J45_VN9_TREBLEBOOSTER_P4_C.nam`). When absent in clean developer clones, `catalog_preflight` gracefully classifies them as `MISSING-OPTIONAL` / `SKIP-CAPABILITY`, allowing `catalog_preflight` to pass cleanly with exit code 0 (`PASS`).

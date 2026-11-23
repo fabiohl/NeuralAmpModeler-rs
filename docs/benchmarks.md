@@ -164,7 +164,7 @@ never duplicates the logic, and the crate is not coupled to any consumer name.
    gate binary installs from crates.io pinned to the engine version:
 
    ```bash
-   cargo install NeuralAmpModeler-rs --features testing --bin nam_perf_gate --version =2.0.0
+   cargo install NeuralAmpModeler-rs --features testing --bin nam_perf_gate --version =4.0.0
    ```
 
    Alternatively, point `NAM_PERF_GATE` at any pre-built `nam_perf_gate`
@@ -521,9 +521,9 @@ allocation, and `prewarm_step(k)` performs exactly `⌈k / 64⌉` full `process`
 calls. There is no smaller-chunk penalty to reclaim — A2 already feeds the
 largest internal block (64 frames, `WAVENET_MAX_NUM_FRAMES`).
 
-### Pre-Warm State Cache Characterization (S11 / DEC-05)
+### Pre-Warm State Cache Characterization (DEC-05)
 
-S11 evaluated whether a cached post-prewarm state (the C++ `WaveNet` mechanism
+This characterization evaluates whether a cached post-prewarm state (the C++ `WaveNet` mechanism
 at `NAM/conv1d.cpp:151-161` and `NAM/wavenet/model.cpp:740-777`) should be
 ported. The reproducible workload is
 [`benches/prewarm_cache_bench.rs`](../benches/prewarm_cache_bench.rs); it
@@ -759,7 +759,7 @@ Operations that execute strictly **once per audio buffer** (in the prologue befo
 Profile-Guided Optimization (PGO) and Post-Link Optimization (such as LLVM BOLT) provide latency advantages, but the boundaries between `NeuralAmpModeler-rs` and downstream consumers are strictly defined:
 
 1. **Upstream Engine Responsibilities:**
-   * Exposes a host-agnostic, deterministic profiling catalog (`reference_architectures()` in `src/testing/catalog.rs`).
+   * Exposes a host-agnostic, deterministic profiling catalog (`reference_architectures()` in `src/testing/catalog/architectures.rs`).
    * Provides headless profiling harnesses that can be driven without GUI or audio-server dependencies.
 2. **Downstream Application Responsibilities:**
    * Downstream packaging pipelines (e.g. standalone hosts or DAW plugins) drive `-Cprofile-generate` and `-Cprofile-use` using their own compiler flags and target environments.
@@ -1194,7 +1194,7 @@ Run from the repository root, one build at a time:
    The output is `target/aarch64-apple-darwin/release/deps/neural_amp_modeler_rs-<hash>.s`.
 3. Copy both files to `target/asm-ref-<YYYY-MM-DD>/` to keep the record. Do not commit them.
 4. Locate each kernel label with `rg -n '<name>:$' <file>`. Mangled v0 names end with the function identifier, for example `42gated_activation_and_accumulate_block_avx2:`. Read the body up to the next `.cfi_endproc`.
-   Kernels: `process_single_frame_depthwise_avx2` (`src/models/a2/grouped_conv1d/simd`), `gated_activation_and_accumulate_block_avx2` and `gated_activation_and_overwrite_block_avx2` (`src/math/wavenet/accumulate/avx2`), `fused_gemm_residual_batch_f32_avx2`, `fused_gemm_residual_batch_f32_12x12` and `fused_gemm_residual_pair_12x12` (`src/math/gemm/gemm_batch/fused_residual_batch/avx2.rs`).
+   Kernels: `process_single_frame_depthwise_avx2` (`src/models/a2/grouped_conv1d/simd.rs`), `gated_activation_and_accumulate_block_avx2` and `gated_activation_and_overwrite_block_avx2` (`src/math/wavenet/accumulate/avx2.rs`), `fused_gemm_residual_batch_f32_avx2`, `fused_gemm_residual_batch_f32_12x12` and `fused_gemm_residual_pair_12x12` (`src/math/gemm/gemm_batch/fused_residual_batch/avx2.rs`).
 5. Check each body against this list:
    * `callq` (x86) or `bl` (aarch64) into `cmp`, `blend` or `set1` helpers: must be absent (inlined).
    * Calls into `core::panicking` or `slice_index_fail`: allowed only on cold assertion or bounds-failure paths.
@@ -1239,13 +1239,9 @@ Findings from this run:
 * **Confirmed:** zero `vgatherd*` and zero `vmaskmov*` in every x86 body; zero `prfm` in every aarch64 body; no call into `cmp`, `blend` or `set1` helpers in any kernel body. The file-wide `bcmp`/`memcmp` calls (x86: 130 total, aarch64: 166 total) belong to other functions, not to these kernels.
 * No aarch64 performance claim follows from this inspection until hardware benchmark receipts on Apple Silicon and Graviton are recorded.
 
-## 13. Resampler Cross-Engine Characterization (S12)
+## 13. Resampler Cross-Engine Characterization
 
-T12.1/T12.2 of the resource-parity epic (P10): independent comparison of the
-production Rust resampler against the C++ plugin's vendor Lanczos container and
-a high-quality reference, with metric separation and frozen baseline. The
-production minimum-phase default did **not** change (T12.2 decision below);
-this section records the evidence.
+Independent comparison of the production Rust resampler against the C++ plugin's vendor Lanczos container and a high-quality reference, with metric separation and frozen baseline. The production minimum-phase default remains unchanged (see decision below); this section records the evidence.
 
 Methodology and reproduction:
 
@@ -1256,7 +1252,7 @@ Methodology and reproduction:
   (compiled on demand by `utils/ensure_lanczos_probe.sh`, receipt in
   `build/resampler_probe/.build_provenance`). No replicated resampler logic —
   the probe instantiates the vendor classes directly.
-* Probe provenance (2026-11-13): NAMCore `0b3d3c97b0859a3a8c92a8628c4dd89a25eb5842`,
+* Probe provenance: NAMCore `0b3d3c97b0859a3a8c92a8628c4dd89a25eb5842`,
   AudioDSPTools `0827c6c2fc0deced568536142ea86f189e0b98a1`, plugin mirror
   LanczosResampler.h md5 `692ce8752a3fd220b79209f9c0e3a5e4` (identical in both
   mirrors), g++ 15.2.0 (Ubuntu), `-O2 -ffp-contract=off -fno-fast-math`.
@@ -1269,7 +1265,7 @@ Methodology and reproduction:
 * Host: x86-64-v3 notebook (operator reference host), release profile, no
   cgroup. All conversions are bit-deterministic, so the fidelity tables are
   host-independent; CPU medians are operator-owned.
-* Perceptual A/B (P10) requires a human listening panel → **GAP** (typed,
+* Perceptual A/B requires a human listening panel → **GAP** (typed,
   `PERCEPTUAL: GAP` line in the test log), per `perceptual_validation.md`.
 
 ### 13.1 Metric separation (criteria documented, never swapped)
@@ -1294,7 +1290,7 @@ Methodology and reproduction:
 | 96→48 kHz   | 62.6                     | 97.3        | 71.7               | 71.7               |
 
 The historical "~31 dB" note in `src/dsp/sinc_kernel.rs` predates the current
-bank and is superseded by this S12 measurement (same fixture tones, same soxr
+bank and is superseded by this measurement (same fixture tones, same soxr
 reference, same metric family; the ≥ 25 dB gate is unchanged and holds with
 ≥ 2× margin). Per-tone passband gains stay within ±0.065 dB for min-phase
 (fixtures' worst tone).
@@ -1332,7 +1328,7 @@ reference, same metric family; the ≥ 25 dB gate is unchanged and holds with
 (The vendor probe excludes construction/table init from the timed window,
 exactly like the Rust side; both count per emitted external sample.)
 
-### 13.6 T12.2 decision — keep the minimum-phase default (baseline frozen)
+### 13.6 Decision — keep the minimum-phase default (baseline frozen)
 
 * **No substitution.** The Lanczos container scores higher passband multitone
   SNR vs. soxr on three of four pairs (80–81 dB), but costs 2–4× the CPU of a
@@ -1350,7 +1346,7 @@ exactly like the Rust side; both count per emitted external sample.)
 The cross-rate parity anchors of `cpp_parity.rs:298-332` are resampler-canceled
 by construction (both comparison sides receive bit-identical Rust-resampled
 input; locked bit-exactly by `test_shared_resampler_cancellation_is_bit_exact`).
-The S12 crossed-roundtrip measurements quantify what the anchors would look
+The crossed-roundtrip measurements quantify what the anchors would look
 like if the two sides used **independent** resamplers: full-band SNR vs source
 drops to 25.1–28.2 dB (Rust ↔ Lanczos chains) versus 26.1–27.6 dB for the
 shared-Rust chain. I.e., any cross-rate threshold above ~28 dB SNR is

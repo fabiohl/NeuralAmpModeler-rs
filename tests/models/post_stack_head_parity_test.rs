@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-//! S09 / P14 — canonical post-stack head parity.
+//! Canonical post-stack head parity.
 //!
 //! Validates the NAMCore multi-stage post-stack head contract
 //! (`config.head.kernel_sizes`) against three independent references:
