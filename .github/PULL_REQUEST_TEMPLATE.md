@@ -14,7 +14,7 @@ Fixes #
 <!-- Check all that apply. For documentation, packaging, or off-RT tooling changes, technical checklists below may be marked N/A. -->
 - [ ] **Neural Network Backbones** (`src/models/wavenet/`, `src/models/lstm/`, `src/models/convnet/`, `src/models/linear/`, `src/models/a2/`, `src/models/sequential.rs`, `src/models/container.rs`)
 - [ ] **SIMD & Math Kernels** (`src/math/gemm/`, `src/math/activations/`, `src/math/dsp/`, `src/math/lstm/`, `src/math/wavenet/`, `src/math/common/`)
-- [ ] **DSP Pipeline & Stages** (`src/dsp/pipeline/`, `src/dsp/cabsim/`, `src/dsp/resampler/`, `src/dsp/adaptive.rs`, `src/dsp/oversample.rs`, `src/dsp/gate.rs`)
+- [ ] **DSP Pipeline & Stages** (`src/dsp/pipeline/`, `src/dsp/cabsim/`, `src/dsp/resampler/`, `src/dsp/resampling/`, `src/dsp/calibration.rs`, `src/dsp/musical_gate.rs`, `src/dsp/adaptive.rs`, `src/dsp/oversample.rs`, `src/dsp/gate.rs`)
 - [ ] **Model Loading & Formats** (`src/loader/`, `.nam` JSON parser, `.namb` v1/v2 binary formats, WAV IR loader, dynamic dispatcher)
 - [ ] **Real-Time Host Hardening & OS Thread Isolation** (`src/rt_hardening/`, CPU affinity, PM QoS, `SCHED_FIFO`, `mlockall`, THP disable)
 - [ ] **Concurrency & Telemetry** (`src/common/spsc/`, `src/common/diagnostics/`, `src/common/tsc.rs`, `src/dsp/telemetry.rs` / HdrHistogram)
@@ -66,7 +66,7 @@ Fixes #
 <!--
 Responsible Verification Model:
 - Fast Local Feedback: Run cargo check and targeted tests for quick local iteration.
-- GitHub CI Automation: The full cross-platform matrix (x86_64, Linux ARM64, macOS ARM64, MSRV 1.99.0, C++ parity oracle, and consumer smoke tests) runs automatically in CI on every push and PR.
+- GitHub CI Automation: The full cross-platform matrix (Linux x86_64/ARM64, macOS ARM64, Windows x64/ARM64 MSVC, cross-platform bitwise parity, MSRV 1.99.0, C++ parity oracle, and consumer smoke tests) runs automatically in CI on every push and PR.
 - Friendly Tip for Contributors: If you don't have C++ compilers, CMake, or ARM hardware locally, open a DRAFT PR and let GitHub Actions run the full verification matrix for you!
 -->
 
@@ -83,7 +83,7 @@ cargo test --lib <module>
 ### 2. Optional Full Local Suite (If environment allows)
 
 ```bash
-# Static analysis (8 phases, fmt, clippy -D warnings, policies, budget):
+# Static analysis (10 phases: fmt, check/clippy matrix, cross-target clippy, doc, SPDX, policies, script-budget):
 utils/lints.sh
 
 # Agile QA test suite (debug mode, non-ignored targets):
@@ -92,7 +92,7 @@ utils/tests-quick.sh
 
 - [ ] **Targeted Local Checks Passed**: Code compiles cleanly without warnings (`cargo check --all-targets`) and unit tests for modified components pass.
 - [ ] **Full Local Suite Executed (Optional)**: Successfully ran `utils/lints.sh` and/or `utils/tests-quick.sh` (or deferring full matrix to GitHub CI via Draft PR).
-- [ ] **Automated GitHub CI**: All checks pass on GitHub Actions (x86_64 Linux lints/quick, native ARM64 Linux/macOS, MSRV 1.99.0, C++ parity oracle, consumer smoke tests).
+- [ ] **Automated GitHub CI**: All checks pass on GitHub Actions (Linux x86_64/ARM64 lints/quick, macOS ARM64, Windows x64/ARM64 MSVC, cross-platform parity, MSRV 1.99.0, C++ parity oracle, consumer smoke tests).
 - [ ] **License & SPDX Headers**: All new and modified files include the Apache-2.0 SPDX header and copyright notice:
 
   ```text

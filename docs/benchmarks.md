@@ -98,38 +98,38 @@ Below is the committed reference baseline measured on release builds under an is
 
 | Target ID                      | Description                            | Median Latency    | % of 1.33 ms RT Budget |
 |:------------------------------ |:-------------------------------------- |:----------------- |:---------------------- |
-| `RT_WaveNet_Std_CH16`          | WaveNet Standard (CH=16)               | 41.77 µs          | 3.13%                  |
-| `RT_WaveNet_Feather_CH8`       | WaveNet Feather (CH=8)                 | 20.11 µs          | 1.51%                  |
-| `RT_WaveNet_Lite_CH12`         | WaveNet Lite (CH=12, padded-16)        | 57.16 µs          | 4.29%                  |
-| `RT_WaveNet_Nano_CH4`          | WaveNet Nano (CH=4)                    | 18.29 µs          | 1.37%                  |
-| `RT_A2_Full_CH8`               | A2-Full (CH=8, col-major SIMD)         | 19.75 µs          | 1.48%                  |
-| `RT_A2_Lite_CH3`               | A2-Lite (CH=3, unrolled GEMV)          | 14.00 µs          | 1.05%                  |
-| `RT_LSTM_1x16`                 | LSTM 1×16 (fused SIMD gates)           | 6.77 µs           | 0.51%                  |
-| `RT_LSTM_2x8`                  | LSTM 2×8 (fused SIMD gates)            | 7.58 µs           | 0.57%                  |
-| `RT_Linear_Direct_RF4`         | Linear Direct FIR (RF=4, time-domain)  | 0.13 µs           | 0.01%                  |
-| `RT_Linear_Fft_RF2048`         | Linear Partitioned FFT (RF=2048)       | 4.93 µs           | 0.37%                  |
-| `RT_ConvNet`                   | ConvNet (CH=8, 6 blocks)               | 9.48 µs           | 0.71%                  |
-| `RT_WaveNet_Dyn_Free`          | WaveNet Dynamic Free-Shape             | 21.57 µs          | 1.62%                  |
-| `RT_LSTM_Dyn_1x7`              | LSTM Dynamic 1×7                       | 8.24 µs           | 0.62%                  |
-| `RT_A2_Dyn_Gated_CH8`          | A2 Dynamic Gated (CH=8)                | 177.12 µs         | 13.28%                 |
-| `RT_A2_Dyn_Blended_CH3`        | A2 Dynamic Blended (CH=3)              | 131.09 µs         | 9.83%                  |
-| `RT_A2_Max_CH4`                | A2 Max (CH=4, cond=8, FiLM)            | 190.06 µs         | 14.25%                 |
-| `RT_DSP_Resampler_44k1_to_48k` | Polyphase Resampler 44.1k $\to$ 48k    | 1.32 µs / block   | 0.10%                  |
-| `RT_DSP_Resampler_96k_to_48k`  | Polyphase Resampler 96k $\to$ 48k      | 0.66 µs / block   | 0.05%                  |
-| `RT_DSP_CabSim_IR_Medium`      | CabSim UPOLS (2048 taps)               | 1.29 µs / block   | 0.10%                  |
-| `RT_DSP_Pipeline_Base_NoOS`    | End-to-end Pipeline (Standard, 1×)     | 42.80 µs / block  | 3.21%                  |
-| `RT_DSP_Pipeline_HQ_4xOS`      | End-to-end Pipeline (Standard, 4× OS)  | 174.36 µs / block | 13.08%                 |
-| `RT_DSP_Pipeline_AdaptiveOn`   | End-to-end Pipeline (Adaptive Dynamic) | 64.29 µs / block  | 4.82%                  |
+| `RT_WaveNet_Std_CH16`          | WaveNet Standard (CH=16)               | 41.26 µs          | 3.09%                  |
+| `RT_WaveNet_Feather_CH8`       | WaveNet Feather (CH=8)                 | 14.63 µs          | 1.10%                  |
+| `RT_WaveNet_Lite_CH12`         | WaveNet Lite (CH=12, padded-16)        | 51.86 µs          | 3.89%                  |
+| `RT_WaveNet_Nano_CH4`          | WaveNet Nano (CH=4)                    | 11.97 µs          | 0.90%                  |
+| `RT_A2_Full_CH8`               | A2-Full (CH=8, col-major SIMD)         | 18.68 µs          | 1.40%                  |
+| `RT_A2_Lite_CH3`               | A2-Lite (CH=3, unrolled GEMV)          | 13.76 µs          | 1.03%                  |
+| `RT_LSTM_1x16`                 | LSTM 1×16 (fused SIMD gates)           | 6.44 µs           | 0.48%                  |
+| `RT_LSTM_2x8`                  | LSTM 2×8 (fused SIMD gates)            | 6.91 µs           | 0.52%                  |
+| `RT_Linear_Direct_RF4`         | Linear Direct FIR (RF=4, time-domain)  | 0.17 µs           | 0.01%                  |
+| `RT_Linear_Fft_RF2048`         | Linear Partitioned FFT (RF=2048)       | 4.91 µs           | 0.37%                  |
+| `RT_ConvNet`                   | ConvNet (CH=8, 6 blocks)               | 9.30 µs           | 0.70%                  |
+| `RT_WaveNet_Dyn_Free`          | WaveNet Dynamic Free-Shape             | 17.09 µs          | 1.28%                  |
+| `RT_LSTM_Dyn_1x7`              | LSTM Dynamic 1×7                       | 8.05 µs           | 0.60%                  |
+| `RT_A2_Dyn_Gated_CH8`          | A2 Dynamic Gated (CH=8)                | 34.15 µs          | 2.56%                  |
+| `RT_A2_Dyn_Blended_CH3`        | A2 Dynamic Blended (CH=3)              | 22.14 µs          | 1.66%                  |
+| `RT_A2_Max_CH4`                | A2 Max (CH=4, cond=8, FiLM)            | 141.10 µs         | 10.58%                 |
+| `RT_DSP_Resampler_44k1_to_48k` | Polyphase Resampler 44.1k $\to$ 48k    | 1.30 µs / block   | 0.10%                  |
+| `RT_DSP_Resampler_96k_to_48k`  | Polyphase Resampler 96k $\to$ 48k      | 0.65 µs / block   | 0.05%                  |
+| `RT_DSP_CabSim_IR_Medium`      | CabSim UPOLS (2048 taps)               | 1.24 µs / block   | 0.09%                  |
+| `RT_DSP_Pipeline_Base_NoOS`    | End-to-end Pipeline (Standard, 1×)     | 41.81 µs / block  | 3.14%                  |
+| `RT_DSP_Pipeline_HQ_4xOS`      | End-to-end Pipeline (Standard, 4× OS)  | 170.23 µs / block | 12.77%                 |
+| `RT_DSP_Pipeline_AdaptiveOn`   | End-to-end Pipeline (Adaptive Dynamic) | 29.45 µs / block  | 2.21%                  |
 
 *Unit note: every row is **µs per 64-sample block** (the 1.333 ms RT deadline). The `RT_DSP_Resampler_*` and `RT_DSP_CabSim_IR_Medium` Criterion ids batch `DSP_MICRO_BATCH = 64` blocks per iteration and are divided by 64 before reporting (see §4.5); the `RT_DSP_Pipeline_*` ids already process a single 64-sample block per iteration and are reported as measured. The quality dashboard renders the same convention.*
 
-*Note: All single-model inferences consume $\le 4.3\%$ of the real-time block budget; even dynamic A2 topologies and 4× oversampled pipelines maintain $> 85\%$ real-time headroom.*
+*Note: All single-model static and dynamic inferences (except A2-Max) consume $\le 3.9\%$ of the real-time block budget; even A2-Max and 4× oversampled pipelines maintain $> 87\%$ real-time headroom.*
 
 ---
 
 ## 4. Regression Gate — Automated Performance Defense
 
-The `nam_perf_gate run` binary (`src/bin/nam_perf_gate.rs`) is the canonical benchmark-based performance defense tool. It compares current timings against a persisted statistical baseline and fails closed if latency degrades beyond the allowed threshold.
+The `nam_perf_gate run` binary ([`src/bin/nam_perf_gate.rs`](../src/bin/nam_perf_gate.rs) and its modules under `src/bin/nam_perf_gate/`: `cli.rs`, `commands.rs`, `receipt.rs`, `runner.rs`, `verdict.rs`) is the canonical benchmark-based performance defense tool. It compares current timings against a persisted statistical baseline and fails closed if latency degrades beyond the allowed threshold.
 
 ### Core Mechanisms
 
@@ -535,15 +535,15 @@ Method: `cargo bench --no-run` under the host cgroup guard, then the binary run
 directly pinned to `$NAM_BENCH_CORE` (no cgroup, no concurrent build) with
 Criterion `--warm-up-time 0.5 --measurement-time 2 --sample-size 15`. Medians:
 
-| Fixture | `prewarm_samples` | Integral `reset` | Split (1024) | Stabilization only | Clear phase |
-|:---|---:|---:|---:|---:|---:|
-| `BossWN-standard.nam` (A1) | 4092 | 41.5 µs | 39.7 µs | 5.86 µs | 35.3 µs |
-| `wavenet_a2_full.nam` | 6346 | 1.879 ms | 1.907 ms | 1.883 ms | 5.49 µs |
-| `wavenet_a2_lite.nam` | 6346 | 1.380 ms | 1.369 ms | 1.392 ms | 2.06 µs |
-| `lstm_2x24.nam` | 24000 | 8.987 ms | 9.207 ms | 0.780 ms (2048 samples) | no-op¹ |
-| `linear_fft_rf2048.nam` | 2048 | 1.074 µs | 592 ns | 536 ns | no-op¹ |
-| `convnet_relu.nam` | 64 | 12.60 µs | 12.67 µs | 8.29 µs | 4.31 µs |
-| `wavenet_post_head_multistage.nam` | 10 | 2.96 µs | 3.00 µs | 764.6 ns | 2.18 µs |
+| Fixture                            | `prewarm_samples` | Integral `reset` | Split (1024) | Stabilization only      | Clear phase |
+|:---------------------------------- | -----------------:| ----------------:| ------------:| -----------------------:| -----------:|
+| `BossWN-standard.nam` (A1)         | 4092              | 41.5 µs          | 39.7 µs      | 5.86 µs                 | 35.3 µs     |
+| `wavenet_a2_full.nam`              | 6346              | 1.879 ms         | 1.907 ms     | 1.883 ms                | 5.49 µs     |
+| `wavenet_a2_lite.nam`              | 6346              | 1.380 ms         | 1.369 ms     | 1.392 ms                | 2.06 µs     |
+| `lstm_2x24.nam`                    | 24000             | 8.987 ms         | 9.207 ms     | 0.780 ms (2048 samples) | no-op¹      |
+| `linear_fft_rf2048.nam`            | 2048              | 1.074 µs         | 592 ns       | 536 ns                  | no-op¹      |
+| `convnet_relu.nam`                 | 64                | 12.60 µs         | 12.67 µs     | 8.29 µs                 | 4.31 µs     |
+| `wavenet_post_head_multistage.nam` | 10                | 2.96 µs          | 3.00 µs      | 764.6 ns                | 2.18 µs     |
 
 ¹ LSTM and Linear do not override `clear_state`; their reset zero phase lives in
 `reset_states`/`prewarm_reset`. The LSTM stabilization-only column uses the
@@ -1155,6 +1155,14 @@ tail; its release asm is identical to HEAD in the same probe (538 lines, 140
 stack vector references), so the 16x16 bench ids are regression guards only and
 their timings are not used as evidence. For `<8,8>` (Feather) the pair path has
 no new stack vector references (10 vs 10) and measures: 2 frames 8.169→6.495 ns
+(−20.5%), 3 frames 10.117→8.527 ns (−15.7%), 7 frames 19.177→17.227 ns (−10.2%),
+64/128/256 +1.2%/+1.1%/−0.3%. Bench ids `FusedResidual_8x8_*` and
+`FusedResidual_16x16_*` were added with the same block-size list.
+
+No vector spills remain in any active pair path: the 4x4 pair body and the
+outlined 12x12 helper have zero `vmov*ps …(%rsp)` accesses, and the 8x8 pair
+adds none relative to HEAD. This is x86-64 evidence only; no aarch64 gain is
+claimed until native ARM receipts are collected.
 
 ## 11. Reference Assembly Artifacts
 
@@ -1164,15 +1172,6 @@ Generated with `cargo rustc --release --lib -- --emit asm` (host x86-64, default
 | ------------------------------------------------------------------ | ----------:| ------------------ |
 | `x86_64`: `neural_amp_modeler_rs-27d2fafe2a6cc27a.s`               | 13,480,106 | `bf31b40e1627e154` |
 | `aarch64-apple-darwin`: `neural_amp_modeler_rs-3454001845511304.s` | 11,121,353 | `f70efec3695a6f6a` |
-
-(−20.5%), 3 frames 10.117→8.527 ns (−15.7%), 7 frames 19.177→17.227 ns (−10.2%),
-64/128/256 +1.2%/+1.1%/−0.3%. Bench ids `FusedResidual_8x8_*` and
-`FusedResidual_16x16_*` were added with the same block-size list.
-
-No vector spills remain in any active pair path: the 4x4 pair body and the
-outlined 12x12 helper have zero `vmov*ps …(%rsp)` accesses, and the 8x8 pair
-adds none relative to HEAD. This is x86-64 evidence only; no aarch64 gain is
-claimed until native ARM receipts are collected.
 
 ## 12. Periodic Assembly Verification (Manual)
 
@@ -1283,7 +1282,7 @@ Methodology and reproduction:
 ### 13.2 Passband multitone SNR vs. soxr (dB, higher = better)
 
 | Pair        | Rust min-phase (default) | Rust linear | Lanczos single f64 | Lanczos single f32 |
-|-------------|-------------------------:|------------:|-------------------:|-------------------:|
+| ----------- | ------------------------:| -----------:| ------------------:| ------------------:|
 | 44.1→48 kHz | 51.5                     | 58.0        | 80.7               | 80.7               |
 | 48→44.1 kHz | 77.6                     | 74.0        | 80.7               | 80.7               |
 | 48→96 kHz   | 79.2                     | 124.0       | 81.5               | 81.5               |
@@ -1298,7 +1297,7 @@ reference, same metric family; the ≥ 25 dB gate is unchanged and holds with
 ### 13.3 Full-band aligned SNR vs. soxr (dB)
 
 | Pair        | min-phase | linear | Lanczos f64 | Lanczos f32 |
-|-------------|----------:|-------:|------------:|------------:|
+| ----------- | ---------:| ------:| -----------:| -----------:|
 | 44.1→48 kHz | 14.8      | 20.5   | 26.9        | 26.9        |
 | 48→44.1 kHz | 10.7      | 12.4   | 26.2        | 26.2        |
 | 48→96 kHz   | 21.0      | 59.3   | 70.4        | 70.4        |
@@ -1306,20 +1305,20 @@ reference, same metric family; the ≥ 25 dB gate is unchanged and holds with
 
 ### 13.4 Phase, pre-ring and aliasing (design axes, reported — no gates)
 
-| Axis (per pair)                      | min-phase (default)            | linear               | Lanczos single f64     |
-|--------------------------------------|--------------------------------|----------------------|------------------------|
-| Impulse peak delay (out-smp)         | 5–16                           | 18–72                | 2–10                   |
-| Impulse worst pre-ring (raster ×8)   | −0.1 … −13.2 dB                | −2.7 … −22.1 dB      | −3.3 … −26.9 dB        |
-| Phase delay (out-smp, passband fit)  | nonlinear by design            | 29.4–34.8 (resid < 0.003 rad) | 0.5–2.0 (resid < 0.001 rad) |
-| Image-band rejection (48→96)         | −87.7 dB                       | −109.2 dB            | (single-stage n/a)     |
-| OOB alias fold (48→44.1, 96→48)      | < f32 floor (−∞ dB)            | < f32 floor          | (single-stage n/a)     |
-| Cross-engine aligned SNR vs min-phase (stress v2) | —                 | 28.3–31.6 dB         | 27.0–28.2 dB           |
-| Real guitar (48k capture) cross-engine SNR        | —                 | 44.6–50.0 dB         | 38.5–44.7 dB           |
+| Axis (per pair)                                   | min-phase (default) | linear                        | Lanczos single f64          |
+| ------------------------------------------------- | ------------------- | ----------------------------- | --------------------------- |
+| Impulse peak delay (out-smp)                      | 5–16                | 18–72                         | 2–10                        |
+| Impulse worst pre-ring (raster ×8)                | −0.1 … −13.2 dB     | −2.7 … −22.1 dB               | −3.3 … −26.9 dB             |
+| Phase delay (out-smp, passband fit)               | nonlinear by design | 29.4–34.8 (resid < 0.003 rad) | 0.5–2.0 (resid < 0.001 rad) |
+| Image-band rejection (48→96)                      | −87.7 dB            | −109.2 dB                     | (single-stage n/a)          |
+| OOB alias fold (48→44.1, 96→48)                   | < f32 floor (−∞ dB) | < f32 floor                   | (single-stage n/a)          |
+| Cross-engine aligned SNR vs min-phase (stress v2) | —                   | 28.3–31.6 dB                  | 27.0–28.2 dB                |
+| Real guitar (48k capture) cross-engine SNR        | —                   | 44.6–50.0 dB                  | 38.5–44.7 dB                |
 
 ### 13.5 CPU cost (median ns per external sample, warm engine, 4 s stress v2 × 40 reps)
 
 | Pair        | Rust in | Rust out | Rust lin-in | Lanczos f64 fwd | Lanczos f64 rev | Container pair f64 | Container pair f32 |
-|-------------|--------:|---------:|------------:|----------------:|----------------:|-------------------:|-------------------:|
+| ----------- | -------:| --------:| -----------:| ---------------:| ---------------:| ------------------:| ------------------:|
 | 44.1→48 kHz | 15      | 16       | 15          | 31              | 25              | 57                 | 70                 |
 | 48→44.1 kHz | 16      | 16       | 16          | 24              | 25              | 53                 | 64                 |
 | 96→48 kHz   | 18      | 11       | 18          | 20              | 19              | 28                 | 42                 |

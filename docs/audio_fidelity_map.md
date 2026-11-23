@@ -116,7 +116,7 @@ The following dynamic models and container architectures serve as permanent regr
 - **Configuration:** 256 phases × 64 taps, Kaiser window ($\beta = 12$), minimum-phase filter by default (linear-phase variant available for offline renderers).
 - **Bypass:** When host rate equals 48 kHz, a zero-cost bypass path forwards audio buffers directly with zero latency and zero copying.
 - **Passband Ripple:** $< 0.05\text{ dB}$ (from 0 to $0.45 \times \text{Nyquist}$).
-- **Stopband Attenuation:** Filter design attenuation $\ge 105\text{ dB}$; end-to-end multitone SNR $\sim 31\text{ dB}$ (minimum-phase, gate $\ge 25\text{ dB}$).
+- **Stopband Attenuation:** Filter design attenuation $\ge 105\text{ dB}$; passband multitone SNR $51.5\text{--}79.2\text{ dB}$ vs. `libsoxr` (minimum-phase default; $58.0\text{--}124.0\text{ dB}$ linear-phase; gate $\ge 25\text{ dB}$ — see [`benchmarks.md §13.2`](benchmarks.md#132-passband-multitone-snr-vs-soxr-db-higher--better)).
 - **High-Frequency Rolloff:** $< 0.05\text{ dB}$ at 20 kHz (under 44.1 kHz host rate).
 
 ### Rejected Alternative: 32-Tap Resampling Mode
@@ -275,7 +275,7 @@ The golden freshness manifest [`tests/fixtures/.golden_manifest.sha256`](../test
 
 ### 12.1 Observed Fidelity Drift
 
-To distinguish genuine algorithmic changes from benign compiler code-generation shifts (FMA contraction/reassociation) and upstream reference updates (NAMCore v0.6.0), Quality Dashboard ([`docs/quality-contract.json`](quality-contract.json)) baselines are audited across both reference axes (`NAMCore` and `f64` oracle).
+To distinguish genuine algorithmic changes from benign compiler code-generation shifts (FMA contraction/reassociation) and upstream reference updates (NAMCore v0.6.0), Quality Dashboard ([`docs/quality-contract.json`](quality-contract.json)) baselines are audited across both reference axes (`NAMCore` and `f64` oracle). The matrix below preserves the forensic bisection record (`58e2d02` $\to$ `bfdb21e` / `829b3d3`); current active contract baselines (e.g., `wavenet-a2-dyn-gated` at `esr_namcore = 2.81e-14`, `esr_f64 = 1.84e-14`, `snr_db = 135.5 dB`, `mrstft = 9.33e-6`; `linear-fft-rf2048` at `1.08e-14`) are tracked in [`docs/quality-contract.json`](quality-contract.json).
 
 #### Fidelity Drift Matrix (`model × commit × ESR_NAMCore × ESR_f64`)
 
@@ -327,7 +327,7 @@ To distinguish genuine algorithmic changes from benign compiler code-generation 
      This simultaneous convergence against independent C++ and 64-bit mathematical implementations proves that the shift represents a genuine bug fix in the dynamic A2 inference engine.
 
 5. **Contract Action & Baseline Renewal:**
-   The baseline in [`docs/quality-contract.json`](quality-contract.json) was renewed at $2.56 \times 10^{-14}$ (with $1.34 \times 10^{-14}$ vs `f64`, $\text{SNR} = 135.9\text{ dB}$, $\text{MR-STFT} = 8.78 \times 10^{-6}$), cementing the tighter envelope and preventing regressions up to the former $5.03 \times 10^{-11}$ floor.
+   The baseline in [`docs/quality-contract.json`](quality-contract.json) was renewed from the former $5.03 \times 10^{-11}$ floor (recorded at $2.56 \times 10^{-14}$ during the bisection audit and maintained in the current contract at $2.81 \times 10^{-14}$ vs NAMCore, $1.84 \times 10^{-14}$ vs `f64`, $\text{SNR} = 135.5\text{ dB}$, $\text{MR-STFT} = 9.33 \times 10^{-6}$), cementing the tighter envelope and preventing regressions.
 
 ---
 

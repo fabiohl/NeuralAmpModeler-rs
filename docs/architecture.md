@@ -452,16 +452,16 @@ NeuralAmpModeler-rs tracks callback latency distributions via atomic, lock-free 
 
 NeuralAmpModeler-rs separates the host-agnostic DSP core into distinct architectural layers:
 
-| Layer            | Path                | Responsibility                                                                                                                       |
-|:---------------- |:------------------- |:------------------------------------------------------------------------------------------------------------------------------------ |
-| **Common**       | `src/common/`       | Diagnostics, error codes, lock-free SPSC primitives, panic hooks, and parameter models.                                              |
-| **Arch**         | `src/arch/`         | Intrinsic surface: native x86_64 re-export, NEON implementation of AVX2/FMA/F16C on aarch64.                                         |
-| **Math**         | `src/math/`         | SIMD kernels (AVX2/AVX-512), `SimdMath` dispatch, activations, matrix math, and aligned vectors.                                     |
-| **Models**       | `src/models/`       | Neural network architectures: WaveNet (A1/A2), LSTM, ConvNet, Linear, and Containers.                                                |
-| **DSP Core**     | `src/dsp/`          | Pipeline stages, native resampler, noise gate, oversampling, cabsim convolution, adaptive compute.                                   |
-| **Loader**       | `src/loader/`       | `.nam` (JSON) and `.namb` (binary) parsers, topology detection, weight unpackers, and builders.                                      |
-| **RT Hardening** | `src/rt_hardening/` | Optional real-time host tuning (Linux `mlockall`/`SCHED_FIFO`/affinity/PM-QoS; macOS QoS/time constraint/`mlock_region`/workgroups). |
-| **Testing**      | `src/testing/`      | Off-RT perceptual metrics, spectral analysis, and reference oracles (gated behind `testing`).                                        |
+| Layer            | Path                | Responsibility                                                                                                                                                                                                                                         |
+|:---------------- |:------------------- |:------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Common**       | `src/common/`       | Diagnostics, error codes, lock-free SPSC primitives, panic hooks, and parameter models.                                                                                                                                                                |
+| **Arch**         | `src/arch/`         | Intrinsic surface: native x86_64 re-export, NEON implementation of AVX2/FMA/F16C on aarch64.                                                                                                                                                           |
+| **Math**         | `src/math/`         | SIMD kernels (AVX2/AVX-512), `SimdMath` dispatch, activations, matrix math, and aligned vectors.                                                                                                                                                       |
+| **Models**       | `src/models/`       | Neural network architectures: WaveNet (A1/A2), LSTM, ConvNet, Linear, and Containers.                                                                                                                                                                  |
+| **DSP Core**     | `src/dsp/`          | Pipeline stages, native polyphase resampler, bounded streaming resample adapter (`StreamingResampleBuffer`), Schmitt and musical noise gates (`MusicalNoiseGate`), dBu/LUFS model calibration, oversampling, cabsim convolution, and adaptive compute. |
+| **Loader**       | `src/loader/`       | `.nam` (JSON) and `.namb` (binary) parsers, topology detection, weight unpackers, and builders.                                                                                                                                                        |
+| **RT Hardening** | `src/rt_hardening/` | Optional real-time host tuning (Linux `mlockall`/`SCHED_FIFO`/affinity/PM-QoS; macOS QoS/time constraint/`mlock_region`/workgroups).                                                                                                                   |
+| **Testing**      | `src/testing/`      | Off-RT perceptual metrics, spectral analysis, and reference oracles (gated behind `testing`).                                                                                                                                                          |
 
 ```mermaid
 graph TD
@@ -527,12 +527,22 @@ Neural networks are trained at a fixed 48 kHz sample rate. When the host runs at
 - **Minimum-Phase Transformation:** Employs real cepstrum f64 FFT transformation to concentrate filter energy into the shortest possible delay, completely eliminating pre-ringing in real-time monitoring.
 - **Linear-Phase Mode:** `NamResampler::new_linear()` is provided for offline rendering workflows where linear phase is required.
 - **Native Rate Bypass:** When host sample rate equals 48 kHz, samples pass through with zero convolution overhead.
+- **Bounded Streaming Adapter (`StreamingResampleBuffer`):** [`src/dsp/resampling/streaming_adapter.rs`](../src/dsp/resampling/streaming_adapter.rs) wraps fractional host-to-model rate conversion (`SampleFifo`-backed input, model, and output queues) behind strict output cardinality (`real + padded == written`), pre-allocating bounded buffers at construction so both `process()` and granular `push_input`/`drain_model_samples`/`push_model_output`/`pull_output` calls run allocation-free on the real-time thread.
 
-### 4.2 Noise Gate FSM
+### 4.2 Noise Gate FSM & Musical Expander
 
-The noise gate ([`src/dsp/gate.rs`](../src/dsp/gate.rs)) employs a Schmitt trigger with independent opening and closing thresholds to prevent chattering at noise floor boundaries. Transitions apply vectorized linear ramping for smooth, artifact-free gain changes.
+- **Schmitt Trigger Gate (`dsp::gate`):** The pipeline noise gate ([`src/dsp/gate.rs`](../src/dsp/gate.rs)) employs a Schmitt trigger with independent opening and closing thresholds to prevent chattering at noise floor boundaries, applying vectorized linear ramping for smooth gain transitions.
+- **Musical Noise Gate (`dsp::musical_gate`):** [`MusicalNoiseGate`](../src/dsp/musical_gate.rs) provides a reference-compatible quadratic downward expander matching `AudioDSPTools/dsp/NoiseGate` (`10 ms` RMS envelope, `0.1` quadratic gain-reduction ratio, `5 ms` attack, `10 ms` hold, `50 ms` release, `-120.0 dB` floor). Sample-rate constants are precomputed off the per-sample loop in `prepare()`, and hot-path `log10`/`10^x` evaluations use exact-range IEEE-754 bit reduction and Horner polynomials with zero `libm` calls, locks, or allocations.
 
 **Zero-input model offset:** some trained models carry a large constant offset in their zero-input response (the reference C++ renderer reproduces it sample-constantly from sample 0, so it is model content, not a parity deviation). The gate is born Open (unity gain, steady), so the first blocks deliver that offset unattenuated and `RT_STATUS_HAS_CLIPPED` fires truthfully at unity gain; once sustained silent input closes the gate, the output mutes to zero without flagging. Clipping-flag observation point: with a steady gate the detection runs on the post-gate (fused) signal, i.e. the delivered sample; while the gate is fading it runs on the pre-gate signal before the fade ramp is applied. See [`apply_output_stage`](../src/dsp/pipeline/stages/output.rs), [`RT_STATUS_HAS_CLIPPED`](../src/common/spsc/status.rs), and the locked behavioral proof [`tests/models/dc_offset_clipping_proof.rs`](../tests/models/dc_offset_clipping_proof.rs).
+
+### 4.2.1 Input Calibration & Output Level Modes (`dsp::calibration`)
+
+Amp model gain staging is modeled in [`src/dsp/calibration.rs`](../src/dsp/calibration.rs) without synthesizing missing model metadata:
+
+- **`ModelCalibrationMeta`:** RT-safe (`Copy`, zero-allocation) snapshot of `input_level_dbu`, `output_level_dbu`, and `loudness` extracted from [`LoadedModelPair`](../src/loader/loaded_model_pair.rs) and bounded to physically plausible limits (`[-60.0, 60.0]` dBu and `[-120.0, 60.0]` dB).
+- **`OutputMode`:** Selects `Raw` (`0.0 dB` compensation), `Normalized` (default, targets `TARGET_LOUDNESS_DB = -18.0` dB using model `loudness`), or `Calibrated` (scales output relative to `input_calibration_level_dbu`, default `DEFAULT_CALIBRATION_DBU = 12.0` dBu, using model `output_level_dbu`).
+- **`compute_calibration_gains`:** Evaluates linear `(input_mult, output_mult)` multipliers in `f64` precision; absent metadata fields contribute `0.0 dB` (`1.0x`) rather than fabricating defaults.
 
 ### 4.3 Oversampling Engine (Anti-Aliasing)
 
@@ -669,7 +679,7 @@ Typed error codes are defined in [`src/common/diagnostics/error_codes.rs`](../sr
 |:----------- |:----------------------- |:--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **`E1xxx`** | Model Loading & Parsing | **Core Crate.** I/O errors, JSON/NAMB parsing, CRC32 checks, shape validation, and OOM limits.                                                                                                                                                                                                                                                            |
 | **`E2xxx`** | Audio / DSP / Real-Time | **Reserved for Downstream Hosts**, with three pure DSP exceptions constructed by the core: `E2200` (`ResamplerBuildFailed` for invalid sample rates), `E2202` (`InvalidCabsimPartitionSize` for zero partition size), and `E2304` (`HostFormatContractViolation` when planar processing helpers receive fewer channel planes than declared by the model). |
-| **`E3xxx`** | SPSC Communication      | **Core & Downstream.** Param queue overflow, GC ring status, and setup channel capacity validation (`E3103`).                                                                                                                                                                                                                                             |
+| **`E3xxx`** | SPSC Communication      | **Core & Downstream.** Param queue overflow, GC ring status, and setup channel capacity validation (`E3103`, constructed by `setup_spsc` on zero capacity or `capacity * 4` overflow).                                                                                                                                                                    |
 | **`E4xxx`** | Runtime / Host Control  | **Reserved for Downstream Hosts.** Gain parsing, CLI commands, IR file loading.                                                                                                                                                                                                                                                                           |
 | **`E5xxx`** | System & Hardware       | **Core Crate.** `E5000` (Out of Memory), `E5001` (reserved, discontinued: no runtime `x86-64-v3` check).                                                                                                                                                                                                                                                  |
 
@@ -688,6 +698,7 @@ In the event of an unhandled panic, the engine's panic hook ([`src/common/panic_
 - **PII & Path Redaction:** `ModelInfo::path_basename` uses `sanitize_model_basename` ([`src/common/diagnostics/format.rs`](../src/common/diagnostics/format.rs)) to strip directory prefixes across both `/` and `\` separators, and diagnostic formatting automatically redacts `USERPROFILE`, `LOCALAPPDATA`, drive-letter paths (`C:\...`), extended-length prefixes (`\\?\...`), and UNC shares (`\\server\share\...`).
 
 - **FIFO Retention (`MAX_CRASH_FILES = 10`):** The hook prunes the oldest files when total crash logs exceed 10.
+
 - **Programmatic Pruning:** Hosts can invoke `DiagnosticBundle::purge_old_reports(max_age_secs)` during startup to remove stale crash files.
 
 ---

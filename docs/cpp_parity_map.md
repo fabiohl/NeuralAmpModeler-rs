@@ -171,12 +171,12 @@ Backbone weights are stored in native `f32` vectors (`AlignedVec<f32>`), matchin
 
 In Standard mode (universal default), activation functions execute exact polynomial exp-based kernels (error $\sim 2 \times 10^{-7}$). In Fast mode, Padé [5,4] rational $\tanh$ and minimax degree-17 $\sigma$ are used.
 
-**Measured Interop Results (Standard Mode @ 48 kHz):**
+**Measured Interop Results (Standard Mode @ 48 kHz, [`quality-contract.json`](quality-contract.json)):**
 
 | Model         | ESR vs. NAMcore | ESR vs. f64 Ideal | SNR (dB) | MR-STFT  | Parity Verdict             |
 |:------------- |:---------------:|:-----------------:|:--------:|:--------:|:-------------------------- |
-| BossLSTM-1×16 | 8.50e-12        | 8.90e-13          | 110.7    | 2.80e-05 | ✅ Near-bit-exact          |
-| BossLSTM-2×8  | 1.00e-11        | 5.68e-13          | 110.0    | 1.57e-05 | ✅ Bit-exact / noise floor |
+| BossLSTM-1×16 | 8.51e-12        | 9.08e-13          | 110.7    | 2.82e-05 | ✅ Near-bit-exact          |
+| BossLSTM-2×8  | 1.00e-11        | 5.78e-13          | 110.0    | 1.65e-05 | ✅ Bit-exact / noise floor |
 | LSTM Official | 7.86e-13        | 2.71e-12          | 121.0    | 3.08e-05 | ✅ Near-bit-exact          |
 
 ### 2.6 Multi-Channel I/O Topology Scope
@@ -257,14 +257,14 @@ NeuralAmpModeler-rs introduces const-generic monomorphization for the four predo
 
 ### 3.2 Structural Implementation Mapping
 
-| C++ Reference (`NAM/wavenet/model.cpp`)                                         | Rust Implementation (`src/models/wavenet/`)                        | Verdict                                                                                                      |
-|:------------------------------------------------------------------------------- |:------------------------------------------------------------------ |:------------------------------------------------------------------------------------------------------------ |
-| `detail::LayerArray::ProcessInner` cascade (`model.cpp:450-511`)                | `WaveNetLayerArray::process_block_internal` (`layer_array.rs`)     | ✅ Rechannel → layer stack → head accumulate → head rechannel                                                |
-| `detail::LayerArray` head rechannel `Conv1D` (`model.cpp:399-404, 955-990`)     | `HeadRechannelDyn` (`layer_array_dyn.rs`)                          | ✅ Bit-identical Dense ($k=1, dil=1$) or dilated Conv1d ($k>1 \lor dil>1$)                                   |
-| `detail::Layer::Process` conv + mixin + activation (`model.cpp:166-376`)        | `WaveNetLayer::process_block_internal` (`layer.rs`)                | ✅ Exact arithmetic match for ungated feedforward processing                                                 |
-| `detail::Layer` `layer1x1_post_film` execution (`model.cpp:285-291, 1228-1232`) | `WaveNetA2Dyn::process_frame`, `conv1d_ch{3,8}` simd               | ✅ Unconditionally applied outside gating mode; fails closed if `!layer1x1`                                  |
-| `WaveNet::process` conditioning + stack flow (`model.cpp:744-832`)              | `WaveNetModel::process` / `WaveNetModelDyn::process`               | ✅ Matching cascade flow                                                                                     |
-| Prewarm receptive field calculation (`model.cpp:436-442, 615-620`)              | `FreeWavenetGeometry::receptive_field()`, dynamic prewarm backfill | ✅ Exact match with C++ receptive field summation ($\Sigma dil \cdot (k-1) + dil_{head} \cdot (k_{head}-1)$) |
+| C++ Reference (`NAM/wavenet/model.cpp`)                                         | Rust Implementation (`src/models/wavenet/`)                          | Verdict                                                                                                                           |
+|:------------------------------------------------------------------------------- |:-------------------------------------------------------------------- |:--------------------------------------------------------------------------------------------------------------------------------- |
+| `detail::LayerArray::ProcessInner` cascade (`model.cpp:450-511`)                | `WaveNetLayerArray::process_block_internal` (`layer_array.rs`)       | ✅ Rechannel → layer stack → head accumulate → head rechannel                                                                     |
+| `detail::LayerArray` head rechannel `Conv1D` (`model.cpp:399-404, 955-990`)     | `HeadRechannelDyn` (`layer_array_dyn.rs`)                            | ✅ Bit-identical Dense ($k=1, dil=1$) or dilated Conv1d ($k>1 \lor dil>1$)                                                        |
+| `detail::Layer::Process` conv + mixin + activation (`model.cpp:166-376`)        | `WaveNetLayer::process_block_internal` (`layer.rs`)                  | ✅ Exact arithmetic match for ungated feedforward processing                                                                      |
+| `detail::Layer` `layer1x1_post_film` execution (`model.cpp:285-291, 1228-1232`) | `WaveNetA2Dyn::process_frame`, `conv1d_ch{3,8}` simd                 | ✅ Unconditionally applied outside gating mode; fails closed if `!layer1x1`                                                       |
+| `WaveNet::process` conditioning + stack flow (`model.cpp:744-832`)              | `WaveNetModel::process` / `WaveNetModelDyn::process`                 | ✅ Matching cascade flow                                                                                                          |
+| Prewarm receptive field calculation (`model.cpp:436-442, 615-620`)              | `FreeWavenetGeometry::receptive_field()`, dynamic prewarm backfill   | ✅ Exact match with C++ receptive field summation ($\Sigma dil \cdot (k-1) + dil_{head} \cdot (k_{head}-1)$)                      |
 | Per-layer `kernel_sizes` array (`model.cpp:1003-1032`)                          | `FreeWavenetGeometry::layer_kernel_sizes`, `build_wavenet_array_dyn` | ✅ Verified — distinct kernel per layer, `kernel_size`↔`kernel_sizes` exclusivity, length/ceiling rejection, C++/f64/NumPy parity |
 
 ### 3.3 Analytical Prewarm Shortcut
@@ -296,14 +296,14 @@ Topologies containing any of the above return `WavenetTopologyResult::Rejected("
 
 ### 3.5 Measured Interop Metrics
 
-Measured against NAMcore baseline at 48 kHz:
+Measured against NAMcore baseline at 48 kHz ([`quality-contract.json`](quality-contract.json)):
 
 | Model                   | ESR vs. NAMcore | ESR vs. f64 Ideal | SNR (dB) | MR-STFT  | Parity Verdict     |
 |:----------------------- |:---------------:|:-----------------:|:--------:|:--------:|:------------------ |
 | WaveNet Standard (CH16) | 2.31e-14        | 9.05e-15          | 136.4    | 6.46e-06 | ✅ Bit-exact floor |
-| WaveNet Feather (CH8)   | 4.74e-14        | 2.00e-14          | 133.2    | 8.86e-06 | ✅ Bit-exact floor |
-| WaveNet Nano (CH4)      | 6.43e-14        | 3.05e-14          | 131.9    | 7.67e-06 | ✅ Bit-exact floor |
-| EVH-5150-Lite (CH12)    | 1.46e-12        | 2.64e-13          | 118.4    | 4.31e-06 | ✅ Near-bit-exact  |
+| WaveNet Feather (CH8)   | 4.74e-14        | 2.00e-14          | 133.2    | 8.77e-06 | ✅ Bit-exact floor |
+| WaveNet Nano (CH4)      | 8.70e-14        | 3.05e-14          | 130.6    | 7.48e-06 | ✅ Bit-exact floor |
+| EVH-5150-Lite (CH12)    | 1.46e-12        | 2.64e-13          | 118.4    | 4.75e-06 | ✅ Near-bit-exact  |
 | WaveNet Official (CH3)  | 9.03e-14        | 6.13e-14          | 130.4    | 1.66e-05 | ✅ Bit-exact floor |
 
 **Scenario provenance for WaveNet Official.** The table row above is the short
@@ -353,16 +353,16 @@ Models matching these constraints route to `WaveNetA2<3>` or `WaveNetA2<8>`. Top
 
 ### 4.2 Measured Interop Metrics (Fast & Dynamic Paths)
 
-Measured against NAMcore at 48 kHz:
+Measured against NAMcore at 48 kHz ([`quality-contract.json`](quality-contract.json)):
 
 | Variant / Fixture                | ESR vs. NAMcore | ESR vs. f64 Ideal | SNR (dB) | MR-STFT  | Parity Verdict     |
 |:-------------------------------- |:---------------:|:-----------------:|:--------:|:--------:|:------------------ |
-| WaveNet A2-Full (CH8, Fast)      | 1.12e-13        | 7.83e-14          | 129.5    | 1.68e-05 | ✅ Bit-exact floor |
-| WaveNet A2-Lite (CH3, Fast)      | 6.43e-14        | 1.82e-14          | 131.9    | 9.54e-06 | ✅ Bit-exact floor |
-| WaveNet A2-FiLM-Full (CH8, Dyn)  | 1.18e-14        | 8.75e-15          | 139.3    | 7.85e-06 | ✅ Bit-exact floor |
-| WaveNet A2-FiLM-Lite (CH3, Dyn)  | 3.82e-13        | 1.61e-13          | 124.2    | 1.69e-05 | ✅ Near-bit-exact  |
-| WaveNet A2 Dynamic Gated (CH8)   | 2.56e-14        | 1.34e-14          | 135.9    | 8.78e-06 | ✅ Bit-exact floor |
-| WaveNet A2 Dynamic Blended (CH3) | 5.35e-14        | 2.65e-14          | 132.7    | 9.97e-06 | ✅ Bit-exact floor |
+| WaveNet A2-Full (CH8, Fast)      | 1.46e-13        | 7.83e-14          | 128.3    | 1.68e-05 | ✅ Bit-exact floor |
+| WaveNet A2-Lite (CH3, Fast)      | 8.36e-14        | 1.82e-14          | 130.8    | 9.54e-06 | ✅ Bit-exact floor |
+| WaveNet A2-FiLM-Full (CH8, Dyn)  | 1.20e-14        | 7.26e-15          | 139.2    | 7.13e-06 | ✅ Bit-exact floor |
+| WaveNet A2-FiLM-Lite (CH3, Dyn)  | 3.18e-13        | 1.44e-13          | 125.0    | 1.09e-05 | ✅ Near-bit-exact  |
+| WaveNet A2 Dynamic Gated (CH8)   | 2.81e-14        | 1.84e-14          | 135.5    | 9.33e-06 | ✅ Bit-exact floor |
+| WaveNet A2 Dynamic Blended (CH3) | 5.10e-14        | 2.96e-14          | 132.9    | 1.01e-05 | ✅ Bit-exact floor |
 
 ### 4.3 ✅ Retired KB-A2-MAX: `wavenet_a2_max.nam` — parity verified
 
@@ -770,7 +770,7 @@ upstream rejection outcomes:
 | P7  | A2 Fast-Path Fixtures Synthetic Only    | **Documented Caveat**    | Fast-path parity validated on synthetic calibrated weights; community trained captures restricted by third-party licenses.                                                                                                                                                                                                                                                                    |
 | P8  | Linear $M \to N$ Channel Mismatch       | **Fail-Closed**          | Rejects topologies where both $in > 1$ and $out > 1$ with $in \neq out$ (e.g. $2 \to 3$) ([§6.2.1](#621-namcore-v060-multichannel-topology--weight-specification)).                                                                                                                                                                                                                           |
 | P9  | Sequential Child & Top-Level Invariants | **Fail-Closed**          | Rejects non-empty top-level weights, non-matching inter-stage channels, and conflicting known sample rates ([§6.6](#66-sequential-namcore-v060)).                                                                                                                                                                                                                                             |
-| P10 | WaveNet A1 per-layer `kernel_sizes`     | **Verified Parity**      | Distinct kernel per layer accepted with dimensional validation; catalog fast-path only for homogeneous `k=3`. Fixture is accepted by pinned C++ `render` and matches engine f32 / Rust f64 / NumPy (`tests/models/wavenet_geometry_parity_test.rs`, §3.2/§3.4). Remaining A1 geometry families below stay fail-closed. |
+| P10 | WaveNet A1 per-layer `kernel_sizes`     | **Verified Parity**      | Distinct kernel per layer accepted with dimensional validation; catalog fast-path only for homogeneous `k=3`. Fixture is accepted by pinned C++ `render` and matches engine f32 / Rust f64 / NumPy (`tests/models/wavenet_geometry_parity_test.rs`, §3.2/§3.4). Remaining A1 geometry families below stay fail-closed.                                                                        |
 
 ### 7.5 Concordant Rejection Ledger: `known_gap:condition_lstm_rejected_by_both`
 
@@ -873,13 +873,13 @@ and 1 is the known-broken `condition_dsp` LSTM probe.
 
 **Retained fail-closed GAPs (intentionally unimplemented):**
 
-| Family | Current behavior | Reason / next evidence required |
-|:--- |:--- |:--- |
-| A1 `layer1x1.active=false` / `groups>1` | `E1305` guardrail | The A1 dynamic engine always builds and reads the 1×1 block; supporting `false` changes the weight stream and residual path, and grouped 1×1 needs a grouped-dense kernel. Not required by any allowed fixture. |
-| A1 non-Tanh/ReLU activation | `E1215` | The A1 SIMD layer only implements Tanh/ReLU; other valid activations need new activation kernels and parity fixtures. |
-| A1 `head1x1` / FiLM / secondary activation | `E1305` guardrail | These are A2 topology features; the A2 path already supports them where shape detection routes there. A1-shape models using them remain rejected. |
-| Slimmable `bottleneck != channels` | `E1316` guardrail | C++ `compute_slim_bottleneck` (`slimmable.cpp:79-85`) scales the bottleneck; the Rust slicer has no distinct-bottleneck representation. Implementing it requires a bottleneck-aware slice/build path plus `render --slim` parity. |
-| LSTM as `condition_dsp` | `E1215` policy + concordant C++ rejection | The existing `wavenet_condition_lstm.nam` probe is structurally invalid (condition_size 3 vs 1 output) and is rejected by both engines. A valid LSTM-condition fixture and convergent dual oracles are required before enabling it (§7.5). |
+| Family                                     | Current behavior                          | Reason / next evidence required                                                                                                                                                                                                            |
+|:------------------------------------------ |:----------------------------------------- |:------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| A1 `layer1x1.active=false` / `groups>1`    | `E1305` guardrail                         | The A1 dynamic engine always builds and reads the 1×1 block; supporting `false` changes the weight stream and residual path, and grouped 1×1 needs a grouped-dense kernel. Not required by any allowed fixture.                            |
+| A1 non-Tanh/ReLU activation                | `E1215`                                   | The A1 SIMD layer only implements Tanh/ReLU; other valid activations need new activation kernels and parity fixtures.                                                                                                                      |
+| A1 `head1x1` / FiLM / secondary activation | `E1305` guardrail                         | These are A2 topology features; the A2 path already supports them where shape detection routes there. A1-shape models using them remain rejected.                                                                                          |
+| Slimmable `bottleneck != channels`         | `E1316` guardrail                         | C++ `compute_slim_bottleneck` (`slimmable.cpp:79-85`) scales the bottleneck; the Rust slicer has no distinct-bottleneck representation. Implementing it requires a bottleneck-aware slice/build path plus `render --slim` parity.          |
+| LSTM as `condition_dsp`                    | `E1215` policy + concordant C++ rejection | The existing `wavenet_condition_lstm.nam` probe is structurally invalid (condition_size 3 vs 1 output) and is rejected by both engines. A valid LSTM-condition fixture and convergent dual oracles are required before enabling it (§7.5). |
 
 These guardrails are intentional, documented and fail-closed; no previously
 accepted model changed semantics and no threshold or golden was relaxed.

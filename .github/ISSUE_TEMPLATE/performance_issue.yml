@@ -81,9 +81,10 @@ body:
         # Recommended isolated reproduction commands:
         1. cargo run --quiet --bin simd_probe                                  # Probe CPU SIMD flags & governor
         2. taskset -c <isolated-core> cargo bench --bench regression_gate
-        # Quality contract baseline validation:
-        3. utils/quality-dashboard.sh --check docs/quality-contract.json
-        4. Observe regression on benchmark group `wavenet_standard`
+        # Canonical regression & quality contract gates:
+        3. cargo run --locked --release --features testing --bin nam_perf_gate -- run --check docs/quality-contract.json
+        4. utils/quality-dashboard.sh --check docs/quality-contract.json
+        5. Observe regression on benchmark group `wavenet_standard`
     validations:
       required: true
 

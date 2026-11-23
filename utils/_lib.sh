@@ -125,7 +125,7 @@ require_nightly() {
 }
 
 assert_ran_tests() {
-  local log="$1" min="${2:-1}" clean passed
+  local - log="$1" min="${2:-1}" clean passed; set +x
   ran_tests "$log" || return 1
   clean=$(sed -E 's/\x1b\[[0-9;]*[a-zA-Z]//g' "$log" 2>/dev/null || true)
   passed=$(awk '/test result: ok\./ { p+=$4 } END { print p+0 }' <<<"$clean")

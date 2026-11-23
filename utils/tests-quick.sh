@@ -31,7 +31,7 @@ if [ "$rc_tests" -ne 0 ]; then
   grep -E '(panicked at|FAILED)' "$log_tests" || { echo "--- Cargo/build failure (tail of $log_tests) ---" >&2; tail -n 25 "$log_tests" >&2; }
 fi
 awk '/test result: / { p+=$4; f+=$6; i+=$8 } END { printf "Tests summary: %d passed, %d failed, %d ignored\n", p, f, i }' "$log_tests"
-# Measured: x86_64=2434 passed (2026-11-22); threshold=2000
+# Measured: x86_64=2419 passed (2026-11-23); threshold=2000
 if [ "$rc_tests" -eq 0 ] && assert_ran_tests "$log_tests" 2000; then
   emit "PHASE: tests PASS log=$log_tests"
 else

@@ -413,19 +413,19 @@ Global limit: `MAX_MODEL_BYTES = 256 MiB`. Files larger than this limit are reje
 
 ## 10. Reference Constants
 
-| Constant            | Value                   | Symbol / Location                                                                                    |
-|:------------------- |:----------------------- |:---------------------------------------------------------------------------------------------------- |
-| `FLAG_HAS_CRC32`    | `0x01` (u8)             | `FLAG_HAS_CRC32` in [`src/loader/namb/header.rs`](../src/loader/namb/header.rs)                      |
-| `NAMB_HEADER_LEN`   | `80` bytes (0x50)       | `NAMB_HEADER_LEN` in [`src/loader/namb/header.rs`](../src/loader/namb/header.rs)                     |
-| `MAX_MODEL_BYTES`   | `268_435_456` (256 MiB) | `MAX_MODEL_BYTES` in [`src/loader/loaded_model_pair.rs`](../src/loader/loaded_model_pair.rs)         |
-| `MAX_FLOAT_COUNT`   | `67_108_864` floats     | `MAX_FLOAT_COUNT` in [`src/loader/namb/mod.rs`](../src/loader/namb/mod.rs)                           |
-| CRC polynomial      | `0xEDB88320`            | `crc32_ieee_update` in [`src/loader/namb/header.rs`](../src/loader/namb/header.rs)                   |
-| CRC init / xorout   | `0xFFFFFFFF`            | `crc32_ieee`, `crc32_ieee_update` in [`src/loader/namb/header.rs`](../src/loader/namb/header.rs)     |
-| Magic               | `0x4E414D42`            | `NambHeader::validate` in [`src/loader/namb/header.rs`](../src/loader/namb/header.rs)                |
-| Default sample rate | `48000.0` (f32)         | `DEFAULT_SAMPLE_RATE` in [`src/loader/loaded_model_pair.rs`](../src/loader/loaded_model_pair.rs)     |
-| Default input dBu   | `12.0` (f32)            | `DEFAULT_INPUT_LEVEL_DBU` in [`src/loader/loaded_model_pair.rs`](../src/loader/loaded_model_pair.rs) |
-| Default output dBu  | `-6.0` (f32)            | Literal fallback in `encode_namb`, [`src/loader/namb_encoder.rs`](../src/loader/namb_encoder.rs)     |
-| Default loudness    | `-18.0` (f32)           | `DEFAULT_LOUDNESS_DB` in [`src/loader/loaded_model_pair.rs`](../src/loader/loaded_model_pair.rs)     |
+| Constant            | Value                   | Symbol / Location                                                                                                                                                                        |
+|:------------------- |:----------------------- |:---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `FLAG_HAS_CRC32`    | `0x01` (u8)             | `FLAG_HAS_CRC32` in [`src/loader/namb/header.rs`](../src/loader/namb/header.rs)                                                                                                          |
+| `NAMB_HEADER_LEN`   | `80` bytes (0x50)       | `NAMB_HEADER_LEN` in [`src/loader/namb/header.rs`](../src/loader/namb/header.rs)                                                                                                         |
+| `MAX_MODEL_BYTES`   | `268_435_456` (256 MiB) | `MAX_MODEL_BYTES` in [`src/loader/loaded_model_pair.rs`](../src/loader/loaded_model_pair.rs)                                                                                             |
+| `MAX_FLOAT_COUNT`   | `67_108_864` floats     | `MAX_FLOAT_COUNT` in [`src/loader/namb/mod.rs`](../src/loader/namb/mod.rs)                                                                                                               |
+| CRC polynomial      | `0xEDB88320`            | `crc32_ieee_update` in [`src/loader/namb/header.rs`](../src/loader/namb/header.rs)                                                                                                       |
+| CRC init / xorout   | `0xFFFFFFFF`            | `crc32_ieee`, `crc32_ieee_update` in [`src/loader/namb/header.rs`](../src/loader/namb/header.rs)                                                                                         |
+| Magic               | `0x4E414D42`            | `NambHeader::validate` in [`src/loader/namb/header.rs`](../src/loader/namb/header.rs)                                                                                                    |
+| Default sample rate | `48000.0` (f32)         | `DEFAULT_SAMPLE_RATE` in [`src/loader/loaded_model_pair.rs`](../src/loader/loaded_model_pair.rs)                                                                                         |
+| Default input dBu   | `12.0` (f32)            | `DEFAULT_INPUT_LEVEL_DBU` in [`src/loader/loaded_model_pair.rs`](../src/loader/loaded_model_pair.rs); `DEFAULT_CALIBRATION_DBU` in [`src/dsp/calibration.rs`](../src/dsp/calibration.rs) |
+| Default output dBu  | `-6.0` (f32)            | Literal fallback in `encode_namb`, [`src/loader/namb_encoder.rs`](../src/loader/namb_encoder.rs)                                                                                         |
+| Default loudness    | `-18.0` (f32)           | `DEFAULT_LOUDNESS_DB` in [`src/loader/loaded_model_pair.rs`](../src/loader/loaded_model_pair.rs); `TARGET_LOUDNESS_DB` in [`src/dsp/calibration.rs`](../src/dsp/calibration.rs)          |
 
 ## 11. References
 
