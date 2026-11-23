@@ -12,78 +12,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [4.0.0] - 2026-11-22
+## [4.0.0] - 2026-11-23
 
-Pre-release, not yet published to crates.io. This major release hardens the A2 single-frame path with typed preconditions, bounds SPSC swap coalescing, tightens loader and CabSim input validation, documents the streaming contract, and updates examples and release tooling.
+This major release directly supersedes `2.0.0` (`3.0.0` was previously published and yanked on crates.io and was never tagged from this series). It resolves `MirroredBuffer<T>` physical-aliasing soundness, eliminates audio-thread `drop_glue`, enforces fail-closed contracts across `A2Layer`, `.nam` JSON loading, WAV/CabSim RIFF validation, and `StreamingResampleBuffer`, adds Experimental Verifiable Windows 11 (`x86_64` and `aarch64`) support, introduces reference-compatible input calibration (`OutputMode`) and `MusicalNoiseGate`, expands WaveNet A1/A2 parity, and refreshes verified latency baselines. Read **Breaking Changes and Migration** before upgrading from `2.0.0`.
 
-Upgrading from `2.0.0` also requires reading the **Breaking Changes and Migration** section of `3.0.0` below.
+### Highlights [4.0.0]
 
-### SemVer Inventory [4.0.0]
+- **`MirroredBuffer<T>` soundness and fail-closed `A2Layer`:** Removed `DerefMut` from `MirroredBuffer<T>` in favor of safe bounded mutable windows (`window_mut`, `try_window_mut`, `write_slice_at`, `IndexMut<usize>`), and hardened `A2Layer::process_single_frame` alongside the new fallible `A2Layer::try_process_single_frame` (`A2LayerError`).
+- **Experimental Verifiable Windows 11 support (`x86_64` and `aarch64`):** Added native Win32 placeholder virtual-memory mirroring, VEH-protected ARM64 timer probing with `std::time::Instant` fallback, portable path redaction, `tools/preflight`, and native CI parity achieving `0 ULP` bitwise identity across Linux, macOS, and Windows.
+- **Input calibration & musical noise gate:** Added reference-compatible `OutputMode` dBu calibration (`src/dsp/calibration.rs`) and the branchless, zero-`libm` quadratic downward expander `MusicalNoiseGate` (`src/dsp/musical_gate.rs`), re-exported through `prelude`.
+- **Zero-`drop_glue` real-time hardening:** Eliminated RT-thread `drop_glue` via `park_without_drop` in the SPSC GC cascade and swap drain, `Arc::ptr_eq` no-op `inject_rt_status_rt`, allocation-free scalar WaveNet adaptive targeting, and bounded SPSC swap coalescing.
+- **Expanded WaveNet A1/A2 parity & faster baselines:** Added canonical multi-stage `PostStackHead`, per-layer `kernel_sizes` in WaveNet A1, `LinearModel` prewarm parity with NAMCore PR #352, stricter `.nam`/WAV validation, and refreshed SLA baselines (`WaveNet Standard` `41.26 µs`, `WaveNet Feather` `14.63 µs`, `LSTM 1×16` `6.44 µs`).
 
-Each change is classified as `aditiva` (new; existing callers unaffected), `compatível` (no observable change for valid callers), `quebra` (input previously accepted or behavior changed), or `sem quebra` (documentation only).
+### Breaking Changes and Migration [4.0.0]
 
-| Area | Change | Class |
-|---|---|---|
-| `A2Layer::process_single_frame` | Invalid input: `debug_assert!` in debug builds; no buffer mutation in release builds | quebra (debug) / compatível (release) |
-| `A2Layer::try_process_single_frame` and `A2LayerError` | New fallible API with one variant per precondition; `#[non_exhaustive]` | aditiva |
-| A2 topology: `head1x1_active`, `mixin_groups != 1`, `l1x1_groups != 1`, mixin or residual width different from output channels | Rejected by `try_`; the legacy path treats them as invalid input | quebra (possível) |
-| A2 buffer, weight, bias, grouped-layout and integer-overflow preconditions | Rejected by `try_`; the legacy path treats them as invalid input. Dilation above `isize::MAX` is rejected for every kernel size | quebra (possível) |
-| A2 requested instruction set | Checked against the host before kernel dispatch | compatível |
-| A2 output for valid inputs | Bit-for-bit identical to the previous release | compatível |
-| Metadata `training` size budget | One budget shared by the whole tree; historical units documented; nesting limit is 16 containers (17 are rejected) | quebra (possível) |
-| `num_layers` and layer dimensions | Validated before replication. More than 64 layers, PReLU vectors above 512 slopes, and aggregate PReLU cost above 64 × 512 are rejected. `0` is still accepted | quebra (possível) |
-| WAV and CabSim RIFF container | `riff_size` below 4 or beyond the buffer is rejected; chunks crossing the container end are rejected; bytes after the container are ignored | quebra (malformed) / compatível (valid) |
-| Odd-sized terminal `data` chunk without pad byte | Tolerated only when the payload ends exactly at the container end | compatível |
-| `testing` feature, `write_wav_f32` | Writes a legal RIFF size (`36 + data`) | compatível (test helper) |
-| Streaming contract (`streaming_adapter`) | Underflow and consumption behavior documented; no behavior change | sem quebra |
-| `MirroredBuffer<T>` | Doc-test added for `try_window_mut` across the seam | sem quebra |
-| `examples/streaming_partial.rs` | New partial-progress streaming example | aditiva |
-| `examples/cabsim.rs`, `examples/offline_render.rs` | Errors propagated with `?`, preserving the `NamErrorCode` cause | compatível |
-| SPSC swap coalescing (`common::spsc`) | A stale head no longer suppresses a valid deferred candidate; no signature change | compatível |
-| `utils/` QA scripts | `-h` and invalid usage emit one `RESULT` without overwriting the previous carrier; heap audit runs with `--no-fail-fast`; capability `GAP` only when explicitly declared | compatível (repository tooling) |
-
----
-
-## [3.0.0] - 2026-11-17
-
-This major release resolves physical-aliasing soundness in `MirroredBuffer<T>`, enforces strict backpressure and FIFO ordering in `StreamingResampleBuffer`, converges extensible WAV validation, adds experimental verifiable Windows 11 (`x86_64` and `aarch64`) support, and hardens cross-platform diagnostics and QA gates. Read **Breaking Changes** before upgrading from `2.0.0`.
-
-### Breaking Changes and Migration [3.0.0]
-
-- **`MirroredBuffer<T>` `DerefMut` removed (`src/dsp/mirror_buf.rs`):** Removed `impl DerefMut for MirroredBuffer<T>`, which previously exposed a `2N` mutable slice and allowed safe code (e.g. `split_at_mut(size())`) to obtain two aliasing `&mut [T]` references backed by the same physical memory. `Deref<Target = [T]>` (`2N` shared reads) is preserved, and safe bounded mutable access is now provided via `Index<I: SliceIndex<[T]>>`, `IndexMut<usize>`, `window_mut(offset, len)`, `try_window_mut(offset, len)` (enforcing `len <= size()`), `write_slice_at`, `fill`, and allocation-free `copy_within`.
+- **`MirroredBuffer<T>` `DerefMut` removed (`src/dsp/mirror_buf.rs`):** Removed `impl DerefMut for MirroredBuffer<T>`, which previously exposed a `2N` mutable slice and allowed safe code (e.g. `split_at_mut(size())`) to create aliasing `&mut [T]` references backed by the same physical memory. `Deref<Target = [T]>` (`2N` shared reads) is preserved; migrate mutable callers to `IndexMut<usize>`, `window_mut(offset, len)`, `try_window_mut(offset, len)` (enforcing `len <= size()`), `write_slice_at`, `fill`, or allocation-free `copy_within`.
+- **`A2Layer::process_single_frame` preconditions (`src/models/a2/layer.rs`):** Invalid inputs — including active `head1x1` projections (`HeadProjectionActive`), grouped input mixins (`mixin_groups != 1`), grouped `layer1x1` residuals (`l1x1_groups != 1`), mixin or residual widths differing from output channels, buffer/weight/bias/grouped-layout bounds violations, integer overflows, and dilations exceeding `isize::MAX` (for every kernel size) — now trigger `debug_assert!` in debug builds and avoid buffer mutation in release builds. Valid inputs produce bit-for-bit identical outputs. Migrate to `A2Layer::try_process_single_frame` (`A2LayerError`, `#[non_exhaustive]`) for typed precondition errors.
 - **WaveNet post-stack head and A1 geometry structs:**
-  - `PostStackHead` (`src/models/wavenet/post_stack_head.rs`) replaced public `conv`, `activation`, and `state` fields and `process_block_internal` with canonical multi-stage head fields (`stages`, `canonical`).
-  - `HeadConfig` (`src/loader/nam_json/model.rs`) added `kernel_sizes`, and `FreeWavenetGeometry` (`src/loader/nam_json/topology/wavenet/mod.rs`) added `layer_kernel_sizes` to support per-layer kernel sizes in WaveNet A1 geometry.
+  - `PostStackHead` (`src/models/wavenet/post_stack_head.rs`) replaced public `conv`, `activation`, and `state` fields and `process_block_internal` with canonical multi-stage `stages` (`Vec<HeadStage>`) and `canonical` (`bool`) fields.
+  - `HeadConfig` (`src/loader/nam_json/model.rs`) added `kernel_sizes`, and `FreeWavenetGeometry` (`src/loader/nam_json/topology/wavenet/mod.rs`) added `layer_kernel_sizes` to represent per-layer kernel sizes in WaveNet A1 geometry.
+- **Stricter `.nam` JSON loader and WAV/CabSim RIFF validation:**
+  - `metadata.training` shares a single `1,048,576`-unit cost budget across the tree with a container nesting limit of 16 (depth 17 is rejected); `num_layers` and layer activation arrays are validated before replication (`num_layers > 64`, PReLU vectors `> 512` slopes, and aggregate PReLU cost `> 64 × 512` are rejected; `0` remains accepted); WaveNet gating, PReLU, FiLM, and `condition_dsp` channel parsing fail closed on mismatched geometries.
+  - Converged WAV and CabSim RIFF parsing (`src/loader/wav.rs`, `src/dsp/cabsim/ir_parse.rs`) rejects `riff_size < 4` or exceeding the buffer as well as chunks crossing the container end, while ignoring trailing bytes after the container end and tolerating odd-sized terminal `data` chunks only when their payload ends exactly at the container end. `WAVE_FORMAT_EXTENSIBLE` (`0xFFFE`) enforces `fmt_size >= 40`, `cbSize >= 22`, exact `EXTENSIBLE_GUID_TAIL`, `valid_bits == bits_per_sample`, `block_align`, and `byte_rate`.
 - **Internal allocator metadata (`src/math/common/huge_alloc.rs`):** Marked `AllocInfo` and `deallocate_huge` as `#[doc(hidden)]` (paired exclusively with `pub(crate) allocate_huge_pages`).
 
-### Added [3.0.0]
+### Added [4.0.0]
 
 - **Experimental Verifiable Windows 11 support (`x86_64-pc-windows-msvc` and `aarch64-pc-windows-msvc`):**
   - Win32 `MirroredBuffer<T>` backend (`src/dsp/mirror_buf/windows.rs`) using `VirtualAlloc2` + `MapViewOfFile3` placeholders, 6-stage `S0`–`S5` transactional rollback, immediate `CloseHandle`, and dual `UnmapViewOfFile` on `Drop`, preserving `size_of::<MirroredBuffer<T>>() == 16`.
   - ARM64 timer probe (`src/common/tsc.rs`) protected by a Vectored Exception Handler (`AddVectoredExceptionHandler`) with automatic fallback to `std::time::Instant`.
-  - Portable PII/Windows/UNC path redaction and crash directory resolution (`src/common/diagnostics/format.rs`, `src/common/panic_hook.rs`, `src/loader/loaded_model_pair.rs`).
-  - Internal `nam-preflight` diagnostic crate (`tools/preflight`), `.gitattributes` (`eol=lf`), and native CI jobs (`windows-2025`, `windows-11-arm`) integrated into `cross-platform-parity` (`0 ULP` bitwise parity across all 7 canonical models).
-- **WaveNet A1 per-layer `kernel_sizes` and canonical multi-stage `PostStackHead`** (`src/models/wavenet/`, `src/loader/nam_json/`), plus `LinearModel` prewarm sample parity matching NAMCore PR #352.
-- **Fail-closed QA reconcilers (`tools/qa`):** Added typed `nam_simd_parity` (reconciling the 10 mandatory AVX2↔AVX-512 parity cases via `NAM_SIMD_PARITY_JSONL`) and `nam_skips` (fail-closed `SkipRecord` JSONL consumer in `tests-quick.sh` and `tests-long.sh`), replacing log-text `grep` checks.
+  - Portable PII, Windows drive-path, and UNC path redaction (`src/common/diagnostics/format.rs`, `src/common/panic_hook.rs`, `src/loader/loaded_model_pair.rs`).
+  - Workspace `tools/preflight` (`nam-preflight`) diagnostic binary, `.gitattributes` (`eol=lf`), and native CI jobs (`windows-2025`, `windows-11-arm`) integrated into `cross-platform-parity` (`0 ULP` bitwise identity across all 7 canonical models).
+- **Input calibration, musical noise gate, and CabSim helpers:**
+  - `src/dsp/calibration.rs`: `OutputMode` (`Raw`, `Normalized`, `Calibrated`), `CalibrationGains`, `ModelCalibrationMeta`, `compute_calibration_gains`, and `sanitize_calibration_level_dbu`, re-exported in `prelude`.
+  - `src/dsp/musical_gate.rs`: reference-compatible quadratic downward expander `MusicalNoiseGate` with off-RT `prepare` and branchless zero-`libm` hot-path `log10`/`10^x` approximations, re-exported in `prelude`.
+  - `src/dsp/cabsim/mod.rs`: `validate_single_channel_model` and `compute_nam_tail_budget`.
+- **Fallible A2 single-frame path (`src/models/a2/layer.rs`):** Added `A2Layer::try_process_single_frame` and `#[non_exhaustive]` `A2LayerError`, verifying the requested instruction set against the host before kernel dispatch.
+- **Real-time zero-drop & pipeline telemetry APIs:**
+  - `StaticModel::inject_rt_status_rt` and `WaveNetA2::inject_rt_status_rt` with `Arc::ptr_eq` no-op semantics to prevent `Arc::drop_slow` on the audio thread (`src/models/static_model.rs`, `src/models/a2/model/static/mod.rs`).
+  - Allocation-free scalar WaveNet adaptive channel targeting (`wavenet_mono_rt`, `wavenet_rt_target_ch`, `clear_wavenet_registration_rt` in `src/dsp/adaptive.rs`).
+  - `DspBridge` raw-pointer atomic readers (`written_gen_raw`, `consumed_gen_raw`, `drain_dropped_frames_raw` in `src/dsp/pipeline/bridge.rs`) and `write_bridge_stamped` (`src/dsp/pipeline/stages/bridge.rs`) for capture-timestamped output.
+- **WaveNet A1 & Linear parity:** Canonical multi-stage `PostStackHead` (`src/models/wavenet/post_stack_head.rs`), per-layer `kernel_sizes` (`src/loader/nam_json/topology/wavenet/mod.rs`), and `LinearModel` prewarm sample parity matching NAMCore PR #352.
+- **Expanded `NamErrorCode` catalog (`src/common/diagnostics/error_codes.rs`):** Added `E2004` (`OsScratchCapacity`), `E2111`–`E2115` (PM-QoS and sink probes), `E2120` (`PageSizeQueryFailed`), `E2130`–`E2131` (quiescence barriers), `E2303` (`RtGetSchedFailed`), `E2305`–`E2308` (`NonFiniteInputContained`, `CpuOutOfBounds`, `RateMismatch`, `RtSchedFailed`), and `E3104`–`E3105` (`SlimmableSliceFailed`, `SlimmableResetFailed`).
+- **Examples, docs, and QA tooling:** Added `examples/streaming_partial.rs`, a seam doc-test on `MirroredBuffer<T>::try_window_mut`, `rust-toolchain.toml` pinning the stable channel, and fail-closed `tools/qa` tools (`nam_simd_parity` for AVX2 ↔ AVX-512 JSONL reconciliation, `nam_skips` for JSONL skip enforcement, and third-party mirror & contract verification commands).
 
-### Changed [3.0.0]
+### Changed [4.0.0]
 
-- **`StreamingResampleBuffer` backpressure and FIFO ordering (`src/dsp/resampling/streaming_adapter.rs`):** Bounded `drain_model_to_out` to `out_fifo.free() + discard_remaining` with `unpop` preservation and zero-progress termination; resumed draining during `pull_output`; restricted `process` bypass fast-path to empty FIFOs; and signaled `StreamingResult::underflow` immediately when `produced < drained` without fabricating output samples.
-- **Typed resampler construction errors (`src/dsp/resampling/streaming_adapter.rs`):** Switched `StreamingResampleBuffer` to `NamResampler::new_simple_typed` and `new_linear_simple_typed` so invalid sample rates report `NamErrorCode::ResamplerBuildFailed` (`E2200`) instead of `OutOfMemory`.
+- **Real-time SPSC hardening (`src/common/spsc/`):** Added `park_without_drop` (`gc.rs`, `swap.rs`) so parking payloads in empty slots emits no `drop_glue` for overwritten `None` values on the audio thread, and bounded swap coalescing (`swap.rs`) so a stale head no longer suppresses a valid deferred candidate.
+- **`StreamingResampleBuffer` backpressure, FIFO ordering, and typed errors (`src/dsp/resampling/streaming_adapter.rs`):** Bounded `drain_model_to_out` to `out_fifo.free() + discard_remaining` with `unpop` preservation and zero-progress termination; resumed draining during `pull_output`; restricted `process` bypass fast-path to empty FIFOs; signaled `StreamingResult::underflow` immediately when `produced < drained` without fabricating output samples; documented underflow and consumption contracts; and switched construction to `NamResampler::new_simple_typed` / `new_linear_simple_typed` so invalid rates return `NamErrorCode::ResamplerBuildFailed` (`E2200`) instead of `OutOfMemory`.
 - **Cross-platform `tsc`, `huge_alloc`, `mirror_buf`, and diagnostics cleanup:**
-  - Removed unreachable `QueryPerformanceCounter` dead code and `"Win32_System_Performance"` from root `Cargo.toml` in Windows ARM64 `read_counter()` hot-path (`src/common/tsc.rs`).
-  - Moved POSIX `memfd_create`/`shm_open` backing helpers from `huge_alloc.rs` to `src/dsp/mirror_buf/posix.rs`, restricted Linux `mmap` huge-page paths to `target_os = "linux"`, and routed macOS allocations through the global allocator (`AllocInfo::Heap` / `HugePageStatus::Heap`).
-  - Parameterized `baseline_isa_label()` for `x86_64` vs `aarch64`, added `uname`/`RtlGetVersion` kernel version detection in `system_info.rs`, scoped `emit_irq_advisory` to Linux, and implemented `sysctlbyname` CPU/OS reporting on macOS in `tools/preflight`.
-- **Documentation, examples, and `docs.rs` surface:** Aligned `examples/offline_render.rs` and `README.md` (separating `crates.io` consumers from repo checkouts and fixing `nam_parity_vector` CLI syntax), updated `utils/consumer-smoke.sh` to validate the extracted `.crate` tarball, refined `doc(cfg)` attributes on `rt_hardening`, and extended `utils/docsrs-check.sh` across all 5 `[package.metadata.docs.rs]` targets.
+  - Removed unreachable `QueryPerformanceCounter` dead code and `"Win32_System_Performance"` from `Cargo.toml` in Windows ARM64 `read_counter()` (`src/common/tsc.rs`).
+  - Moved POSIX `memfd_create`/`shm_open` backing helpers from `huge_alloc.rs` to `src/dsp/mirror_buf/posix.rs`, restricted Linux `mmap` huge-page paths to `target_os = "linux"`, routed macOS allocations through the global allocator, and documented the Linux ≥ 6.3 (`MFD_NOEXEC_SEAL`) requirement (#6).
+  - Parameterized `baseline_isa_label()` for `x86_64` vs `aarch64`, added `uname`/`RtlGetVersion` kernel version detection in `src/common/diagnostics/system_info.rs`, scoped `emit_irq_advisory` to Linux, and implemented `sysctlbyname` CPU/OS reporting on macOS in `tools/preflight`.
+- **Refreshed Quality Contract baselines (`docs/quality-contract.json`):** Updated verified latency envelopes (`WaveNet Standard` `41.26 µs`, `WaveNet Lite` `51.86 µs`, `WaveNet Feather` `14.63 µs`, `WaveNet Nano` `11.97 µs`, `WaveNet A2 Full` `18.68 µs`, `WaveNet A2 Lite` `13.76 µs`, `LSTM 1×16` `6.44 µs`, `LSTM 2×8` `6.91 µs`, `ConvNet` `9.30 µs`, `Full Pipeline Base` `41.81 µs`, `Full Pipeline HQ 4× OS` `170.23 µs`).
+- **Examples, modularization, and `docs.rs` checks:** Propagated errors with `?` preserving `NamErrorCode` in `examples/cabsim.rs` and `examples/offline_render.rs`; modularized `src/bin/nam_perf_gate/` and `src/testing/catalog/`; refined `doc(cfg)` on `rt_hardening`; extended `package.metadata.docs.rs` and `utils/docsrs-check.sh` across all 5 targets; and updated `utils/consumer-smoke.sh` to validate extracted `.crate` tarballs.
 
-### Fixed [3.0.0]
+### Fixed [4.0.0]
 
-- **Strict `WAVE_FORMAT_EXTENSIBLE` (`0xFFFE`) validation and parser convergence (`src/loader/wav.rs`, `src/dsp/cabsim/ir_parse.rs`):** Converged `fmt` chunk parsing via `parse_fmt_chunk`, enforcing `fmt_size >= 40`, `cbSize >= 22`, exact `EXTENSIBLE_GUID_TAIL`, `valid_bits == bits_per_sample`, `block_align`, and `byte_rate`, while preserving `cabsim` odd-sized EOF `data` chunks without padding.
-- **`nam_quality dashboard --save` contract persistence (`tools/qa/src/bin/nam_quality.rs`):** Fixed `--save` so it refreshes `generated_at`, `provenance`, `fidelity`, `performance`, and `worst_esr_parity` in `docs/quality-contract.json` from the verified report before atomic write, failing closed if `regression_gate` did not pass (unless `--fidelity-only`).
-- **AVX-512 `CH=8` `film.active_mask() == 0` fast-path (`src/models/a2/conv1d_ch8/simd.rs`):** Removed the early return in `layer_forward_ch8_block_simdmath` that skipped the dilated convolution loop, restoring `x86_64-linux` vs. `x86_64-avx512` parity on `wavenet_a2_full` (`SNR = 129.14 dB`, `ESR = 1.22e-13`).
-- **Portable temporary paths in loader/CabSim tests (`src/dsp/cabsim/loader_test.rs`, `src/loader/loader_malformed_test.rs`):** Replaced hardcoded POSIX `/tmp/*.wav` paths with `std::env::temp_dir()` and RAII cleanup guards.
-- **`--all-targets --all-features` on aarch64:** AVX-512 tests and benchmarks now gate on the `nam_avx512` cfg emitted by `build.rs` instead of the raw `avx512` feature, so `cargo check --all-targets --all-features` succeeds on non-`x86_64` targets. The obsolete `compile_error!` that rejected `avx512` on non-`x86_64` was removed; the `build.rs` gate still keeps the AVX-512 modules out of those builds.
-- **QA summary isolation, script hardening, and CI provenance (`utils/*.sh`, `tests/parity/cpp_parity.rs`, `ci.yml`, `long.yml`):** Isolated `lib_quiet=1` child invocations from `summary.txt`, enforced fail-closed carrier/receipt writes and minimum test counts (`assert_ran_tests 2000`), unified `CARGO_TARGET_DIR: target/long/release` and provenance recording in `long.yml`, and fixed `LogBuffer` snapshot timing in `streaming_adapter_test`.
+- **AVX-512 `CH=8` `film.active_mask() == 0` fast-path (`src/models/a2/conv1d_ch8/simd.rs`):** Removed the premature early return that skipped the dilated convolution loop, restoring `x86_64-linux` vs `x86_64-avx512` parity on `wavenet_a2_full` (`SNR = 129.14 dB`, `ESR = 1.22e-13`).
+- **`testing::wav::write_wav_f32` (`src/testing/wav.rs`):** Fixed the emitted RIFF container size (`36 + data`) to match canonical WAV headers.
+- **`--all-targets --all-features` on `aarch64`:** Gated AVX-512 tests and benches on `cfg(nam_avx512)` emitted by `build.rs` instead of the raw `avx512` feature, and removed the obsolete `compile_error!` on non-`x86_64` targets.
+- **Cross-platform test isolation and temp paths:** Replaced hardcoded `/tmp/*.wav` paths in loader/CabSim tests with `std::env::temp_dir()` and RAII cleanup guards, isolated global `panic_hook` suppression tests from parallel library panics, and fixed `LogBuffer` snapshot timing in `streaming_adapter_test`.
+- **QA tooling, scripts, and CI provenance:** Fixed `nam_quality dashboard --save` to refresh contract provenance, fidelity, performance, and `worst_esr_parity` atomically and fail closed if `regression_gate` did not pass (unless `--fidelity-only`); captured real compiler provenance in parity vectors; stubbed IDE-only `source_group` when configuring NAMCore with CMake 4.5+; and hardened `utils/` QA scripts (`-h`/invalid usage emit one `RESULT:` without overwriting previous carriers, heap audit runs with `--no-fail-fast`, capability `GAP` requires explicit authorization, `lib_quiet=1` isolates child logs from `summary.txt`, and `tests-quick.sh` enforces `assert_ran_tests 2000`).
+
+---
 
 ## [2.0.0] - 2026-11-03
 
@@ -161,7 +153,6 @@ Patch release, fully backward-compatible: public types, functions and `NamErrorC
   - 3-tier lock-free SPSC parameter and model hot-swap mechanism with off-RT garbage collection cascade.
   - Diagnostic error reporting catalogue (`NamErrorCode` E1xxx–E5xxx).
 
-[Unreleased]: https://github.com/fabiohl/NeuralAmpModeler-rs/compare/v4.0.0...HEAD
 [4.0.0]: https://github.com/fabiohl/NeuralAmpModeler-rs/compare/v2.0.0...v4.0.0
 
 [2.0.0]: https://github.com/fabiohl/NeuralAmpModeler-rs/compare/v1.0.1...v2.0.0
