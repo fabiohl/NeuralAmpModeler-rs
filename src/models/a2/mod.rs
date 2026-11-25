@@ -41,9 +41,9 @@ pub use head::{
     head_process_ch8_avx2,
 };
 pub use layer::{A2ConvCh, A2Layer, A2LayerError, a2_layer_single_frame_scalar_ref};
-pub use model::WaveNetA2;
 pub use model::cascade::WaveNetA2Cascade;
 pub use model::dynamic::WaveNetA2Dyn;
+pub use model::{A2WeightUpdateError, WaveNetA2};
 pub use params::{
     A2_DILATIONS, A2_HEAD_KERNEL_SIZE, A2_KERNEL_SIZES, A2_LEAKY_SLOPE, A2_NUM_LAYERS,
     A2_VALID_CHANNELS, HeadParams, LayerArrayParamsA2, LayerParamsA2,

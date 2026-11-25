@@ -32,6 +32,40 @@ mod audit_tests {
         );
     }
 
+    fn audit_runtime_updates<const CH: usize>() {
+        let mut model = build_a2::<CH>(0.01);
+        let weights = a2_synth_weights::<CH>(0.02);
+        let mut invalid = weights.clone();
+        invalid[weights.len() - 1] = f32::NAN;
+        // Positive control for this exact operation: loading replaces storage.
+        let (load_allocs, load_deallocs) = {
+            let _guard = TrackingGuard::new();
+            assert!(model.set_weights(&weights).is_ok());
+            (get_alloc_count(), get_dealloc_count())
+        };
+        assert!(load_allocs > 0 && load_deallocs > 0);
+        let mut unloaded = WaveNetA2::<CH>::new().expect("create unloaded A2");
+        let mut unsupported = WaveNetA2::<4>::new().expect("create unsupported A2");
+        let (allocs, reallocs, deallocs) = {
+            let _guard = TrackingGuard::new();
+            for _ in 0..100 {
+                assert!(model.update_weights(std::hint::black_box(&weights)).is_ok());
+                assert!(model.update_weights(&weights[..weights.len() - 1]).is_err());
+                assert!(model.update_weights(&invalid).is_err());
+                assert!(unloaded.update_weights(&weights).is_err());
+                assert!(unsupported.update_weights(&weights).is_err());
+            }
+            (get_alloc_count(), get_realloc_count(), get_dealloc_count())
+        };
+        assert_zero_heap(allocs, reallocs, deallocs, "A2 runtime weight updates");
+    }
+
+    #[test]
+    fn runtime_weight_updates_are_heap_free() {
+        audit_runtime_updates::<3>();
+        audit_runtime_updates::<8>();
+    }
+
     /// Affirmative positive control: proves TrackingGuard detects allocations and deallocations.
     #[test]
     fn test_heap_audit_positive_control() {

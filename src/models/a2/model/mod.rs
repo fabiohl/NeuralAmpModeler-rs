@@ -77,7 +77,7 @@ pub(crate) fn a2_prewarm_common(
 
 #[path = "static/mod.rs"]
 pub mod static_mod;
-pub use static_mod::WaveNetA2;
+pub use static_mod::{A2WeightUpdateError, WaveNetA2};
 
 pub mod cascade;
 pub mod dynamic;

@@ -1,0 +1,59 @@
+<!--
+SPDX-License-Identifier: Apache-2.0
+Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
+-->
+
+# Runtime A2 weight updates
+
+`WaveNetA2::<3>::update_weights` and `WaveNetA2::<8>::update_weights` replace
+coefficients in an already loaded canonical static A2 model. They accept the same
+serialized NAM weight order as `set_weights`, including the head scale. All
+convolution layouts are refreshed in place, including SIMD padding.
+
+Load with `set_weights` and negotiate the processing block size off the audio
+thread first. Keep the replacement weight stream in caller-owned storage. At a
+block boundary, call `update_weights(&weights)` through the same exclusive mutable
+model reference used for processing. There is no concurrent writer or internal
+synchronization. Errors are typed (`A2WeightUpdateError`); format/report them off
+the audio thread.
+
+The update performs no heap allocation or deallocation, locking, I/O, logging,
+reset, or prewarm. It validates the topology, exact weight count and finiteness
+before writing anything. A rejected update leaves coefficients and streaming
+state intact. A successful update preserves causal history, ring cursors and the
+negotiated block size; subsequent samples use the new coefficients with that
+existing history. This differs from resetting and replaying the model.
+
+This is a bounded full-weight copy/transposition, not a constant-time operation.
+Hosts must budget its cost at their intended update rate. Abrupt coefficient
+changes can cause audible discontinuities; this API does not interpolate weights
+or crossfade output. Input storage must remain available for the duration of the
+call; producing or replacing that storage is the caller's responsibility.
+
+## Scope and parametric models
+
+This API is a first primitive for hypernetwork-produced weights, not a parametric
+model loader. Only the canonical 23-layer CH=3/8 layout without FiLM, grouped
+projections or a head1x1 is accepted. Other topologies return
+`UnsupportedTopology`; unloaded supported models return `NotLoaded`.
+
+End-to-end HyperWaveNet support still needs the hypernetwork evaluator, dynamic
+main-network layouts, control metadata, parameter normalization and a loader.
+Concat and FiLM conditioning need separate APIs. This change alone does not enable
+loading or playing those parametric model families.
+
+## Validation
+
+The `runtime_updates` unit tests compare all stored coefficient layouts with the
+existing loader and compare output bit for bit after processing a nonzero prefix,
+including no-op updates, changed updates, varied blocks and history wraparound.
+Both CH=3/8 specialized kernels and generic convolution fallback are covered.
+Invalid streams and unsupported models are rejected atomically.
+
+The `runtime_weight_updates_are_heap_free` integration test uses the shared
+counting allocator for repeated successful, wrong-length and non-finite updates:
+
+```sh
+cargo test --lib runtime_updates
+cargo test --test rt_constraints --features heap-audit runtime_weight_updates_are_heap_free
+```

@@ -116,6 +116,9 @@ pub struct WaveNetA2<const CH: usize> {
     pub(crate) prewarm_pending: usize,
 }
 
+mod update_weights;
+pub use update_weights::A2WeightUpdateError;
+
 impl<const CH: usize> WaveNetA2<CH> {
     /// Creates a new uninitialized WaveNet A2 model.
     ///
