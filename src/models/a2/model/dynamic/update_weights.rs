@@ -21,7 +21,8 @@ impl WaveNetA2Dyn {
     /// that stream; their existing output scales are preserved. An embedded
     /// condition DSP is preserved and is not updated.
     ///
-    /// All checks precede all writes. Success preserves streaming history,
+    /// The loader validates the coefficient layout off-thread. All stream
+    /// checks precede writes. Success preserves streaming history,
     /// buffer addresses, cursors, prewarm state and negotiated block size.
     /// Calls require exclusive access and should occur at block boundaries.
     /// Work is proportional to the loaded weight count; this API does not smooth
@@ -86,7 +87,7 @@ impl WaveNetA2Dyn {
 
     /// Returns the exact serialized count accepted by [`Self::update_weights`].
     ///
-    /// Validates the loaded destinations without allocation. Hosts can use this
+    /// Returns the count validated during weight loading. Hosts can use this
     /// off-thread to size replacement streams. This excludes nested condition-DSP
     /// weights, exactly as [`Self::set_weights`] does.
     ///
@@ -94,11 +95,13 @@ impl WaveNetA2Dyn {
     /// Returns [`A2WeightUpdateError::NotLoaded`] or
     /// [`A2WeightUpdateError::UnsupportedTopology`].
     pub fn runtime_weight_count(&self) -> Result<usize, A2WeightUpdateError> {
-        if self.layers.is_empty() {
-            return Err(A2WeightUpdateError::NotLoaded);
-        }
-        self.checked_runtime_weight_count()
-            .ok_or(A2WeightUpdateError::UnsupportedTopology)
+        self.runtime_weight_layout
+    }
+
+    pub(in crate::models::a2::model) fn prepare_runtime_weight_layout(&mut self) {
+        self.runtime_weight_layout = self
+            .checked_runtime_weight_count()
+            .ok_or(A2WeightUpdateError::UnsupportedTopology);
     }
 
     fn checked_runtime_weight_count(&self) -> Option<usize> {
@@ -108,6 +111,7 @@ impl WaveNetA2Dyn {
             || self.groups_input != 1
             || self.mixin_groups != 1
             || self.l1x1_groups != 1
+            || self.layers.is_empty()
             || self.layers.len() != self.num_layers
             || self.kernel_sizes.len() != self.num_layers
             || self.dilations.len() != self.num_layers

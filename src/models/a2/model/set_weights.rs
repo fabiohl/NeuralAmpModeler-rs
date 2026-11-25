@@ -197,6 +197,7 @@ impl<const CH: usize> WaveNetA2<CH> {
         self.rechannel_w_f32 = rechannel_w;
         self.layers = layers;
         self.head_conv = Some(A2HeadConv::new(head_w, head_b, head_scale, CH));
+        self.prepare_runtime_weight_layout();
 
         Ok(())
     }

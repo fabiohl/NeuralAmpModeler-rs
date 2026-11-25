@@ -17,8 +17,9 @@ impl WaveNetA2Cascade {
     /// Mono array streams still contain their own head bias/scale, as required
     /// by that array's loader. Multichannel array output scales are preserved.
     ///
-    /// Every array's destinations and the full stream are validated before any
-    /// writes. Errors in a later array leave all earlier arrays and the cascade
+    /// Each array validates its destinations during weight loading. The cached
+    /// results and full stream are checked before any writes. Errors in a later
+    /// array leave all earlier arrays and the cascade
     /// scale unchanged. Successful updates preserve all causal/condition-DSP
     /// state, ring cursors, buffer addresses and negotiated block sizes.
     ///
@@ -50,8 +51,9 @@ impl WaveNetA2Cascade {
 
     /// Returns the exact concatenated array-stream size, excluding global scale.
     ///
-    /// Validates every loaded coefficient destination without allocating. This
-    /// excludes nested condition-DSP weights, which are not replaced by updates.
+    /// Sums the counts validated during loading, without inspecting layers.
+    /// The array list is public, so this uses the current arrays on each call.
+    /// This excludes nested condition-DSP weights, which are not replaced.
     ///
     /// # Errors
     /// Returns [`A2WeightUpdateError`] for unloaded/unsupported array layouts or

@@ -20,8 +20,10 @@ synchronization. Errors are typed (`A2WeightUpdateError`); format/report them of
 the audio thread.
 
 The update performs no heap allocation or deallocation, locking, I/O, logging,
-reset, or prewarm. It validates the topology, exact weight count and finiteness
-before writing anything. A rejected update leaves coefficients and streaming
+reset, or prewarm. The loader validates the topology and stores the result
+alongside the loaded weights off-thread. Each runtime update checks the exact
+weight count and coefficient finiteness before writing anything.
+A rejected update leaves coefficients and streaming
 state intact. A successful update preserves causal history, ring cursors and the
 negotiated block size; subsequent samples use the new coefficients with that
 existing history. This differs from resetting and replaying the model.
@@ -40,8 +42,9 @@ model loader. Supported layouts are:
 - Canonical 23-layer static CH=3/8 models.
 - Dense dynamic arrays with mono or multichannel output with arbitrary loaded channel and bottleneck
   widths, input/condition widths, kernels, dilations and gating/blending modes.
-  `runtime_weight_count()` validates the loaded destinations and returns the
-  exact replacement-stream size. Nested condition-DSP weights are excluded from
+  `runtime_weight_count()` returns the exact replacement-stream size cached
+  during loading. A failed dynamic reload invalidates the cached result until a
+  successful load. Nested condition-DSP weights are excluded from
   that stream and its state is preserved.
 
 - Cascades of supported dynamic arrays, updated atomically through
@@ -60,9 +63,11 @@ array-stream size and does not include the separate global scale. There is no
 stream-length inference or optional scalar in the runtime contract. Nested
 condition-DSP state and per-array output scales remain intact.
 
-All array layouts, the complete stream and the separate global scale are
-validated before modifying any array. A bad count, non-finite coefficient or
-unsupported destination in the last array cannot partially update the first.
+The cascade checks each current array's cached result, the complete stream and
+the separate global scale before modifying any array. Reading the current
+arrays accounts for replacements through the public array list without walking
+their layers. An invalid count, non-finite coefficient or unsupported destination
+in the last array cannot partially update the first.
 
 End-to-end HyperWaveNet support still needs the hypernetwork evaluator, remaining
 main-network layouts, control metadata, parameter normalization and a loader.

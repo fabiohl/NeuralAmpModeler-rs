@@ -13,7 +13,7 @@ use crate::models::a2::weights_layout::{transpose_conv1d_interleaved_4wide, tran
 /// [`super::cascade::WaveNetA2Cascade`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum A2WeightUpdateError {
-    /// Construction/loading must finish before runtime updates.
+    /// A successful weight load must finish before runtime updates.
     #[error("A2 weights have not been loaded")]
     NotLoaded,
     /// The loaded topology is not supported by the update API.

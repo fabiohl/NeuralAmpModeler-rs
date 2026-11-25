@@ -221,9 +221,18 @@ fn cascade_runtime_updates_reject_before_mutating_any_array() {
         assert_eq!(snapshot(&model, true), before);
     }
     model.arrays[1].l1x1_groups = 2;
+    model.arrays[1].prepare_runtime_weight_layout();
     assert_eq!(
         model.update_weights(&weights(initial.len(), 42), 0.8),
         Err(A2WeightUpdateError::UnsupportedTopology)
+    );
+    assert_eq!(snapshot(&model, true), before);
+
+    model.arrays[1] = unloaded(true, 1).arrays.swap_remove(1);
+    let before = snapshot(&model, true);
+    assert_eq!(
+        model.update_weights(&initial, 0.8),
+        Err(A2WeightUpdateError::NotLoaded)
     );
     assert_eq!(snapshot(&model, true), before);
 }

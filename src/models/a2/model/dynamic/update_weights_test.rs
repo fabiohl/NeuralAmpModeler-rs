@@ -204,6 +204,7 @@ fn dynamic_runtime_updates_reject_atomically() {
             1 => model.groups_input = 2,
             _ => model.mixin_groups = 2,
         }
+        model.prepare_runtime_weight_layout();
         assert_eq!(
             model.update_weights(&initial),
             Err(A2WeightUpdateError::UnsupportedTopology)
@@ -214,6 +215,7 @@ fn dynamic_runtime_updates_reject_atomically() {
         model.mixin_groups = 1;
     }
     model.condition_size = usize::MAX;
+    model.prepare_runtime_weight_layout();
     assert_eq!(
         model.update_weights(&initial),
         Err(A2WeightUpdateError::UnsupportedTopology)
@@ -221,6 +223,7 @@ fn dynamic_runtime_updates_reject_atomically() {
     assert_eq!(stored_weights(&model), before);
     model.condition_size = 1;
     model.input_channels = usize::MAX;
+    model.prepare_runtime_weight_layout();
     assert_eq!(
         model.runtime_weight_count(),
         Err(A2WeightUpdateError::UnsupportedTopology)
@@ -229,10 +232,34 @@ fn dynamic_runtime_updates_reject_atomically() {
 
     // A late destination mismatch must not partially overwrite earlier layers.
     model.layers[2].l1x1_b = crate::math::common::AlignedVec::new(4, 0.0).unwrap();
+    model.prepare_runtime_weight_layout();
     let before = stored_weights(&model);
     assert_eq!(
         model.update_weights(&weights(initial.len(), 42)),
         Err(A2WeightUpdateError::UnsupportedTopology)
     );
     assert_eq!(stored_weights(&model), before);
+}
+
+#[test]
+fn failed_reload_invalidates_the_runtime_weight_layout_until_successful_load() {
+    let mut model = make_model(5, 7, GatingMode::None, 2, 1);
+    let initial = weights(count(&model), 17);
+    let mut too_long = initial.clone();
+    too_long.push(0.0);
+    for invalid in [&initial[..initial.len() - 1], &too_long] {
+        model.set_weights(&initial).unwrap();
+        assert_eq!(model.runtime_weight_count(), Ok(initial.len()));
+        assert!(model.set_weights(invalid).is_err());
+        assert_eq!(
+            model.runtime_weight_count(),
+            Err(A2WeightUpdateError::NotLoaded)
+        );
+        assert_eq!(
+            model.update_weights(&initial),
+            Err(A2WeightUpdateError::NotLoaded)
+        );
+    }
+    model.set_weights(&initial).unwrap();
+    model.update_weights(&initial).unwrap();
 }

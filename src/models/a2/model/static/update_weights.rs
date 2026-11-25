@@ -30,19 +30,13 @@ impl<const CH: usize> WaveNetA2<CH> {
     ///
     /// # Errors
     /// Returns [`A2WeightUpdateError`] for unloaded/unsupported models, incorrect
-    /// stream length, or NaN/Inf coefficients. All checks finish **before any
-    /// coefficient is written**: rejection preserves both weights and history.
+    /// stream length, or NaN/Inf coefficients. The loader validates the layout
+    /// off-thread. Runtime stream checks finish before any coefficient is written.
     pub fn update_weights(&mut self, weights: &[f32]) -> Result<(), A2WeightUpdateError> {
         if CH != 3 && CH != 8 {
             return Err(A2WeightUpdateError::UnsupportedTopology);
         }
-        if self.layers.is_empty() || self.head_conv.is_none() {
-            return Err(A2WeightUpdateError::NotLoaded);
-        }
-        if !self.runtime_update_topology_valid() {
-            return Err(A2WeightUpdateError::UnsupportedTopology);
-        }
-        validate_stream(weights, a2_weight_count::<CH>())?;
+        validate_stream(weights, self.runtime_weight_layout?)?;
 
         let mut pos = 0;
         self.rechannel_w_f32
@@ -61,6 +55,15 @@ impl<const CH: usize> WaveNetA2<CH> {
             head.head_scale = weights[pos + 1];
         }
         Ok(())
+    }
+
+    pub(in crate::models::a2::model) fn prepare_runtime_weight_layout(&mut self) {
+        self.runtime_weight_layout = if (CH == 3 || CH == 8) && self.runtime_update_topology_valid()
+        {
+            Ok(a2_weight_count::<CH>())
+        } else {
+            Err(A2WeightUpdateError::UnsupportedTopology)
+        };
     }
 
     fn runtime_update_topology_valid(&self) -> bool {

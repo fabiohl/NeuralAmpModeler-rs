@@ -47,6 +47,8 @@ pub mod process;
 ///
 /// `CH` = channel count (3 for Lite/Nano, 8 for Full/Standard).
 pub struct WaveNetA2<const CH: usize> {
+    // Prepared when set_weights commits the coefficient layout.
+    pub(super) runtime_weight_layout: Result<usize, super::A2WeightUpdateError>,
     /// 23 A2 layers (one per layer index). Populated by `set_weights`.
     pub(crate) layers: Vec<A2Layer>,
 
@@ -148,6 +150,7 @@ impl<const CH: usize> WaveNetA2<CH> {
         }
 
         Ok(Self {
+            runtime_weight_layout: Err(super::A2WeightUpdateError::NotLoaded),
             layers: Vec::with_capacity(A2_NUM_LAYERS),
             rechannel_w_f32: AlignedVec::new(CH, 0.0f32)?,
             head_conv: None,

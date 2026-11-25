@@ -144,11 +144,13 @@ fn rejected_updates<const CH: usize>() {
     }
     compare_stream(&mut actual, &mut reference);
     actual.layers[0].mixin_groups = 2;
+    actual.prepare_runtime_weight_layout();
     assert_eq!(
         actual.update_weights(&initial),
         Err(A2WeightUpdateError::UnsupportedTopology)
     );
     actual.layers[0].mixin_groups = 1;
+    actual.prepare_runtime_weight_layout();
     compare_stream(&mut actual, &mut reference);
     actual.layers[0].conv_pre_film = Some(
         crate::models::a2::FiLMLayer::load(
@@ -164,13 +166,16 @@ fn rejected_updates<const CH: usize>() {
         )
         .unwrap(),
     );
+    actual.prepare_runtime_weight_layout();
     assert_eq!(
         actual.update_weights(&initial),
         Err(A2WeightUpdateError::UnsupportedTopology)
     );
     actual.layers[0].conv_pre_film = None;
+    actual.prepare_runtime_weight_layout();
     compare_stream(&mut actual, &mut reference);
     actual.layers[0].l1x1_b = crate::math::common::AlignedVec::new(CH - 1, 0.0).unwrap();
+    actual.prepare_runtime_weight_layout();
     assert_eq!(
         actual.update_weights(&initial),
         Err(A2WeightUpdateError::UnsupportedTopology)
