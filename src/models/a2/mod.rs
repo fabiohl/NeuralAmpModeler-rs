@@ -31,7 +31,7 @@ pub mod weights_layout;
 /// Public re-exports for easy access.
 pub use activations::{ActivationFn, ActivationType};
 pub use conv1d::A2Conv1d;
-pub use film::{FiLMConfig, FiLMLayer, FilmBlock};
+pub use film::{FiLMConfig, FiLMLayer, FiLMModulationError, FilmBlock};
 pub use gating::GatingMode;
 pub use grouped_conv1d::{
     A2GroupedConv1d, grouped_conv1d_block_ref, grouped_conv1d_single_frame_ref,
