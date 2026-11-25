@@ -47,6 +47,7 @@ pub mod process;
 pub mod process_cascade;
 /// Per-frame dynamic processing kernel (`process_frame_dyn`).
 pub mod process_frame;
+mod update_weights;
 
 /// Runtime-dimensioned WaveNet A2 model.
 ///

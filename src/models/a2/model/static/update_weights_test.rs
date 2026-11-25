@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
 use super::*;
+use crate::models::a2::{A2Conv1d, A2ConvCh};
 
 fn weights<const CH: usize>(seed: u32) -> Vec<f32> {
     let mut state = seed;

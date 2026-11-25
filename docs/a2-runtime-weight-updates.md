@@ -5,8 +5,9 @@ Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights 
 
 # Runtime A2 weight updates
 
-`WaveNetA2::<3>::update_weights` and `WaveNetA2::<8>::update_weights` replace
-coefficients in an already loaded canonical static A2 model. They accept the same
+`WaveNetA2::<3>::update_weights`, `WaveNetA2::<8>::update_weights` and
+`WaveNetA2Dyn::update_weights` replace coefficients in an already loaded A2
+model. They accept the same
 serialized NAM weight order as `set_weights`, including the head scale. All
 convolution layouts are refreshed in place, including SIMD padding.
 
@@ -33,11 +34,20 @@ call; producing or replacing that storage is the caller's responsibility.
 ## Scope and parametric models
 
 This API is a first primitive for hypernetwork-produced weights, not a parametric
-model loader. Only the canonical 23-layer CH=3/8 layout without FiLM, grouped
-projections or a head1x1 is accepted. Other topologies return
-`UnsupportedTopology`; unloaded supported models return `NotLoaded`.
+model loader. Supported layouts are:
 
-End-to-end HyperWaveNet support still needs the hypernetwork evaluator, dynamic
+- Canonical 23-layer static CH=3/8 models.
+- Dense mono-output dynamic arrays with arbitrary loaded channel and bottleneck
+  widths, input/condition widths, kernels, dilations and gating/blending modes.
+  `runtime_weight_count()` validates the loaded destinations and returns the
+  exact replacement-stream size. Nested condition-DSP weights are excluded from
+  that stream and its state is preserved.
+
+FiLM, grouped projections/convolutions, head1x1 and multi-output/cascade updates
+are not supported. Other topologies return `UnsupportedTopology`; unloaded
+models return `NotLoaded`. Checks use arithmetic that detects count overflow.
+
+End-to-end HyperWaveNet support still needs the hypernetwork evaluator, remaining
 main-network layouts, control metadata, parameter normalization and a loader.
 Concat and FiLM conditioning need separate APIs. This change alone does not enable
 loading or playing those parametric model families.
@@ -48,10 +58,12 @@ The `runtime_updates` unit tests compare all stored coefficient layouts with the
 existing loader and compare output bit for bit after processing a nonzero prefix,
 including no-op updates, changed updates, varied blocks and history wraparound.
 Both CH=3/8 specialized kernels and generic convolution fallback are covered.
+Dynamic tests exercise repeated changes, noncanonical kernels, differing
+bottlenecks, gating/blending and multichannel coefficient packing.
 Invalid streams and unsupported models are rejected atomically.
 
-The `runtime_weight_updates_are_heap_free` integration test uses the shared
-counting allocator for repeated successful, wrong-length and non-finite updates:
+The runtime-update heap tests use the shared counting allocator for repeated
+successful, wrong-length and non-finite updates, including dynamic processing:
 
 ```sh
 cargo test --lib runtime_updates
