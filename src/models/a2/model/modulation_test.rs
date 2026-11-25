@@ -84,6 +84,23 @@ fn static_parity<const CH: usize>() {
     actual.process(&input, &mut a);
     reference.process(&input, &mut b);
     assert_eq!(a, b);
+    // Reset clears causal state, while the committed override remains active.
+    actual
+        .set_activation_modulation(&vec![1.0; n], &vec![0.0; n])
+        .unwrap();
+    actual.prewarm_on_reset = false;
+    reference.prewarm_on_reset = false;
+    actual.reset(48_000, 128).unwrap();
+    reference.reset(48_000, 128).unwrap();
+    assert!(actual.layers.iter().all(|l| {
+        l.activation_pre_film
+            .as_ref()
+            .unwrap()
+            .has_precomputed_modulation()
+    }));
+    actual.process(&input, &mut a);
+    reference.process(&input, &mut b);
+    assert_eq!(a, b);
 }
 
 #[test]
