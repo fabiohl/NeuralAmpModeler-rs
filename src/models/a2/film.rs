@@ -29,6 +29,9 @@
 //! - `NAM/film.h:28-85` (`_cond_to_scale_shift` via Conv1x1 / Dense)
 //! - `NeuralAmpModelerCore/NAM/film.cpp` (per-channel modulation)
 
+pub(crate) mod modulation;
+pub use modulation::FiLMModulationError;
+
 use crate::common::diagnostics::NamErrorCode;
 use crate::math::common::AlignedVec;
 
@@ -83,6 +86,8 @@ pub struct FiLMLayer {
     pub bias: AlignedVec<f32>,
     /// Pre-allocated scratch buffer: `[scale[..channels], shift[..channels]]`.
     scale_shift_buf: AlignedVec<f32>,
+    // Set only after a complete, validated host modulation update.
+    precomputed_modulation: bool,
 }
 
 impl FiLMLayer {
@@ -146,6 +151,7 @@ impl FiLMLayer {
             weights: AlignedVec::from_vec(weights)?,
             bias: AlignedVec::from_vec(bias_padded)?,
             scale_shift_buf: AlignedVec::new(channels * 2, 0.0f32)?,
+            precomputed_modulation: false,
         })
     }
 
@@ -154,6 +160,9 @@ impl FiLMLayer {
     /// 1. `_cond_to_scale_shift`: maps `condition` → `scale[..channels]` +
     ///    `shift[..channels]` via a dense GEMV with AVX2 FMA.
     /// 2. Per-channel modulation: `input[c] = input[c] * scale[c] + shift[c]`.
+    ///
+    /// With [`Self::set_precomputed_modulation`] active, step 1 is skipped and
+    /// the installed scale/shift vectors are reused across samples and blocks.
     ///
     /// # Safety
     /// `condition.len()` must equal `self.cond_size`.
@@ -175,7 +184,9 @@ impl FiLMLayer {
             condition.len(),
             self.cond_size
         );
-        self.cond_to_scale_shift(condition);
+        if !self.precomputed_modulation {
+            self.cond_to_scale_shift(condition);
+        }
         self.apply_modulation(input);
     }
 

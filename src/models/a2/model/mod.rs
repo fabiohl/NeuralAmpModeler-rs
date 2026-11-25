@@ -83,6 +83,7 @@ pub use weight_updates::A2WeightUpdateError;
 
 pub mod cascade;
 pub mod dynamic;
+mod modulation;
 mod set_weights;
 
 #[cfg(test)]
