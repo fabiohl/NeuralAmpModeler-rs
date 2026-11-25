@@ -12,6 +12,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [4.1.0] - Unreleased
+
+Minor feature release adding allocation-free runtime weight updates and host-precomputed FiLM modulation for WaveNet A2 models.
+
+### Added [4.1.0]
+
+- **Allocation-free runtime A2 weight updates ([`docs/a2-runtime-weight-updates.md`](docs/a2-runtime-weight-updates.md)):** Added in-place `update_weights` across `WaveNetA2::<3>`, `WaveNetA2::<8>`, `WaveNetA2Dyn`, and `WaveNetA2Cascade` (plus `runtime_weight_count` and typed `A2WeightUpdateError`), validating count and finiteness atomically while preserving causal streaming state and ring cursors.
+- **Host-precomputed FiLM modulation ([`docs/precomputed-film.md`](docs/precomputed-film.md)):** Added allocation-free block-rate FiLM override APIs on `FiLMLayer` (`set_precomputed_modulation`, `has_precomputed_modulation`, `use_conditioned_modulation`) and atomic model-level helpers on `WaveNetA2<CH>`, `WaveNetA2Dyn`, and `WaveNetA2Cascade` (`activation_modulation_size`, `set_activation_modulation`, `resume_activation_conditioning`, `FiLMModulationError`).
+
+### Changed [4.1.0]
+
+- Updated `anyhow` minimum version to `1.0.105` and refreshed patch dependency resolutions in `Cargo.lock`.
+
 ## [4.0.0] - 2026-11-23
 
 This major release directly supersedes `2.0.0` (`3.0.0` was previously published and yanked on crates.io and was never tagged from this series). It resolves `MirroredBuffer<T>` physical-aliasing soundness, eliminates audio-thread `drop_glue`, enforces fail-closed contracts across `A2Layer`, `.nam` JSON loading, WAV/CabSim RIFF validation, and `StreamingResampleBuffer`, adds Experimental Verifiable Windows 11 (`x86_64` and `aarch64`) support, introduces reference-compatible input calibration (`OutputMode`) and `MusicalNoiseGate`, expands WaveNet A1/A2 parity, and refreshes verified latency baselines. Read **Breaking Changes and Migration** before upgrading from `2.0.0`.
@@ -152,6 +165,8 @@ Patch release, fully backward-compatible: public types, functions and `NamErrorC
   - Polyphase anti-aliasing oversampling engine (`OversampleEngine`) and multi-rate sinc resampler (`NamResampler`).
   - 3-tier lock-free SPSC parameter and model hot-swap mechanism with off-RT garbage collection cascade.
   - Diagnostic error reporting catalogue (`NamErrorCode` E1xxx–E5xxx).
+
+[4.1.0]: https://github.com/fabiohl/NeuralAmpModeler-rs/compare/v4.0.0...v4.1.0
 
 [4.0.0]: https://github.com/fabiohl/NeuralAmpModeler-rs/compare/v2.0.0...v4.0.0
 

@@ -80,7 +80,7 @@ The script exports `DOCS_RS=1` and `RUSTDOCFLAGS="--cfg docsrs -D warnings"`, de
 The published SemVer baseline is the **last release available on crates.io** (`2.0.0`, tag `v2.0.0`: the last non-yanked release on crates.io; `3.0.0` was published and later yanked, so it cannot serve as the baseline), not the local `Cargo.toml` version. Before publishing, compare the current API surface against that baseline with [`cargo-semver-checks`](https://github.com/obi1kenobi/cargo-semver-checks):
 
 ```bash
-# Release gate: the local version (4.0.0) is a major bump, so every intended
+# Release gate: the local version (4.1.0) is part of the 4.x major bump over v2.0.0, so every intended
 # break is already covered; a clean surface prints "no semver update required".
 cargo semver-checks check-release --baseline-rev v2.0.0
 

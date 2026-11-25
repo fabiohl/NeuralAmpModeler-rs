@@ -45,7 +45,7 @@
 //!
 //! ## Quick start
 //!
-//! > **Pre-release:** `4.0.0` is not yet published to crates.io. Until it is,
+//! > **Pre-release:** `4.1.0` is not yet published to crates.io. Until it is,
 //! > depend on this repository by path or git revision.
 //!
 //! Add the crate to `Cargo.toml`. The published package is
@@ -54,7 +54,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! NeuralAmpModeler-rs = "4.0"
+//! NeuralAmpModeler-rs = "4.1"
 //! ```
 //!
 //! On `x86_64`, the crate requires the `x86-64-v3` feature set at compile time.
@@ -70,7 +70,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! NeuralAmpModeler-rs = { version = "4.0", features = ["testing"] }
+//! NeuralAmpModeler-rs = { version = "4.1", features = ["testing"] }
 //! ```
 //!
 //! ```no_run

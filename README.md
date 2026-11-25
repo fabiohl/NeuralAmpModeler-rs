@@ -15,6 +15,8 @@ Built from the ground up, it leverages modern Rust to deliver clean, idiomatic, 
 
 The crate is host-agnostic, standalone, and general-purpose: its public API does not depend on any plugin wrapper or audio server, so downstream applications can drop the engine into any audio processing graph.
 
+> **New in 4.1:** Allocation-free runtime A2 weight updates (`WaveNetA2::update_weights`, `WaveNetA2Dyn::update_weights`, `WaveNetA2Cascade::update_weights`, `runtime_weight_count`) and host-precomputed FiLM modulation (`FiLMLayer::set_precomputed_modulation`, `WaveNetA2*::set_activation_modulation`, `resume_activation_conditioning`) for block-rate control networks.
+>
 > **New in 4.0:** **Windows 11** (`x86_64` & `aarch64`) support with `0 ULP` cross-platform bitwise parity, `MirroredBuffer<T>` aliasing soundness & zero-`drop_glue` real-time hardening, fallible `A2Layer::try_process_single_frame`, reference-compatible input calibration (`OutputMode`) & branchless `MusicalNoiseGate`, canonical WaveNet A1 multi-stage `PostStackHead` & per-layer `kernel_sizes`, plus faster verified latency baselines (`WaveNet Standard` `41.26 µs`, `WaveNet Feather` `14.63 µs`, `LSTM 1×16` `6.44 µs`). See the [CHANGELOG](CHANGELOG.md) for migration notes from `2.0.0`.
 >
 > **New in 2.0:** native **Apple Silicon** and **aarch64 Linux** support through a NEON backend that matches the x86_64 path numerically, fail-closed public APIs, and a leaner published package. See the [CHANGELOG](CHANGELOG.md) for migration notes.
@@ -50,7 +52,7 @@ The crate is host-agnostic, standalone, and general-purpose: its public API does
 | **Adaptive Compute Container**   | Multi-profile `.namb` bundle support with runtime fallback switching                                                                  | Prevents audio dropouts by dynamically adjusting compute complexity under CPU spikes                                                         |
 | **Binary `.namb` v2 Format**     | Pre-transposed memory layout (Gate-Major LSTM, Interleaved-4 WaveNet) with CRC32                                                      | Reduces model loading / hot-swap time from ~50 ms to < 1 ms                                                                                  |
 | **Denormal Armor**               | Symmetric −220 dBFS dither injection + hardware FTZ/DAZ (MXCSR / FPCR.FZ)                                                             | Prevents 10–100× CPU microcode stalls on digital silence with negligible net DC (bounded symmetric dither, no systematic drift)              |
-| **Comprehensive QA Suite**       | 2,419 quick / 2,748 full-audit executed unit & integration tests (soak, heap audit, Loom, proptest) + Criterion benchmarks            | Enterprise-grade software stability and strict regression protection                                                                         |
+| **Comprehensive QA Suite**       | 2,435 quick / 2,748 full-audit executed unit & integration tests (soak, heap audit, Loom, proptest) + Criterion benchmarks            | Enterprise-grade software stability and strict regression protection                                                                         |
 
 ---
 
@@ -223,20 +225,20 @@ The output is informational only; `simd_probe` does not issue a compliance verdi
 
 ### Add Dependency
 
-> **Pre-release:** `4.0.0` is not yet published to crates.io and supersedes `2.0.0` directly (`3.0.0` was previously used and yanked on crates.io). Until publication, depend on this repository by path or git revision, and review the breaking changes and migration notes in [CHANGELOG.md](CHANGELOG.md) before upgrading from `2.0.0`.
+> **Pre-release:** `4.1.0` is not yet published to crates.io and supersedes `2.0.0` directly via the `4.0` series (`3.0.0` was previously used and yanked on crates.io). Until publication, depend on this repository by path or git revision, and review the breaking changes and migration notes in [CHANGELOG.md](CHANGELOG.md) before upgrading from `2.0.0`.
 
 Add `NeuralAmpModeler-rs` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-NeuralAmpModeler-rs = "4.0"
+NeuralAmpModeler-rs = "4.1"
 ```
 
 For test harnesses, audio generators, and perceptual fidelity measurement tools:
 
 ```toml
 [dependencies]
-NeuralAmpModeler-rs = { version = "4.0", features = ["testing"] }
+NeuralAmpModeler-rs = { version = "4.1", features = ["testing"] }
 ```
 
 > **Crate name vs. library name:** the published package is `NeuralAmpModeler-rs`, but the importable Rust library is `neural_amp_modeler_rs`. So `cargo add NeuralAmpModeler-rs`, then `use neural_amp_modeler_rs::…;` (the package name is immutable and deliberately different).
@@ -261,7 +263,7 @@ time and is not required for correctness.
 
 ### Model Files
 
-The engine consumes `.nam` (JSON) and `.namb` (binary) model files. Community models are distributed by the official [Neural Amp Modeler](https://www.neuralampmodeler.com/) project and on TONE3000. Downstream projects adding `NeuralAmpModeler-rs = "4.0"` as a dependency call the library API directly (see the snippet below). To try the bundled in-memory example with **no external file**, run from a repository checkout (or extracted crate source):
+The engine consumes `.nam` (JSON) and `.namb` (binary) model files. Community models are distributed by the official [Neural Amp Modeler](https://www.neuralampmodeler.com/) project and on TONE3000. Downstream projects adding `NeuralAmpModeler-rs = "4.1"` as a dependency call the library API directly (see the snippet below). To try the bundled in-memory example with **no external file**, run from a repository checkout (or extracted crate source):
 
 ```bash
 cargo run --example synthetic_model

@@ -144,7 +144,45 @@ jobs:
           path: target/logs/**
           retention-days: 14
 
-  # aarch64 targets (NEON backend): clippy + quick QA suite.
+  # Linux ARM64 canonical lints live in a dedicated job for the same AI-24
+  # isolation as x86_64: a doc/policy failure must not suppress ARM64 quick QA
+  # or cross-platform parity vector generation.
+  linux-arm64-lints:
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Update Rust toolchain
+        run: rustup update --no-self-update stable && rustup target add x86_64-unknown-linux-gnu x86_64-pc-windows-msvc aarch64-pc-windows-msvc && rustc --version
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/dev') }}
+      - name: Record provenance
+        run: |
+          mkdir -p target/logs
+          printf 'PHASE: provenance ref=%s sha=%s package_version=%s rustc="%s" cargo="%s"\n' \
+            "${{ github.ref_name }}" "$(git rev-parse HEAD)" \
+            "$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)" \
+            "$(rustc --version)" "$(cargo --version)" | tee target/logs/ci-provenance.log
+      - name: Lints (Linux ARM64)
+        run: ./utils/lints.sh
+      - name: Publish step summary
+        if: always()
+        uses: ./.github/actions/qa-summary
+        with:
+          title: linux-arm64-lints
+          note: 'Linux ARM64 canonical lints (fmt, check, clippy, policies, budget)'
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: logs-linux-arm64-lints
+          path: target/logs/**
+          retention-days: 14
+
+  # aarch64 targets (NEON backend): native clippy (macOS) + quick QA suite + parity vectors.
   aarch64:
     strategy:
       fail-fast: false
@@ -184,15 +222,7 @@ jobs:
             brew install bash
             echo "QA_BASH=$(brew --prefix)/bin/bash" >> "$GITHUB_ENV"
           fi
-      # Linux ARM64 runs the full canonical discipline (fmt, check/clippy matrix,
-      # cross-x86_64, doc, policies, budget); macOS keeps the native clippy gate
-      # because the full lint matrix exceeds its job budget.
-      - name: Install cross targets (Linux ARM64)
-        if: runner.os == 'Linux'
-        run: rustup target add x86_64-unknown-linux-gnu x86_64-pc-windows-msvc aarch64-pc-windows-msvc
-      - name: Lints (Linux ARM64)
-        if: runner.os == 'Linux'
-        run: ${QA_BASH:-bash} ./utils/lints.sh
+      # macOS keeps the native clippy gate because the full lint matrix exceeds its job budget.
       - name: Clippy (macOS ARM64)
         if: runner.os == 'macOS'
         run: cargo clippy --locked --workspace --all-targets --features testing -- -D warnings
@@ -253,7 +283,6 @@ jobs:
         shell: bash
     env:
       CARGO_INCREMENTAL: 0
-      RUSTDOCFLAGS: "-D warnings"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -280,31 +309,35 @@ jobs:
           rc=0
           env -u RUSTFLAGS cargo run --locked -p nam-preflight --bin nam_preflight 2>&1 | tee target/logs/preflight.log || rc=${PIPESTATUS[0]}
           if [ "$rc" -eq 0 ]; then
-            echo "WIN_V3_READY=1" >> "$GITHUB_ENV"
-            echo "WIN_V3_READY=1" > "target/parity-vectors/${{ matrix.name }}/status.env"
+            echo "WIN_HOST_READY=1" >> "$GITHUB_ENV"
+            echo "WIN_HOST_READY=1" > "target/parity-vectors/${{ matrix.name }}/status.env"
           elif [ "$rc" -eq 3 ]; then
-            echo "WIN_V3_READY=0" >> "$GITHUB_ENV"
-            echo "WIN_V3_READY=0" > "target/parity-vectors/${{ matrix.name }}/status.env"
+            echo "WIN_HOST_READY=0" >> "$GITHUB_ENV"
+            echo "WIN_HOST_READY=0" > "target/parity-vectors/${{ matrix.name }}/status.env"
             . utils/_lib.sh
             STATUS_NAME="preflight-${{ matrix.name }}"
             lib_init
             PHASE_NAME=preflight; phase preflight
-            gap "cpu-missing-x86-64-v3"
+            if [ "${{ matrix.name }}" = "windows-x64" ]; then
+              gap "cpu-missing-x86-64-v3"
+            else
+              gap "host-preflight-unsupported"
+            fi
             finish || true
           else
             exit "$rc"
           fi
       - name: Clippy (MSVC)
-        if: env.WIN_V3_READY == '1'
+        if: env.WIN_HOST_READY == '1'
         run: cargo clippy --locked --workspace --all-targets --features testing -- -D warnings
       - name: Quick QA suite
-        if: env.WIN_V3_READY == '1'
+        if: env.WIN_HOST_READY == '1'
         run: ./utils/tests-quick.sh
       - name: Build release parity tool
-        if: env.WIN_V3_READY == '1'
+        if: env.WIN_HOST_READY == '1'
         run: cargo build --release --locked -p nam-qa --bin nam_parity_vector
       - name: Generate release parity vectors
-        if: env.WIN_V3_READY == '1'
+        if: env.WIN_HOST_READY == '1'
         run: |
           mkdir -p "target/parity-vectors/${{ matrix.name }}"
           for stem in BossWN-standard BossLSTM-1x16 BossLSTM-2x8 wavenet_a2_lite wavenet_a2_full convnet_nobn linear_nobias; do
@@ -584,9 +617,10 @@ jobs:
 
           WIN_X64_READY=0
           if [ -f "target/parity-vectors/windows-x64/status.env" ]; then
+            WIN_HOST_READY=0
             WIN_V3_READY=0
             . "target/parity-vectors/windows-x64/status.env"
-            WIN_X64_READY="${WIN_V3_READY:-0}"
+            WIN_X64_READY="${WIN_HOST_READY:-${WIN_V3_READY:-0}}"
           fi
           [ "${WIN_X64_READY:-0}" = "1" ] && PLATFORMS+=("windows-x64")
 
@@ -631,6 +665,7 @@ jobs:
             # Pairwise intra-ISA x86-64-v3 comparison (strict bitwise identity)
             compare_pair x86_64-linux windows-x64
             compare_pair windows-x64 linux-arm64 --max-esr 1e-6 --min-snr-db 100.0
+            compare_pair windows-x64 macos-arm64 --max-esr 1e-6 --min-snr-db 100.0
             compare_pair windows-x64 windows-arm64 --max-esr 1e-6 --min-snr-db 100.0
           else
             gap "windows-x64-cpu-missing-x86-64-v3"
@@ -640,6 +675,10 @@ jobs:
             compare_pair x86_64-linux x86_64-avx512 --max-esr 1e-6 --min-snr-db 100.0
             compare_pair x86_64-avx512 linux-arm64 --max-esr 1e-6 --min-snr-db 100.0
             compare_pair x86_64-avx512 macos-arm64 --max-esr 1e-6 --min-snr-db 100.0
+            compare_pair x86_64-avx512 windows-arm64 --max-esr 1e-6 --min-snr-db 100.0
+            if [ "${WIN_X64_READY:-0}" = "1" ]; then
+              compare_pair x86_64-avx512 windows-x64 --max-esr 1e-6 --min-snr-db 100.0
+            fi
           else
             gap "avx512-parity-vector-not-generated"
           fi

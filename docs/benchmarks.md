@@ -164,7 +164,7 @@ never duplicates the logic, and the crate is not coupled to any consumer name.
    gate binary installs from crates.io pinned to the engine version:
 
    ```bash
-   cargo install NeuralAmpModeler-rs --features testing --bin nam_perf_gate --version =4.0.0
+   cargo install NeuralAmpModeler-rs --features testing --bin nam_perf_gate --version =4.1.0
    ```
 
    Alternatively, point `NAM_PERF_GATE` at any pre-built `nam_perf_gate`

@@ -90,20 +90,20 @@ run_step spdx phase_spdx
 
 phase_policies() {
   if git grep -nF "#[test]" tests/common/ >/dev/null 2>&1; then echo "ERROR: #[test] in tests/common/" >&2; exit 1; fi
-  local cargo_ver cargo_full cargo_msrv
+  local cargo_ver cargo_full cargo_msrv bad doc_cfg feat rc=0
   cargo_ver=$(grep -m1 '^version = ' Cargo.toml | sed -E 's/version = "([0-9]+\.[0-9]+).*"/\1/')
   cargo_full=$(grep -m1 '^version = ' Cargo.toml | sed -E 's/version = "([^"]+)"/\1/')
   cargo_msrv=$(grep -m1 '^rust-version = ' Cargo.toml | sed -E 's/rust-version = "([^"]+)"/\1/')
-  grep -qE "NeuralAmpModeler-rs = (\"$cargo_ver\"|\{ version = \"$cargo_ver\")" README.md || { echo "README version mismatch" >&2; exit 1; }
+  grep -qE "NeuralAmpModeler-rs = (\"$cargo_ver\"|\{ version = \"$cargo_ver\")" README.md || { echo "README version mismatch" >&2; rc=1; }
   for f in README.md src/lib.rs; do
     bad=$(grep -nE 'NeuralAmpModeler-rs = ' "$f" | grep -vE "NeuralAmpModeler-rs = \"$cargo_ver(\.[0-9]+)?\"|version = \"$cargo_ver(\.[0-9]+)?\"" || true)
-    [ -z "$bad" ] || { echo "$f: install snippet diverges from $cargo_ver" >&2; echo "$bad" >&2; exit 1; }
+    [ -z "$bad" ] || { echo "$f: install snippet diverges from $cargo_ver" >&2; echo "$bad" >&2; rc=1; }
   done
-  grep -m1 '^## \[' CHANGELOG.md | grep -qF "## [$cargo_full] - " || { echo "CHANGELOG header mismatch (expected $cargo_full)" >&2; exit 1; }
-  grep -qE "badge/MSRV-$cargo_msrv" README.md || { echo "README MSRV mismatch" >&2; exit 1; }
+  grep -m1 '^## \[' CHANGELOG.md | grep -qF "## [$cargo_full] - " || { echo "CHANGELOG header mismatch (expected $cargo_full)" >&2; rc=1; }
+  grep -qE "badge/MSRV-$cargo_msrv" README.md || { echo "README MSRV mismatch" >&2; rc=1; }
   doc_cfg=$(git grep -h 'doc(cfg(' src/)
   for feat in $(grep -o -E 'feature = "[^"]+"' <<<"$doc_cfg" | sed -E 's/.*"([^"]+)".*/\1/' | sort -u); do
-    grep -qE "^$feat\s*=" Cargo.toml || { echo "Unknown doc(cfg) feature: $feat" >&2; exit 1; }
+    grep -qE "^$feat\s*=" Cargo.toml || { echo "Unknown doc(cfg) feature: $feat" >&2; rc=1; }
   done
   git ls-files '*.rs' | xargs awk '
     FNR == 1 { prev = 0 }
@@ -112,7 +112,8 @@ phase_policies() {
     s ~ /^(\/\/ SPDX|\/\/ Copyright|\/\/\/|\/\/!)/ { prev = 0; next }
     s ~ /^(\/\/([^\/!]|$)|\/\*)/ { prev = 1; next }
     s != "" { prev = 0 }
-    END { exit bad }'
+    END { exit bad }' || rc=1
+  return "$rc"
 }
 run_step policies phase_policies
 
