@@ -23,6 +23,8 @@ use crate::models::StaticModel;
 use crate::models::a2::model::dynamic::WaveNetA2Dyn;
 use crate::models::wavenet::common::WAVENET_MAX_NUM_FRAMES;
 
+mod update_weights;
+
 /// Multi-array A2 cascade — serial chain of `WaveNetA2Dyn` engines.
 pub struct WaveNetA2Cascade {
     /// Serial array engines (array 0 → array 1 → … → array N-1).

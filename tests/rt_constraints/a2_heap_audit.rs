@@ -32,6 +32,159 @@ mod audit_tests {
         );
     }
 
+    #[test]
+    fn cascade_runtime_weight_updates_are_heap_free() {
+        use neural_amp_modeler_rs::models::a2::{
+            ActivationType, GatingMode, WaveNetA2Cascade, WaveNetA2Dyn,
+        };
+        let mut first = WaveNetA2Dyn::new(
+            1,
+            3,
+            3,
+            5,
+            3,
+            3,
+            2,
+            &[2, 6],
+            &[1, 2],
+            vec![ActivationType::Tanh; 2],
+            vec![GatingMode::None; 2],
+            vec![None; 2],
+        )
+        .expect("create first array");
+        let mut second = WaveNetA2Dyn::new(
+            3,
+            5,
+            5,
+            1,
+            5,
+            5,
+            3,
+            &[3, 2],
+            &[1, 3],
+            vec![ActivationType::Tanh; 2],
+            vec![GatingMode::None; 2],
+            vec![None; 2],
+        )
+        .expect("create second array");
+        first
+            .set_weights(&vec![0.01; 146])
+            .expect("load first array");
+        second
+            .set_weights(&vec![0.01; 237])
+            .expect("load second array");
+        let mut model =
+            WaveNetA2Cascade::try_new(vec![first, second], None, 1).expect("create cascade");
+        let next = vec![0.02; 383];
+        assert_eq!(model.runtime_weight_count(), Ok(next.len()));
+        let mut invalid = next.clone();
+        invalid[382] = f32::INFINITY;
+        let input = [0.1; 128];
+        let mut output = [0.0; 128];
+        let (allocs, reallocs, deallocs) = {
+            let _guard = TrackingGuard::new();
+            for _ in 0..100 {
+                assert!(
+                    model
+                        .update_weights(std::hint::black_box(&next), 0.9)
+                        .is_ok()
+                );
+                assert!(model.update_weights(&invalid, 0.9).is_err());
+                assert!(model.update_weights(&next, f32::NAN).is_err());
+                assert!(model.update_weights(&[], 0.9).is_err());
+                model.process(&input, &mut output);
+            }
+            (get_alloc_count(), get_realloc_count(), get_dealloc_count())
+        };
+        assert_zero_heap(
+            allocs,
+            reallocs,
+            deallocs,
+            "A2 cascade runtime updates + processing",
+        );
+        assert!(output.iter().all(|v| v.is_finite()));
+    }
+
+    #[test]
+    fn dynamic_runtime_weight_updates_are_heap_free() {
+        use neural_amp_modeler_rs::models::a2::{ActivationType, GatingMode, WaveNetA2Dyn};
+        let mut model = WaveNetA2Dyn::new(
+            1,
+            3,
+            3,
+            1,
+            3,
+            3,
+            1,
+            &[2, 2],
+            &[1, 2],
+            vec![ActivationType::Tanh; 2],
+            vec![GatingMode::None; 2],
+            vec![None; 2],
+        )
+        .expect("create dynamic A2");
+        let initial = vec![0.01; 80];
+        let next = vec![0.02; 80];
+        model.set_weights(&initial).expect("load dynamic A2");
+        assert_eq!(model.runtime_weight_count(), Ok(initial.len()));
+        let mut invalid = next.clone();
+        invalid[79] = f32::INFINITY;
+        let input = [0.1; 128];
+        let mut output = [0.0; 128];
+        let (allocs, reallocs, deallocs) = {
+            let _guard = TrackingGuard::new();
+            for block in 0..100 {
+                let weights = if block % 2 == 0 { &initial } else { &next };
+                assert!(model.update_weights(std::hint::black_box(weights)).is_ok());
+                assert!(model.update_weights(&invalid).is_err());
+                assert!(model.update_weights(&[]).is_err());
+                model.process(&input, &mut output);
+            }
+            (get_alloc_count(), get_realloc_count(), get_dealloc_count())
+        };
+        assert_zero_heap(
+            allocs,
+            reallocs,
+            deallocs,
+            "dynamic A2 runtime weight updates + processing",
+        );
+        assert!(output.iter().all(|v| v.is_finite()));
+    }
+
+    fn audit_runtime_updates<const CH: usize>() {
+        let mut model = build_a2::<CH>(0.01);
+        let weights = a2_synth_weights::<CH>(0.02);
+        let mut invalid = weights.clone();
+        invalid[weights.len() - 1] = f32::NAN;
+        // Positive control for this exact operation: loading replaces storage.
+        let (load_allocs, load_deallocs) = {
+            let _guard = TrackingGuard::new();
+            assert!(model.set_weights(&weights).is_ok());
+            (get_alloc_count(), get_dealloc_count())
+        };
+        assert!(load_allocs > 0 && load_deallocs > 0);
+        let mut unloaded = WaveNetA2::<CH>::new().expect("create unloaded A2");
+        let mut unsupported = WaveNetA2::<4>::new().expect("create unsupported A2");
+        let (allocs, reallocs, deallocs) = {
+            let _guard = TrackingGuard::new();
+            for _ in 0..100 {
+                assert!(model.update_weights(std::hint::black_box(&weights)).is_ok());
+                assert!(model.update_weights(&weights[..weights.len() - 1]).is_err());
+                assert!(model.update_weights(&invalid).is_err());
+                assert!(unloaded.update_weights(&weights).is_err());
+                assert!(unsupported.update_weights(&weights).is_err());
+            }
+            (get_alloc_count(), get_realloc_count(), get_dealloc_count())
+        };
+        assert_zero_heap(allocs, reallocs, deallocs, "A2 runtime weight updates");
+    }
+
+    #[test]
+    fn runtime_weight_updates_are_heap_free() {
+        audit_runtime_updates::<3>();
+        audit_runtime_updates::<8>();
+    }
+
     /// Affirmative positive control: proves TrackingGuard detects allocations and deallocations.
     #[test]
     fn test_heap_audit_positive_control() {

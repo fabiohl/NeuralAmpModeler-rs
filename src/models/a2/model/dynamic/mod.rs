@@ -47,6 +47,7 @@ pub mod process;
 pub mod process_cascade;
 /// Per-frame dynamic processing kernel (`process_frame_dyn`).
 pub mod process_frame;
+mod update_weights;
 
 /// Runtime-dimensioned WaveNet A2 model.
 ///
@@ -58,6 +59,8 @@ pub mod process_frame;
 /// dispatch (standard, grouped, depthwise) is handled by the polymorphic
 /// `A2Conv1d::process_single_frame`.
 pub struct WaveNetA2Dyn {
+    // Prepared by load_weights_inner. Reloads invalidate it before changing storage.
+    pub(super) runtime_weight_layout: Result<usize, super::A2WeightUpdateError>,
     /// Input channel count (1 for standalone mono models;
     /// may be > 1 for cascade sub-arrays receiving multi-channel input).
     pub(crate) input_channels: usize,
@@ -397,6 +400,7 @@ impl WaveNetA2Dyn {
         let head1x1_scratch = AlignedVec::new(head_accum_size, 0.0f32)?;
 
         Ok(Self {
+            runtime_weight_layout: Err(super::A2WeightUpdateError::NotLoaded),
             input_channels,
             head_size,
             head_accum_size,

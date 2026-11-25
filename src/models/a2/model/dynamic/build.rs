@@ -26,6 +26,7 @@ impl WaveNetA2Dyn {
         let mut pos: usize = 0;
         self.load_weights_inner(weights, &mut pos, total)?;
         if pos != total {
+            self.runtime_weight_layout = Err(super::super::A2WeightUpdateError::NotLoaded);
             return Err(format!(
                 "set_weights: stream has {} unconsumed f32 (consumed {}, total {})",
                 total - pos,
@@ -47,6 +48,7 @@ impl WaveNetA2Dyn {
         pos: &mut usize,
         total: usize,
     ) -> Result<(), String> {
+        self.runtime_weight_layout = Err(super::super::A2WeightUpdateError::NotLoaded);
         self.load_rechannel_weights(weights, pos, total)?;
 
         let mut layers = Vec::with_capacity(self.num_layers);
@@ -58,6 +60,7 @@ impl WaveNetA2Dyn {
         self.load_head_conv_and_scale(weights, pos, total)?;
 
         self.layers = layers;
+        self.prepare_runtime_weight_layout();
 
         Ok(())
     }
