@@ -72,7 +72,12 @@ impl FiLMLayer {
     ///
     /// Does not allocate, reset streaming state, or modify projection weights.
     pub fn use_conditioned_modulation(&mut self) {
-        self.precomputed_modulation = false;
+        if self.precomputed_modulation {
+            // Grouped projections can leave trailing rows unwritten. Restore
+            // the zeroed scratch state that a freshly loaded projection has.
+            self.scale_shift_buf.fill(0.0);
+            self.precomputed_modulation = false;
+        }
     }
 
     /// Whether processing currently uses host-precomputed coefficients.

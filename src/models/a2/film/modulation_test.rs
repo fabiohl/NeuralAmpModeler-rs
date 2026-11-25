@@ -61,6 +61,44 @@ fn precomputed_modulation_matches_final_scales_and_resumes_projection() {
 }
 
 #[test]
+fn grouped_projection_resumes_without_retaining_override_coefficients() {
+    for (shift, groups, expected) in [(false, 2, [1.0, 1.0, 0.0]), (true, 4, [2.0, 1.0, 1.0])] {
+        let condition = [0.0; 4];
+        let mut layer = FiLMLayer::load(
+            FiLMConfig {
+                active: true,
+                shift,
+                groups,
+            },
+            condition.len(),
+            3,
+            vec![0.0; 4],
+            vec![1.0; if shift { 6 } else { 3 }],
+        )
+        .unwrap();
+        let mut before = [1.0; 3];
+        // SAFETY: Both slices match the loaded dimensions.
+        unsafe { layer.process(&mut before, &condition) };
+        assert_eq!(before, expected);
+
+        layer
+            .set_precomputed_modulation(&[2.0; 3], &[3.0; 3])
+            .unwrap();
+        let mut overridden = [1.0; 3];
+        // SAFETY: Both slices match the loaded dimensions.
+        unsafe { layer.process(&mut overridden, &condition) };
+        assert_eq!(overridden, [5.0; 3]);
+
+        layer.use_conditioned_modulation();
+        layer.use_conditioned_modulation();
+        let mut resumed = [1.0; 3];
+        // SAFETY: Both slices match the loaded dimensions.
+        unsafe { layer.process(&mut resumed, &condition) };
+        assert_eq!(resumed, before);
+    }
+}
+
+#[test]
 fn precomputed_modulation_rejects_before_changing_mode_or_values() {
     let mut actual = layer(3);
     let weights = actual.weights.to_vec();
