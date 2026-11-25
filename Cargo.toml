@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 [package]
 name = "NeuralAmpModeler-rs"
-version = "4.0.0"
+version = "4.1.0"
 edition = "2024"
 rust-version = "1.99.0"
 autobins = false
@@ -64,7 +64,7 @@ sha2 = { version = "0.11", optional = true }
 # Logging facade (zero overhead when disabled).
 log = "0.4.35"
 # Lean error signaling for off-RT threads.
-anyhow = "1.0.104"
+anyhow = "1.0.105"
 
 [dev-dependencies]
 NeuralAmpModeler-rs = { path = ".", features = ["testing"] }
