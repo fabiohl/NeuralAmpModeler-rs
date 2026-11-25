@@ -33,6 +33,79 @@ mod audit_tests {
     }
 
     #[test]
+    fn cascade_runtime_weight_updates_are_heap_free() {
+        use neural_amp_modeler_rs::models::a2::{
+            ActivationType, GatingMode, WaveNetA2Cascade, WaveNetA2Dyn,
+        };
+        let mut first = WaveNetA2Dyn::new(
+            1,
+            3,
+            3,
+            5,
+            3,
+            3,
+            2,
+            &[2, 6],
+            &[1, 2],
+            vec![ActivationType::Tanh; 2],
+            vec![GatingMode::None; 2],
+            vec![None; 2],
+        )
+        .expect("create first array");
+        let mut second = WaveNetA2Dyn::new(
+            3,
+            5,
+            5,
+            1,
+            5,
+            5,
+            3,
+            &[3, 2],
+            &[1, 3],
+            vec![ActivationType::Tanh; 2],
+            vec![GatingMode::None; 2],
+            vec![None; 2],
+        )
+        .expect("create second array");
+        first
+            .set_weights(&vec![0.01; 146])
+            .expect("load first array");
+        second
+            .set_weights(&vec![0.01; 237])
+            .expect("load second array");
+        let mut model =
+            WaveNetA2Cascade::try_new(vec![first, second], None, 1).expect("create cascade");
+        let next = vec![0.02; 383];
+        assert_eq!(model.runtime_weight_count(), Ok(next.len()));
+        let mut invalid = next.clone();
+        invalid[382] = f32::INFINITY;
+        let input = [0.1; 128];
+        let mut output = [0.0; 128];
+        let (allocs, reallocs, deallocs) = {
+            let _guard = TrackingGuard::new();
+            for _ in 0..100 {
+                assert!(
+                    model
+                        .update_weights(std::hint::black_box(&next), 0.9)
+                        .is_ok()
+                );
+                assert!(model.update_weights(&invalid, 0.9).is_err());
+                assert!(model.update_weights(&next, f32::NAN).is_err());
+                assert!(model.update_weights(&[], 0.9).is_err());
+                model.process(&input, &mut output);
+            }
+            (get_alloc_count(), get_realloc_count(), get_dealloc_count())
+        };
+        assert_zero_heap(
+            allocs,
+            reallocs,
+            deallocs,
+            "A2 cascade runtime updates + processing",
+        );
+        assert!(output.iter().all(|v| v.is_finite()));
+    }
+
+    #[test]
     fn dynamic_runtime_weight_updates_are_heap_free() {
         use neural_amp_modeler_rs::models::a2::{ActivationType, GatingMode, WaveNetA2Dyn};
         let mut model = WaveNetA2Dyn::new(

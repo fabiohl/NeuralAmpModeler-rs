@@ -7,8 +7,9 @@ Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights 
 
 `WaveNetA2::<3>::update_weights`, `WaveNetA2::<8>::update_weights` and
 `WaveNetA2Dyn::update_weights` replace coefficients in an already loaded A2
-model. They accept the same
-serialized NAM weight order as `set_weights`, including the head scale. All
+model. They accept the same serialized NAM weight order as `set_weights`,
+including bias/scale for mono heads. Multichannel array streams have no scale
+term: updates preserve their existing output scales. All
 convolution layouts are refreshed in place, including SIMD padding.
 
 Load with `set_weights` and negotiate the processing block size off the audio
@@ -37,15 +38,31 @@ This API is a first primitive for hypernetwork-produced weights, not a parametri
 model loader. Supported layouts are:
 
 - Canonical 23-layer static CH=3/8 models.
-- Dense mono-output dynamic arrays with arbitrary loaded channel and bottleneck
+- Dense dynamic arrays with mono or multichannel output with arbitrary loaded channel and bottleneck
   widths, input/condition widths, kernels, dilations and gating/blending modes.
   `runtime_weight_count()` validates the loaded destinations and returns the
   exact replacement-stream size. Nested condition-DSP weights are excluded from
   that stream and its state is preserved.
 
-FiLM, grouped projections/convolutions, head1x1 and multi-output/cascade updates
-are not supported. Other topologies return `UnsupportedTopology`; unloaded
+- Cascades of supported dynamic arrays, updated atomically through
+  `WaveNetA2Cascade::update_weights(&weights, head_scale)`.
+
+FiLM, grouped projections/convolutions and head1x1 updates are not supported. Other topologies return `UnsupportedTopology`; unloaded
 models return `NotLoaded`. Checks use arithmetic that detects count overflow.
+
+For a cascade, concatenate the per-array streams accepted by each array's
+`set_weights`. Supply the separate model-level scale as `head_scale`; if the
+source file has an optional trailing global scalar, remove it from the array
+stream and pass it separately. If it has none, use the current model-level
+scale (normally 1). Each mono array's own serialized head bias/scale stays in
+that array's stream. `runtime_weight_count()` returns the exact concatenated
+array-stream size and does not include the separate global scale. There is no
+stream-length inference or optional scalar in the runtime contract. Nested
+condition-DSP state and per-array output scales remain intact.
+
+All array layouts, the complete stream and the separate global scale are
+validated before modifying any array. A bad count, non-finite coefficient or
+unsupported destination in the last array cannot partially update the first.
 
 End-to-end HyperWaveNet support still needs the hypernetwork evaluator, remaining
 main-network layouts, control metadata, parameter normalization and a loader.
@@ -59,7 +76,10 @@ existing loader and compare output bit for bit after processing a nonzero prefix
 including no-op updates, changed updates, varied blocks and history wraparound.
 Both CH=3/8 specialized kernels and generic convolution fallback are covered.
 Dynamic tests exercise repeated changes, noncanonical kernels, differing
-bottlenecks, gating/blending and multichannel coefficient packing.
+bottlenecks, gating/blending and multichannel coefficient packing. Cascade
+tests include biased/unbiased multichannel intermediate heads, mono and
+multichannel final heads, temporal heads, global scaling, live changes and
+atomic rejection across array boundaries.
 Invalid streams and unsupported models are rejected atomically.
 
 The runtime-update heap tests use the shared counting allocator for repeated

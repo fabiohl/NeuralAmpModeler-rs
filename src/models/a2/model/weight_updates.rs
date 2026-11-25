@@ -8,7 +8,9 @@ use crate::models::a2::conv1d_ch::A2Conv1dCh;
 use crate::models::a2::layer::{A2ConvCh, A2Layer};
 use crate::models::a2::weights_layout::{transpose_conv1d_interleaved_4wide, transpose_dense_f32};
 
-/// Nonallocating errors from [`super::WaveNetA2::update_weights`] and [`super::dynamic::WaveNetA2Dyn::update_weights`].
+/// Nonallocating errors from A2 runtime weight updates on
+/// [`super::WaveNetA2`], [`super::dynamic::WaveNetA2Dyn`] and
+/// [`super::cascade::WaveNetA2Cascade`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum A2WeightUpdateError {
     /// Construction/loading must finish before runtime updates.
@@ -25,6 +27,9 @@ pub enum A2WeightUpdateError {
         /// Supplied number of serialized f32 coefficients.
         actual: usize,
     },
+    /// The separately supplied cascade-level scale must be finite.
+    #[error("A2 cascade head scale is not finite")]
+    NonFiniteHeadScale,
     /// Every coefficient, including head scale, must be finite.
     #[error("A2 runtime update contains a non-finite weight at index {index}")]
     NonFiniteWeight {
