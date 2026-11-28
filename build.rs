@@ -23,11 +23,16 @@
 fn main() {
     emit_avx512_cfg();
 
+    // Declare the docs.rs switch before the early return so Cargo invalidates a
+    // cached build-script run when DOCS_RS changes. Declaring it after the
+    // return meant a cached docs build could keep the non-docs configuration
+    // (and vice versa) until something else forced a rerun.
+    println!("cargo:rerun-if-env-changed=DOCS_RS");
+
     if std::env::var("DOCS_RS").is_ok() {
         return;
     }
 
-    println!("cargo:rerun-if-env-changed=DOCS_RS");
     println!("cargo:rerun-if-env-changed=CARGO_PRIMARY_PACKAGE");
     println!("cargo:rerun-if-changed=.cargo/hide-libm-shadow.map");
     // Keep `target/bench_constants.env` in sync with the canonical constant —

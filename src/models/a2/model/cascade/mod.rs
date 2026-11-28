@@ -398,25 +398,24 @@ impl WaveNetA2Cascade {
                 return total;
             }
             let out_ch = self.arrays.last().map(|a| a.head_size.max(1)).unwrap_or(1);
-            if out_ch <= WAVENET_MAX_NUM_FRAMES {
-                let max_frames = (WAVENET_MAX_NUM_FRAMES / out_ch).max(1);
-                let nf = budget.min(total).min(max_frames);
-                let zeros = [0.0f32; WAVENET_MAX_NUM_FRAMES];
-                let mut discard = [0.0f32; WAVENET_MAX_NUM_FRAMES];
-                self.process(&zeros[..nf], &mut discard[..nf * out_ch]);
-                // The chained pass advances each subarray feed by exactly `nf`.
-                for arr in &mut self.arrays {
-                    arr.prewarm_advance(nf);
-                }
-                self.prewarm_pending = self.prewarm_pending.saturating_sub(nf);
-                budget -= nf;
-            } else {
-                for arr in &mut self.arrays {
-                    arr.prewarm_advance(total);
-                }
-                self.prewarm_pending = 0;
-                return 0;
+            // The cascade input is mono (array 0), so `nf` frames need `nf`
+            // zeroed input floats; the discard sink needs `nf * out_ch`.
+            // `out_ch` is bounded by the A2 constructor's prewarm scratch
+            // bound, so one frame always fits and the feed never retires
+            // accounting without feeding. Derive the local sink from the
+            // shared constant so a bound change cannot desynchronize them.
+            const CASCADE_STACK_FLOATS: usize = super::dynamic::PREWARM_STACK_WIDTH;
+            let max_frames = (CASCADE_STACK_FLOATS / out_ch).clamp(1, WAVENET_MAX_NUM_FRAMES);
+            let nf = budget.min(total).min(max_frames);
+            let zeros = [0.0f32; WAVENET_MAX_NUM_FRAMES];
+            let mut discard = [0.0f32; CASCADE_STACK_FLOATS];
+            self.process(&zeros[..nf], &mut discard[..nf * out_ch]);
+            // The chained pass advances each subarray feed by exactly `nf`.
+            for arr in &mut self.arrays {
+                arr.prewarm_advance(nf);
             }
+            self.prewarm_pending = self.prewarm_pending.saturating_sub(nf);
+            budget -= nf;
         }
     }
 
@@ -429,10 +428,7 @@ impl WaveNetA2Cascade {
     #[cold]
     pub fn prewarm(&mut self) {
         self.prewarm_reset();
-        while !self.prewarm_complete() {
-            let take = self.prewarm_pending.max(1);
-            self.prewarm_step(take);
-        }
+        crate::models::drain_prewarm_until_complete(self);
     }
 }
 

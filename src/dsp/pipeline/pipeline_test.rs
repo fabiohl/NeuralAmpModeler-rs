@@ -740,3 +740,7 @@ mod gate_test;
 #[cfg(test)]
 #[path = "pipeline_dither_test.rs"]
 mod dither_test;
+
+#[cfg(test)]
+#[path = "pipeline_mono_contract_test.rs"]
+mod mono_contract_test;

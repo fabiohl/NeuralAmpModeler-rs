@@ -10,6 +10,15 @@ use crate::dsp::oversample::{OversampleEngine, OversampleFactor};
 use crate::dsp::pipeline::MAX_RESAMP_BUF;
 use crate::dsp::resampler::NamResampler;
 
+#[cfg(feature = "testing")]
+#[test]
+fn disable_gate_hook_is_off_by_default() {
+    assert!(
+        !super::DISABLE_GATE.load(std::sync::atomic::Ordering::Relaxed),
+        "feature `testing` must not disable the gate without an explicit opt-in"
+    );
+}
+
 #[test]
 fn input_stage_stereo_clamps_oversized_n_samples_and_flags_violation() {
     let mut resampler = NamResampler::new_simple(48_000, 48_000).unwrap();

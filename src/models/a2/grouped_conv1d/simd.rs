@@ -2,11 +2,7 @@
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
 // SIMD kernel implementation using specialized parameter lists.
-#![allow(
-    unsafe_op_in_unsafe_fn,
-    clippy::missing_safety_doc,
-    clippy::too_many_arguments
-)]
+#![allow(clippy::missing_safety_doc, clippy::too_many_arguments)]
 
 //! SIMD (AVX2/FMA, NEON) kernels for grouped dilated causal Conv1D.
 //!
@@ -42,17 +38,22 @@ pub(crate) unsafe fn load_mixin_4(
     );
     if let Some(m) = mixin {
         if out_c + 3 < out_ch {
-            (
-                *m.get_unchecked(out_c),
-                *m.get_unchecked(out_c + 1),
-                *m.get_unchecked(out_c + 2),
-                *m.get_unchecked(out_c + 3),
-            )
+            // SAFETY: `out_c + 3 < out_ch` and the caller guarantees
+            // `m.len() >= out_ch`, so all four unchecked reads are in bounds.
+            unsafe {
+                (
+                    *m.get_unchecked(out_c),
+                    *m.get_unchecked(out_c + 1),
+                    *m.get_unchecked(out_c + 2),
+                    *m.get_unchecked(out_c + 3),
+                )
+            }
         } else {
             let mut v = [0.0f32; 4];
             for (i, val) in v.iter_mut().enumerate() {
                 if out_c + i < out_ch {
-                    *val = *m.get_unchecked(out_c + i);
+                    // SAFETY: `out_c + i < out_ch <= m.len()`.
+                    *val = unsafe { *m.get_unchecked(out_c + i) };
                 }
             }
             (v[0], v[1], v[2], v[3])
@@ -105,7 +106,15 @@ unsafe fn build_tap_ptrs(
 /// single contiguous load.
 ///
 /// # Safety
-/// Only call when `groups == in_ch == out_ch`.
+/// `conv.groups == conv.in_ch == conv.out_ch`, `conv.kernel <= MAX_KERNEL`, and
+/// `frame_idx >= conv.dilation * (conv.kernel - 1)`. `out_frame.len() >=
+/// conv.out_ch`. `layer_buffer` must contain each complete `conv.in_ch`-wide tap
+/// row through `(frame_idx + 1) * conv.in_ch`. For the depthwise SoA weights, the
+/// caller must ensure `conv.weights.len() >= conv.total_blocks * 4 *
+/// conv.in_per_group * conv.kernel + conv.kernel * conv.in_ch`; when
+/// `conv.do_bias`, `conv.bias.len() >= conv.out_ch`. On x86, the CPU must support
+/// AVX2+FMA (project target x86-64-v3); aarch64 uses baseline NEON.
+/// `#[target_feature]` does not check CPU support at runtime.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
 #[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub(crate) unsafe fn process_single_frame_depthwise_avx2(
@@ -158,10 +167,11 @@ pub(crate) unsafe fn process_single_frame_depthwise_avx2(
 
     #[cfg(target_arch = "aarch64")]
     {
-        // SAFETY: the release assertions above verify `out_frame` length,
-        // `frame_idx` lookback, and `layer_buffer` tap bases; the caller
-        // passes a depthwise `conv` (`groups == in_ch == out_ch`), and NEON
-        // is part of the `aarch64` baseline.
+        // SAFETY: the release assertions above check `out_frame` length,
+        // `frame_idx` lookback, and tap starts; the unsafe caller contract also
+        // requires every tap row to contain the full `in_ch` width. The caller
+        // passes a depthwise `conv` (`groups == in_ch == out_ch`). ISA: NEON is
+        // baseline on aarch64 (the target-feature attribute is not a CPU check).
         unsafe {
             process_single_frame_depthwise_neon(conv, layer_buffer, out_frame, frame_idx);
         }
@@ -169,69 +179,76 @@ pub(crate) unsafe fn process_single_frame_depthwise_avx2(
 
     #[cfg(target_arch = "x86_64")]
     {
-        let ch = conv.in_ch;
-        let kernel = conv.kernel;
-        // SAFETY: the release assertions above guarantee every tap of
-        // `frame_idx` is in bounds and `kernel <= MAX_KERNEL`.
-        let tap_ptrs =
-            unsafe { build_tap_ptrs(layer_buffer, frame_idx, ch, kernel, conv.dilation) };
+        // SAFETY: the release assertions above check `out_frame` length,
+        // `frame_idx` lookback, and tap starts; the unsafe caller contract also
+        // requires every tap row to contain the full `in_ch` width. The caller
+        // passes a depthwise `conv`; `tap_ptrs` is built under the same contract.
+        // ISA: caller must provide x86-64-v3 (AVX2+FMA); `#[target_feature]` is
+        // not a runtime CPU check.
+        unsafe {
+            let ch = conv.in_ch;
+            let kernel = conv.kernel;
+            // SAFETY: the release assertions above guarantee every tap of
+            // `frame_idx` is in bounds and `kernel <= MAX_KERNEL`.
+            let tap_ptrs = build_tap_ptrs(layer_buffer, frame_idx, ch, kernel, conv.dilation);
 
-        // Depthwise layout: `[kernel][channel]`, appended after the
-        // interleaved general block.
-        let soa_base = conv.total_blocks * 4 * conv.in_per_group * conv.kernel;
-        let w_ptr = conv.weights.as_ptr().add(soa_base);
-        let bias_ptr = conv.bias.as_ptr();
-        let ch8 = ch & !7;
+            // Depthwise layout: `[kernel][channel]`, appended after the
+            // interleaved general block.
+            let soa_base = conv.total_blocks * 4 * conv.in_per_group * conv.kernel;
+            let w_ptr = conv.weights.as_ptr().add(soa_base);
+            let bias_ptr = conv.bias.as_ptr();
+            let ch8 = ch & !7;
 
-        let mut c = 0;
-        while c < ch8 {
-            let mut acc0 = _mm256_setzero_ps();
-            let mut acc1 = _mm256_setzero_ps();
-            let mut k = 0;
-            while k + 1 < kernel {
-                let tap0 = *tap_ptrs.get_unchecked(k);
-                let wv0 = _mm256_loadu_ps(w_ptr.add(k * ch + c));
-                let sv0 = _mm256_loadu_ps(tap0.add(c));
-                acc0 = _mm256_fmadd_ps(wv0, sv0, acc0);
+            let mut c = 0;
+            while c < ch8 {
+                let mut acc0 = _mm256_setzero_ps();
+                let mut acc1 = _mm256_setzero_ps();
+                let mut k = 0;
+                while k + 1 < kernel {
+                    let tap0 = *tap_ptrs.get_unchecked(k);
+                    let wv0 = _mm256_loadu_ps(w_ptr.add(k * ch + c));
+                    let sv0 = _mm256_loadu_ps(tap0.add(c));
+                    acc0 = _mm256_fmadd_ps(wv0, sv0, acc0);
 
-                let tap1 = *tap_ptrs.get_unchecked(k + 1);
-                let wv1 = _mm256_loadu_ps(w_ptr.add((k + 1) * ch + c));
-                let sv1 = _mm256_loadu_ps(tap1.add(c));
-                acc1 = _mm256_fmadd_ps(wv1, sv1, acc1);
+                    let tap1 = *tap_ptrs.get_unchecked(k + 1);
+                    let wv1 = _mm256_loadu_ps(w_ptr.add((k + 1) * ch + c));
+                    let sv1 = _mm256_loadu_ps(tap1.add(c));
+                    acc1 = _mm256_fmadd_ps(wv1, sv1, acc1);
 
-                k += 2;
-            }
-            if k < kernel {
-                let tap = *tap_ptrs.get_unchecked(k);
-                let wv = _mm256_loadu_ps(w_ptr.add(k * ch + c));
-                let sv = _mm256_loadu_ps(tap.add(c));
-                acc0 = _mm256_fmadd_ps(wv, sv, acc0);
-            }
-            let mut acc = _mm256_add_ps(acc0, acc1);
+                    k += 2;
+                }
+                if k < kernel {
+                    let tap = *tap_ptrs.get_unchecked(k);
+                    let wv = _mm256_loadu_ps(w_ptr.add(k * ch + c));
+                    let sv = _mm256_loadu_ps(tap.add(c));
+                    acc0 = _mm256_fmadd_ps(wv, sv, acc0);
+                }
+                let mut acc = _mm256_add_ps(acc0, acc1);
 
-            if conv.do_bias {
-                let bv = _mm256_loadu_ps(bias_ptr.add(c));
-                acc = _mm256_add_ps(acc, bv);
-            }
+                if conv.do_bias {
+                    let bv = _mm256_loadu_ps(bias_ptr.add(c));
+                    acc = _mm256_add_ps(acc, bv);
+                }
 
-            _mm256_storeu_ps(out_frame.as_mut_ptr().add(c), acc);
-            c += 8;
-        }
-
-        for c in c..ch {
-            let mut acc = 0.0f32;
-            for k in 0..kernel {
-                let tap = *tap_ptrs.get_unchecked(k);
-                let w = *w_ptr.add(k * ch + c);
-                let s = *tap.add(c);
-                acc += w * s;
+                _mm256_storeu_ps(out_frame.as_mut_ptr().add(c), acc);
+                c += 8;
             }
 
-            if conv.do_bias {
-                acc += *conv.bias.get_unchecked(c);
-            }
+            for c in c..ch {
+                let mut acc = 0.0f32;
+                for k in 0..kernel {
+                    let tap = *tap_ptrs.get_unchecked(k);
+                    let w = *w_ptr.add(k * ch + c);
+                    let s = *tap.add(c);
+                    acc += w * s;
+                }
 
-            *out_frame.get_unchecked_mut(c) = acc;
+                if conv.do_bias {
+                    acc += *conv.bias.get_unchecked(c);
+                }
+
+                *out_frame.get_unchecked_mut(c) = acc;
+            }
         }
     }
 }
@@ -258,86 +275,99 @@ unsafe fn process_single_frame_depthwise_neon(
     // Depthwise layout: `[kernel][channel]`, appended after the interleaved
     // general block.
     let soa_base = conv.total_blocks * 4 * conv.in_per_group * conv.kernel;
-    let w_ptr = conv.weights.as_ptr().add(soa_base);
+    // SAFETY: the caller/`assert!`s guarantee `weights` covers the interleaved
+    // block plus this depthwise layout, so `soa_base` stays within `weights`.
+    let w_ptr = unsafe { conv.weights.as_ptr().add(soa_base) };
     let bias_ptr = conv.bias.as_ptr();
     let out_ptr = out_frame.as_mut_ptr();
     let ch8 = ch & !7;
 
     let mut c = 0;
     while c < ch8 {
-        let mut even_lo = vdupq_n_f32(0.0);
-        let mut even_hi = vdupq_n_f32(0.0);
-        let mut odd_lo = vdupq_n_f32(0.0);
-        let mut odd_hi = vdupq_n_f32(0.0);
-        let mut k = 0;
-        while k + 1 < kernel {
-            let tap0 = *tap_ptrs.get_unchecked(k);
-            let w0_lo = vld1q_f32(w_ptr.add(k * ch + c));
-            let w0_hi = vld1q_f32(w_ptr.add(k * ch + c + 4));
-            let s0_lo = vld1q_f32(tap0.add(c));
-            let s0_hi = vld1q_f32(tap0.add(c + 4));
-            even_lo = vfmaq_f32(even_lo, w0_lo, s0_lo);
-            even_hi = vfmaq_f32(even_hi, w0_hi, s0_hi);
+        // SAFETY: `c + 7 < ch` and `k < kernel`; the tap table and `w_ptr`
+        // cover every depthwise weight/sample of the block. ISA: NEON is the
+        // aarch64 baseline (`#[target_feature]` is not a runtime check).
+        unsafe {
+            let mut even_lo = vdupq_n_f32(0.0);
+            let mut even_hi = vdupq_n_f32(0.0);
+            let mut odd_lo = vdupq_n_f32(0.0);
+            let mut odd_hi = vdupq_n_f32(0.0);
+            let mut k = 0;
+            while k + 1 < kernel {
+                let tap0 = *tap_ptrs.get_unchecked(k);
+                let w0_lo = vld1q_f32(w_ptr.add(k * ch + c));
+                let w0_hi = vld1q_f32(w_ptr.add(k * ch + c + 4));
+                let s0_lo = vld1q_f32(tap0.add(c));
+                let s0_hi = vld1q_f32(tap0.add(c + 4));
+                even_lo = vfmaq_f32(even_lo, w0_lo, s0_lo);
+                even_hi = vfmaq_f32(even_hi, w0_hi, s0_hi);
 
-            let tap1 = *tap_ptrs.get_unchecked(k + 1);
-            let w1_lo = vld1q_f32(w_ptr.add((k + 1) * ch + c));
-            let w1_hi = vld1q_f32(w_ptr.add((k + 1) * ch + c + 4));
-            let s1_lo = vld1q_f32(tap1.add(c));
-            let s1_hi = vld1q_f32(tap1.add(c + 4));
-            odd_lo = vfmaq_f32(odd_lo, w1_lo, s1_lo);
-            odd_hi = vfmaq_f32(odd_hi, w1_hi, s1_hi);
+                let tap1 = *tap_ptrs.get_unchecked(k + 1);
+                let w1_lo = vld1q_f32(w_ptr.add((k + 1) * ch + c));
+                let w1_hi = vld1q_f32(w_ptr.add((k + 1) * ch + c + 4));
+                let s1_lo = vld1q_f32(tap1.add(c));
+                let s1_hi = vld1q_f32(tap1.add(c + 4));
+                odd_lo = vfmaq_f32(odd_lo, w1_lo, s1_lo);
+                odd_hi = vfmaq_f32(odd_hi, w1_hi, s1_hi);
 
-            k += 2;
-        }
-        if k < kernel {
-            let tap = *tap_ptrs.get_unchecked(k);
-            let w_lo = vld1q_f32(w_ptr.add(k * ch + c));
-            let w_hi = vld1q_f32(w_ptr.add(k * ch + c + 4));
-            let s_lo = vld1q_f32(tap.add(c));
-            let s_hi = vld1q_f32(tap.add(c + 4));
-            even_lo = vfmaq_f32(even_lo, w_lo, s_lo);
-            even_hi = vfmaq_f32(even_hi, w_hi, s_hi);
-        }
+                k += 2;
+            }
+            if k < kernel {
+                let tap = *tap_ptrs.get_unchecked(k);
+                let w_lo = vld1q_f32(w_ptr.add(k * ch + c));
+                let w_hi = vld1q_f32(w_ptr.add(k * ch + c + 4));
+                let s_lo = vld1q_f32(tap.add(c));
+                let s_hi = vld1q_f32(tap.add(c + 4));
+                even_lo = vfmaq_f32(even_lo, w_lo, s_lo);
+                even_hi = vfmaq_f32(even_hi, w_hi, s_hi);
+            }
 
-        let mut acc_lo = vaddq_f32(even_lo, odd_lo);
-        let mut acc_hi = vaddq_f32(even_hi, odd_hi);
-        if conv.do_bias {
-            acc_lo = vaddq_f32(acc_lo, vld1q_f32(bias_ptr.add(c)));
-            acc_hi = vaddq_f32(acc_hi, vld1q_f32(bias_ptr.add(c + 4)));
+            let mut acc_lo = vaddq_f32(even_lo, odd_lo);
+            let mut acc_hi = vaddq_f32(even_hi, odd_hi);
+            if conv.do_bias {
+                acc_lo = vaddq_f32(acc_lo, vld1q_f32(bias_ptr.add(c)));
+                acc_hi = vaddq_f32(acc_hi, vld1q_f32(bias_ptr.add(c + 4)));
+            }
+            vst1q_f32(out_ptr.add(c), acc_lo);
+            vst1q_f32(out_ptr.add(c + 4), acc_hi);
         }
-        vst1q_f32(out_ptr.add(c), acc_lo);
-        vst1q_f32(out_ptr.add(c + 4), acc_hi);
         c += 8;
     }
 
     for c in c..ch {
-        let mut acc = 0.0f32;
-        for k in 0..kernel {
-            let tap = *tap_ptrs.get_unchecked(k);
-            let w = *w_ptr.add(k * ch + c);
-            let s = *tap.add(c);
-            acc += w * s;
+        // SAFETY: `c < ch` and `k < kernel`; the tap table, weights, bias, and
+        // output cover the depthwise scalar-tail accesses. ISA: NEON is the
+        // aarch64 baseline (`#[target_feature]` is not a runtime check).
+        unsafe {
+            let mut acc = 0.0f32;
+            for k in 0..kernel {
+                let tap = *tap_ptrs.get_unchecked(k);
+                let w = *w_ptr.add(k * ch + c);
+                let s = *tap.add(c);
+                acc += w * s;
+            }
+            if conv.do_bias {
+                acc += *conv.bias.get_unchecked(c);
+            }
+            *out_frame.get_unchecked_mut(c) = acc;
         }
-        if conv.do_bias {
-            acc += *conv.bias.get_unchecked(c);
-        }
-        *out_frame.get_unchecked_mut(c) = acc;
     }
 }
 
 /// Grouped dilated conv — one frame, `groups > 1` (and not depthwise).
 ///
 /// # Safety
-/// - `out_frame.len() >= conv.out_ch` (release-asserted inside).
-/// - `frame_idx >= conv.dilation * (conv.kernel - 1)` (release-asserted;
-///   the warm-up invariant, owned release-stable by the layer-state
-///   construction).
-/// - `layer_buffer` must cover the `in_ch`-wide lookback window for every tap
-///   of `frame_idx` (release-asserted tap bases plus a debug-only
-///   `(frame_idx + 1) * in_ch` upper-bound net, F-RES2-10) and outlive the call.
-/// - `mixin` must be `None` or hold at least `conv.out_ch` elements
-///   (release-asserted).
-/// - The CPU must support AVX2+FMA / NEON (compile-time baseline).
+/// - `out_frame.len() >= conv.out_ch`; `mixin` is `None` or has at least
+///   `conv.out_ch` initialized f32 elements.
+/// - `conv.kernel <= MAX_KERNEL` and `frame_idx >= conv.dilation *
+///   (conv.kernel - 1)`.
+/// - `layer_buffer` must contain every complete `conv.in_ch`-wide tap row for
+///   the dilated lookback through `(frame_idx + 1) * conv.in_ch` elements.
+/// - The constructed weight layout must be intact:
+///   `conv.weights.len() >= conv.total_blocks * 4 * conv.in_per_group *
+///   conv.kernel`; when `conv.do_bias`, `conv.bias.len() >= conv.out_ch`.
+/// - The CPU must support AVX2+FMA on x86 (the project targets x86-64-v3) or
+///   baseline NEON on aarch64; `#[target_feature]` does not check CPU support.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
 #[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn grouped_conv1d_single_frame_simd(
@@ -391,9 +421,11 @@ pub unsafe fn grouped_conv1d_single_frame_simd(
 
     #[cfg(target_arch = "aarch64")]
     {
-        // SAFETY: the release assertions above verify `out_frame` length,
-        // `frame_idx` lookback, `layer_buffer` tap bases, and `mixin` length;
-        // NEON is part of the `aarch64` baseline.
+        // SAFETY: the release assertions above check `out_frame` length,
+        // `frame_idx` lookback, tap starts, and `mixin` length; the unsafe
+        // caller contract supplies every full input row and the tap table
+        // accesses remain within them. ISA: NEON is baseline on aarch64
+        // (`#[target_feature]` is not a runtime CPU check).
         unsafe {
             grouped_conv1d_single_frame_neon(conv, layer_buffer, out_frame, frame_idx, mixin);
         }
@@ -401,86 +433,94 @@ pub unsafe fn grouped_conv1d_single_frame_simd(
 
     #[cfg(target_arch = "x86_64")]
     {
-        let in_per_group = conv.in_per_group;
-        let kernel = conv.kernel;
-        let dilation = conv.dilation;
-        let num_blocks_per_group = conv.num_blocks_per_group;
+        // SAFETY: the release-active `assert!`s above check `out_frame` length,
+        // `frame_idx` lookback, tap starts, and `mixin` length; the unsafe
+        // caller contract supplies every full input row. The tap table, weight
+        // slices, bias, mixin, and output are indexed within those extents.
+        // ISA: caller must provide x86-64-v3-compatible CPU (AVX2+FMA);
+        // `#[target_feature]` is not a runtime CPU check.
+        unsafe {
+            let in_per_group = conv.in_per_group;
+            let kernel = conv.kernel;
+            let dilation = conv.dilation;
+            let num_blocks_per_group = conv.num_blocks_per_group;
 
-        let mut tap_ptrs = [core::ptr::null::<f32>(); MAX_KERNEL];
-        let k_limit = kernel.min(MAX_KERNEL);
-        for (k, tap) in tap_ptrs.iter_mut().enumerate().take(k_limit) {
-            let offset = (dilation as isize) * ((k as isize) + 1 - (kernel as isize));
-            let in_start = ((frame_idx as isize) + offset) as usize * conv.in_ch;
-            // SAFETY: the release asserts above prove the tap base is in bounds.
-            *tap = unsafe { layer_buffer.as_ptr().add(in_start) };
-            let step = dilation * conv.in_ch;
-            if dilation >= 128 {
-                prefetch_strategy_2stage(*tap, step, k, kernel, dilation);
-            } else {
-                prefetch_strategy_simple(*tap, step, k, kernel, dilation);
-            }
-        }
-
-        let w_ptr = conv.weights.as_ptr();
-
-        for g in 0..conv.groups {
-            let group_in_start = g * in_per_group;
-            let group_out_start = g * conv.out_per_group;
-            let wk_group_base = g * (num_blocks_per_group * kernel * in_per_group * 4);
-
-            for b in 0..num_blocks_per_group {
-                let out_c = group_out_start + b * 4;
-                let (mu0, mu1, mu2, mu3) = load_mixin_4(mixin, out_c, conv.out_ch);
-
-                let mut acc = if conv.do_bias {
-                    _mm_setr_ps(
-                        *conv.bias.get_unchecked(out_c) + mu0,
-                        if out_c + 1 < conv.out_ch {
-                            *conv.bias.get_unchecked(out_c + 1)
-                        } else {
-                            0.0
-                        } + mu1,
-                        if out_c + 2 < conv.out_ch {
-                            *conv.bias.get_unchecked(out_c + 2)
-                        } else {
-                            0.0
-                        } + mu2,
-                        if out_c + 3 < conv.out_ch {
-                            *conv.bias.get_unchecked(out_c + 3)
-                        } else {
-                            0.0
-                        } + mu3,
-                    )
+            let mut tap_ptrs = [core::ptr::null::<f32>(); MAX_KERNEL];
+            let k_limit = kernel.min(MAX_KERNEL);
+            for (k, tap) in tap_ptrs.iter_mut().enumerate().take(k_limit) {
+                let offset = (dilation as isize) * ((k as isize) + 1 - (kernel as isize));
+                let in_start = ((frame_idx as isize) + offset) as usize * conv.in_ch;
+                // SAFETY: the release asserts above prove the tap base is in bounds.
+                *tap = layer_buffer.as_ptr().add(in_start);
+                let step = dilation * conv.in_ch;
+                if dilation >= 128 {
+                    prefetch_strategy_2stage(*tap, step, k, kernel, dilation);
                 } else {
-                    _mm_setr_ps(mu0, mu1, mu2, mu3)
-                };
-
-                for ik in 0..kernel {
-                    let tap = *tap_ptrs.get_unchecked(ik);
-                    for ic in 0..in_per_group {
-                        let w_base = wk_group_base
-                            + b * (kernel * in_per_group * 4)
-                            + ik * (in_per_group * 4)
-                            + ic * 4;
-                        let wv = _mm_loadu_ps(w_ptr.add(w_base));
-                        let sv = _mm_set1_ps(*tap.add(group_in_start + ic));
-                        acc = _mm_fmadd_ps(wv, sv, acc);
-                    }
+                    prefetch_strategy_simple(*tap, step, k, kernel, dilation);
                 }
+            }
 
-                if out_c + 3 < conv.out_ch {
-                    _mm_storeu_ps(out_frame.as_mut_ptr().add(out_c), acc);
-                } else {
-                    // SAFETY: `transmute` from __m128 to [f32; 4] is a
-                    // no-op at the ABI level (both are 128-bit types with
-                    // the same alignment). This is the standard idiom for
-                    // extracting individual lanes from an XMM/NEON register
-                    // for edge-case write-back when out_ch is not a
-                    // multiple of 4.
-                    let r = core::mem::transmute::<__m128, [f32; 4]>(acc);
-                    for (lane, &val) in r.iter().enumerate() {
-                        if out_c + lane < conv.out_ch {
-                            *out_frame.get_unchecked_mut(out_c + lane) = val;
+            let w_ptr = conv.weights.as_ptr();
+
+            for g in 0..conv.groups {
+                let group_in_start = g * in_per_group;
+                let group_out_start = g * conv.out_per_group;
+                let wk_group_base = g * (num_blocks_per_group * kernel * in_per_group * 4);
+
+                for b in 0..num_blocks_per_group {
+                    let out_c = group_out_start + b * 4;
+                    let (mu0, mu1, mu2, mu3) = load_mixin_4(mixin, out_c, conv.out_ch);
+
+                    let mut acc = if conv.do_bias {
+                        _mm_setr_ps(
+                            *conv.bias.get_unchecked(out_c) + mu0,
+                            if out_c + 1 < conv.out_ch {
+                                *conv.bias.get_unchecked(out_c + 1)
+                            } else {
+                                0.0
+                            } + mu1,
+                            if out_c + 2 < conv.out_ch {
+                                *conv.bias.get_unchecked(out_c + 2)
+                            } else {
+                                0.0
+                            } + mu2,
+                            if out_c + 3 < conv.out_ch {
+                                *conv.bias.get_unchecked(out_c + 3)
+                            } else {
+                                0.0
+                            } + mu3,
+                        )
+                    } else {
+                        _mm_setr_ps(mu0, mu1, mu2, mu3)
+                    };
+
+                    for ik in 0..kernel {
+                        let tap = *tap_ptrs.get_unchecked(ik);
+                        for ic in 0..in_per_group {
+                            let w_base = wk_group_base
+                                + b * (kernel * in_per_group * 4)
+                                + ik * (in_per_group * 4)
+                                + ic * 4;
+                            let wv = _mm_loadu_ps(w_ptr.add(w_base));
+                            let sv = _mm_set1_ps(*tap.add(group_in_start + ic));
+                            acc = _mm_fmadd_ps(wv, sv, acc);
+                        }
+                    }
+
+                    if out_c + 3 < conv.out_ch {
+                        _mm_storeu_ps(out_frame.as_mut_ptr().add(out_c), acc);
+                    } else {
+                        // SAFETY: `transmute` from __m128 to [f32; 4] is a
+                        // no-op at the ABI level (both are 128-bit types with
+                        // the same alignment). This is the standard idiom for
+                        // extracting individual lanes from an XMM/NEON register
+                        // for edge-case write-back when out_ch is not a
+                        // multiple of 4.
+                        let r = core::mem::transmute::<__m128, [f32; 4]>(acc);
+                        for (lane, &val) in r.iter().enumerate() {
+                            if out_c + lane < conv.out_ch {
+                                *out_frame.get_unchecked_mut(out_c + lane) = val;
+                            }
                         }
                     }
                 }
@@ -557,18 +597,23 @@ unsafe fn grouped_conv1d_single_frame_neon(
         };
 
         for k in 0..kernel {
-            let tap = *tap_ptrs.get_unchecked(k);
-            let k_off = k * in_per_group * 4;
-            for ic in 0..in_per_group {
-                let off = k_off + ic * 4;
-                let h0 = vdupq_n_f32(*tap.add(in0 + ic));
-                let h1 = vdupq_n_f32(*tap.add(in1 + ic));
-                let h2 = vdupq_n_f32(*tap.add(in2 + ic));
-                let h3 = vdupq_n_f32(*tap.add(in3 + ic));
-                acc0 = vfmaq_f32(acc0, vld1q_f32(w_ptr.add(w0 + off)), h0);
-                acc1 = vfmaq_f32(acc1, vld1q_f32(w_ptr.add(w1 + off)), h1);
-                acc2 = vfmaq_f32(acc2, vld1q_f32(w_ptr.add(w2 + off)), h2);
-                acc3 = vfmaq_f32(acc3, vld1q_f32(w_ptr.add(w3 + off)), h3);
+            // SAFETY: `k < kernel`; the tap table, weights, and input taps cover
+            // every `k`/`ic` access for the four blocks. ISA: NEON is the
+            // aarch64 baseline (`#[target_feature]` is not a runtime check).
+            unsafe {
+                let tap = *tap_ptrs.get_unchecked(k);
+                let k_off = k * in_per_group * 4;
+                for ic in 0..in_per_group {
+                    let off = k_off + ic * 4;
+                    let h0 = vdupq_n_f32(*tap.add(in0 + ic));
+                    let h1 = vdupq_n_f32(*tap.add(in1 + ic));
+                    let h2 = vdupq_n_f32(*tap.add(in2 + ic));
+                    let h3 = vdupq_n_f32(*tap.add(in3 + ic));
+                    acc0 = vfmaq_f32(acc0, vld1q_f32(w_ptr.add(w0 + off)), h0);
+                    acc1 = vfmaq_f32(acc1, vld1q_f32(w_ptr.add(w1 + off)), h1);
+                    acc2 = vfmaq_f32(acc2, vld1q_f32(w_ptr.add(w2 + off)), h2);
+                    acc3 = vfmaq_f32(acc3, vld1q_f32(w_ptr.add(w3 + off)), h3);
+                }
             }
         }
 
@@ -598,12 +643,17 @@ unsafe fn grouped_conv1d_single_frame_neon(
         // `do_bias` is enabled.
         let mut acc = unsafe { neon_init_acc(conv, mixin, out_c) };
         for k in 0..kernel {
-            let tap = *tap_ptrs.get_unchecked(k);
-            let k_off = k * in_per_group * 4;
-            for ic in 0..in_per_group {
-                let off = k_off + ic * 4;
-                let h = vdupq_n_f32(*tap.add(in_base + ic));
-                acc = vfmaq_f32(acc, vld1q_f32(w_ptr.add(w_base + off)), h);
+            // SAFETY: `k < kernel`; the tap table, weights, and input taps cover
+            // every `k`/`ic` access for this block. ISA: NEON is the aarch64
+            // baseline (`#[target_feature]` is not a runtime check).
+            unsafe {
+                let tap = *tap_ptrs.get_unchecked(k);
+                let k_off = k * in_per_group * 4;
+                for ic in 0..in_per_group {
+                    let off = k_off + ic * 4;
+                    let h = vdupq_n_f32(*tap.add(in_base + ic));
+                    acc = vfmaq_f32(acc, vld1q_f32(w_ptr.add(w_base + off)), h);
+                }
             }
         }
         // SAFETY: `out_ptr` points to `out_frame` (`len >= conv.out_ch`,
@@ -628,32 +678,41 @@ unsafe fn neon_init_acc(
     let out_ch = conv.out_ch;
     let m = mixin.map(|m| m.as_ptr());
     if out_c + 3 < out_ch {
-        let mut acc = if conv.do_bias {
-            vld1q_f32(conv.bias.as_ptr().add(out_c))
-        } else {
-            vdupq_n_f32(0.0)
-        };
-        if let Some(mp) = m {
-            acc = vaddq_f32(acc, vld1q_f32(mp.add(out_c)));
+        // SAFETY: `out_c + 3 < out_ch`; `conv.bias` has `>= out_ch` elements
+        // when `do_bias`, and `mixin` (if present) has `>= out_ch` elements, so
+        // the 4-lane loads are in bounds. NEON is the `aarch64` baseline.
+        unsafe {
+            let mut acc = if conv.do_bias {
+                vld1q_f32(conv.bias.as_ptr().add(out_c))
+            } else {
+                vdupq_n_f32(0.0)
+            };
+            if let Some(mp) = m {
+                acc = vaddq_f32(acc, vld1q_f32(mp.add(out_c)));
+            }
+            acc
         }
-        acc
     } else {
         let mut lanes = [0.0f32; 4];
         for (lane, slot) in lanes.iter_mut().enumerate() {
             let idx = out_c + lane;
             if idx < out_ch {
                 let mut v = if conv.do_bias {
-                    *conv.bias.get_unchecked(idx)
+                    // SAFETY: `idx < out_ch` and `bias.len() >= out_ch`.
+                    unsafe { *conv.bias.get_unchecked(idx) }
                 } else {
                     0.0
                 };
                 if let Some(mp) = m {
-                    v += *mp.add(idx);
+                    // SAFETY: `idx < out_ch` and `mixin.len() >= out_ch`.
+                    v += unsafe { *mp.add(idx) };
                 }
                 *slot = v;
             }
         }
-        vld1q_f32(lanes.as_ptr())
+        // SAFETY: `lanes` is a live stack-local `[f32; 4]`; the unaligned NEON
+        // load stays within it.
+        unsafe { vld1q_f32(lanes.as_ptr()) }
     }
 }
 
@@ -670,13 +729,20 @@ unsafe fn neon_store_acc(
     use core::arch::aarch64::*;
 
     if out_c + 3 < conv.out_ch {
-        vst1q_f32(out_ptr.add(out_c), acc);
+        // SAFETY: `out_c + 3 < conv.out_ch` and `out_ptr` covers `out_frame`
+        // (`len >= out_ch`), so the 4-lane store is in bounds. ISA: NEON is the
+        // aarch64 baseline.
+        unsafe { vst1q_f32(out_ptr.add(out_c), acc) };
     } else {
         let mut lanes = [0.0f32; 4];
-        vst1q_f32(lanes.as_mut_ptr(), acc);
+        // SAFETY: `lanes` is a live stack-local `[f32; 4]` and the store stays
+        // within it.
+        unsafe { vst1q_f32(lanes.as_mut_ptr(), acc) };
         for (lane, &val) in lanes.iter().enumerate() {
             if out_c + lane < conv.out_ch {
-                *out_ptr.add(out_c + lane) = val;
+                // SAFETY: `out_c + lane < out_ch` and `out_ptr` covers
+                // `out_frame`.
+                unsafe { *out_ptr.add(out_c + lane) = val };
             }
         }
     }

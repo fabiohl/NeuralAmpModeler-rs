@@ -28,6 +28,38 @@ pub enum NambError {
     #[error("unsupported .namb version: {0}")]
     InvalidVersion(u16),
 
+    /// The `layout_type` byte is not one of the layouts defined for the
+    /// declared format version. Treating an unknown layout as `Original`
+    /// would silently mis-decode weights, so the file is rejected instead.
+    #[error("unsupported weight layout type {layout_type} in NAMB v{version}")]
+    UnsupportedLayout {
+        /// Format version declaring the layout.
+        version: u16,
+        /// Raw `layout_type` byte read from the header.
+        layout_type: u8,
+    },
+
+    /// The declared weight layout cannot describe the model architecture.
+    ///
+    /// For example, `GateMajorLstm` weights are only meaningful for an LSTM
+    /// graph, and `Interleaved4WaveNet` only for a WaveNet graph.
+    #[error("weight layout '{layout}' is incompatible with architecture '{architecture}'")]
+    LayoutArchitectureMismatch {
+        /// Layout name declared in the header.
+        layout: &'static str,
+        /// Architecture declared by the embedded model metadata.
+        architecture: String,
+    },
+
+    /// The declared weight layout cannot describe this model geometry.
+    #[error("weight layout '{layout}' is incompatible with this model geometry ({reason})")]
+    LayoutGeometryMismatch {
+        /// Layout name declared in the header.
+        layout: &'static str,
+        /// Geometry feature that the layout does not represent.
+        reason: &'static str,
+    },
+
     /// Weight section offset beyond file size.
     #[error("weights offset {offset} out of file bounds (file size: {file_len})")]
     WeightsOffsetOutOfBounds {

@@ -87,6 +87,7 @@ jobs:
       - name: AVX-512 Cross-ISA Parity Gate
         run: lib_quiet=1 ./utils/remote-simd-gate.sh --skip-bench
       - name: Quality Dashboard (fidelity + parity)
+        if: always()
         run: lib_quiet=1 ./utils/quality-dashboard.sh --check docs/quality-contract.json --fidelity-only
       - name: Publish step summary
         if: always()

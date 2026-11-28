@@ -1,12 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-// SIMD intrinsics and `get_unchecked` calls are performed directly inside
-// `unsafe fn` bodies (`cond_to_scale_shift`, `apply_modulation`,
-// `dot_product_avx2`) whose contracts are documented at each call site and in
-// the `# Safety` sections of the public entry points.
-#![allow(unsafe_op_in_unsafe_fn)]
-
 //! Feature-wise Linear Modulation (FiLM) module for the NAM A2 architecture.
 //!
 //! FiLM enables the model to adapt its behavior based on external
@@ -165,9 +159,12 @@ impl FiLMLayer {
     /// the installed scale/shift vectors are reused across samples and blocks.
     ///
     /// # Safety
-    /// `condition.len()` must equal `self.cond_size`.
+    /// `condition.len()` must be ≥ `self.cond_size`.
     /// `input.len()` may be ≤ `self.channels` (e.g. activation_post_film on
     /// bottleneck-sized slice when bottleneck < channels).
+    /// The CPU must support the crate's architecture baseline: x86-64-v3
+    /// (AVX2+FMA) or aarch64 NEON. `.cargo/config.toml` targets x86-64-v3 on
+    /// x86, but this method does not runtime-check the host ISA.
     ///
     /// `#[inline]` (relaxed, LLVM-decided) rather than `#[inline(always)]`:
     /// `process_frame_dyn` calls this up to 8× per frame for the grouped-FiLM
@@ -185,9 +182,20 @@ impl FiLMLayer {
             self.cond_size
         );
         if !self.precomputed_modulation {
-            self.cond_to_scale_shift(condition);
+            // SAFETY: `condition.len() >= self.cond_size` is the caller contract
+            // above; `cond_to_scale_shift` only reads `cond_size` lanes of
+            // `condition` and stays within the `weights`/`bias` buffers whose
+            // extents were validated by `load()`. ISA: the x86 build requires a
+            // CPU compatible with x86-64-v3 (AVX2+FMA); aarch64 uses baseline
+            // NEON. The call does not check runtime CPU support.
+            unsafe { self.cond_to_scale_shift(condition) };
         }
-        self.apply_modulation(input);
+        // SAFETY: `apply_modulation` restricts its work to
+        // `input.len().min(channels)` and reads only `scale_shift_buf`, which is
+        // sized to `channels * 2` at `load()`; it is sound for any `input` slice.
+        // ISA: its `_mm256_*` intrinsics are covered by the same x86-64-v3
+        // baseline / aarch64 NEON lowering described above.
+        unsafe { self.apply_modulation(input) };
     }
 
     // ── _cond_to_scale_shift ──────────────────────────────────────────
@@ -209,8 +217,13 @@ impl FiLMLayer {
         };
 
         for grp in 0..g {
-            let cond_slice =
-                condition.get_unchecked(grp * cond_per_group..(grp + 1) * cond_per_group);
+            // SAFETY: `process` requires `condition.len() >= cond_size` and
+            // `grp < g`, so `grp * cond_per_group .. (grp + 1) * cond_per_group`
+            // lies within `cond_size` (truncated `cond_per_group` keeps the
+            // upper bound ≤ `cond_size`).
+            let cond_slice = unsafe {
+                condition.get_unchecked(grp * cond_per_group..(grp + 1) * cond_per_group)
+            };
             let w_offset = grp * out_per_group * cond_per_group;
 
             for row in 0..out_per_group {
@@ -218,25 +231,36 @@ impl FiLMLayer {
                 // split only after projection, not within each group.
                 let global_out = grp * out_per_group + row;
 
-                let mut sum = *self.bias.get_unchecked(global_out);
+                // SAFETY: `load()` sizes `bias` to at least `channels` (or
+                // `2 * channels` when shifting) and `global_out < out_rows`, so
+                // this read is in bounds.
+                let mut sum = unsafe { *self.bias.get_unchecked(global_out) };
                 let w_start = w_offset + row * cond_per_group;
                 // SAFETY: `load()` guarantees `weights.len() >= groups *
                 // out_per_group * cond_per_group` (same truncated-division
                 // layout), so `w_start + cond_per_group` ≤ that extent for
-                // every `grp < g`, `row < out_per_group`; `cond_slice` spans
-                // `cond_per_group` lanes of `condition` (`process` contract:
-                // `condition.len() >= cond_size`).
-                let w_row = self
-                    .weights
-                    .get_unchecked(w_start..w_start + cond_per_group);
-                sum += dot_product_avx2(w_row, cond_slice);
-                *self.scale_shift_buf.get_unchecked_mut(global_out) = sum;
+                // every `grp < g`, `row < out_per_group`.
+                let w_row = unsafe {
+                    self.weights
+                        .get_unchecked(w_start..w_start + cond_per_group)
+                };
+                // SAFETY: `dot_product_avx2` requires both slices to have the
+                // same length; `cond_slice` and `w_row` are both `cond_per_group`
+                // elements and live in initialized f32 buffers. Its AVX2+FMA
+                // intrinsics are valid under the x86-64-v3 build baseline (or the
+                // aarch64 NEON lowering) noted in `process`.
+                sum += unsafe { dot_product_avx2(w_row, cond_slice) };
+                // SAFETY: `scale_shift_buf` always has `channels * 2` elements
+                // and `global_out < out_rows <= 2 * channels`.
+                unsafe { *self.scale_shift_buf.get_unchecked_mut(global_out) = sum };
             }
         }
 
         if !self.config.shift {
             for c in self.channels..self.channels * 2 {
-                *self.scale_shift_buf.get_unchecked_mut(c) = 0.0;
+                // SAFETY: `scale_shift_buf` has `channels * 2` elements, so
+                // `c < channels * 2` is in bounds.
+                unsafe { *self.scale_shift_buf.get_unchecked_mut(c) = 0.0 };
             }
         }
     }
@@ -260,13 +284,21 @@ impl FiLMLayer {
         let (shift_chunks, _) = shift[..limit].as_chunks::<8>();
 
         for i in 0..in_chunks.len() {
-            let v_in = _mm256_loadu_ps(in_chunks[i].as_ptr());
-            let v_scale = _mm256_loadu_ps(scale_chunks[i].as_ptr());
-            let v_shift = _mm256_loadu_ps(shift_chunks[i].as_ptr());
-            _mm256_storeu_ps(
-                in_chunks[i].as_mut_ptr(),
-                _mm256_fmadd_ps(v_in, v_scale, v_shift),
-            );
+            // SAFETY: `in_chunks`, `scale_chunks`, and `shift_chunks` all have
+            // `limit / 8` elements of exactly 8 f32 lanes, so each load reads 8
+            // initialized values and the store targets the same 8-lane mutable
+            // chunk. `loadu`/`storeu` accept unaligned addresses. ISA: callers must
+            // use an x86-64-v3-compatible CPU (AVX2+FMA); aarch64 maps to baseline
+            // NEON. This function does not runtime-check CPU support.
+            unsafe {
+                let v_in = _mm256_loadu_ps(in_chunks[i].as_ptr());
+                let v_scale = _mm256_loadu_ps(scale_chunks[i].as_ptr());
+                let v_shift = _mm256_loadu_ps(shift_chunks[i].as_ptr());
+                _mm256_storeu_ps(
+                    in_chunks[i].as_mut_ptr(),
+                    _mm256_fmadd_ps(v_in, v_scale, v_shift),
+                );
+            }
         }
 
         let off = in_chunks.len() * 8;
@@ -380,6 +412,11 @@ impl super::layer::A2Layer {
 // - In contrast, `gemm::dot_basic::dot_product_avx2` targets large GEMM matrices,
 //   employing 4 accumulators (32-wide unroll) and Kahan compensated summation in the tail.
 // - Parity is verified in `film_test.rs::test_dot_product_avx2_identity_with_gemm`.
+/// # Safety
+/// `a` and `b` must have equal lengths (the routine reads the full slices),
+/// and the CPU must support the crate's x86-64-v3 baseline (AVX2+FMA) or the
+/// aarch64 NEON baseline. `.cargo/config.toml` selects x86-64-v3; this function
+/// performs no runtime CPU check.
 #[inline(always)]
 unsafe fn dot_product_avx2(a: &[f32], b: &[f32]) -> f32 {
     let len = a.len();
@@ -394,47 +431,76 @@ unsafe fn dot_product_avx2(a: &[f32], b: &[f32]) -> f32 {
         let mut out = 0.0f32;
         let mut i = 0;
         while i < len {
-            out += *a.get_unchecked(i) * *b.get_unchecked(i);
+            // SAFETY: `i < len == a.len()` and callers pass `b` with
+            // `b.len() == a.len()`, so both unchecked reads are in bounds.
+            out += unsafe { *a.get_unchecked(i) * *b.get_unchecked(i) };
             i += 1;
         }
         return out;
     }
 
-    let mut sum0 = _mm256_setzero_ps();
-    let mut sum1 = _mm256_setzero_ps();
+    // SAFETY: the caller's documented x86-64-v3 (AVX2+FMA) / aarch64 NEON
+    // precondition guarantees the ISA; this initializes a register only.
+    let mut sum0 = unsafe { _mm256_setzero_ps() };
+    // SAFETY: same documented ISA precondition; this initializes a register only.
+    let mut sum1 = unsafe { _mm256_setzero_ps() };
     let mut i = 0;
 
     while i + 16 <= len {
-        let ha0 = _mm256_loadu_ps(a.as_ptr().add(i));
-        let hb0 = _mm256_loadu_ps(b.as_ptr().add(i));
-        sum0 = _mm256_fmadd_ps(ha0, hb0, sum0);
+        // SAFETY: `i + 16 <= len`, so `i` and `i + 8` are each valid for an
+        // 8-f32 unaligned load from both `a` and `b` (equal lengths). ISA:
+        // caller must provide x86-64-v3 (AVX2+FMA) or aarch64 NEON; no runtime
+        // ISA check is performed here.
+        unsafe {
+            let ha0 = _mm256_loadu_ps(a.as_ptr().add(i));
+            let hb0 = _mm256_loadu_ps(b.as_ptr().add(i));
+            sum0 = _mm256_fmadd_ps(ha0, hb0, sum0);
 
-        let ha1 = _mm256_loadu_ps(a.as_ptr().add(i + 8));
-        let hb1 = _mm256_loadu_ps(b.as_ptr().add(i + 8));
-        sum1 = _mm256_fmadd_ps(ha1, hb1, sum1);
+            let ha1 = _mm256_loadu_ps(a.as_ptr().add(i + 8));
+            let hb1 = _mm256_loadu_ps(b.as_ptr().add(i + 8));
+            sum1 = _mm256_fmadd_ps(ha1, hb1, sum1);
+        }
 
         i += 16;
     }
 
     while i + 8 <= len {
-        let ha = _mm256_loadu_ps(a.as_ptr().add(i));
-        let hb = _mm256_loadu_ps(b.as_ptr().add(i));
-        sum0 = _mm256_fmadd_ps(ha, hb, sum0);
+        // SAFETY: `i + 8 <= len`, so an 8-f32 unaligned load from both `a` and
+        // `b` (equal lengths) stays in bounds. ISA: caller must provide
+        // x86-64-v3 (AVX2+FMA) or aarch64 NEON; no runtime check is performed.
+        unsafe {
+            let ha = _mm256_loadu_ps(a.as_ptr().add(i));
+            let hb = _mm256_loadu_ps(b.as_ptr().add(i));
+            sum0 = _mm256_fmadd_ps(ha, hb, sum0);
+        }
         i += 8;
     }
 
-    let sum = _mm256_add_ps(sum0, sum1);
-    let hi128 = _mm256_extractf128_ps(sum, 1);
-    let lo128 = _mm256_castps256_ps128(sum);
-    let s128 = _mm_add_ps(lo128, hi128);
-    let shuf = _mm_movehdup_ps(s128);
-    let sums = _mm_add_ps(s128, shuf);
-    let shuf2 = _mm_movehl_ps(sums, sums);
-    let r = _mm_add_ss(sums, shuf2);
-    let mut out = _mm_cvtss_f32(r);
+    // SAFETY: the documented x86-64-v3 (AVX2+FMA) / aarch64 NEON precondition
+    // guarantees the ISA; this only adds register values and accesses no memory.
+    let sum = unsafe { _mm256_add_ps(sum0, sum1) };
+    // SAFETY: same documented ISA precondition; this extracts a register lane
+    // and accesses no memory.
+    let hi128 = unsafe { _mm256_extractf128_ps(sum, 1) };
+    // SAFETY: same documented ISA precondition; this is a register-only cast.
+    let lo128 = unsafe { _mm256_castps256_ps128(sum) };
+    // SAFETY: same documented ISA precondition; this only adds register values.
+    let s128 = unsafe { _mm_add_ps(lo128, hi128) };
+    // SAFETY: same documented ISA precondition; this shuffles a register only.
+    let shuf = unsafe { _mm_movehdup_ps(s128) };
+    // SAFETY: same documented ISA precondition; this only adds register values.
+    let sums = unsafe { _mm_add_ps(s128, shuf) };
+    // SAFETY: same documented ISA precondition; this shuffles register lanes only.
+    let shuf2 = unsafe { _mm_movehl_ps(sums, sums) };
+    // SAFETY: same documented ISA precondition; this only adds register values.
+    let r = unsafe { _mm_add_ss(sums, shuf2) };
+    // SAFETY: same documented ISA precondition; this extracts a scalar from a register.
+    let mut out = unsafe { _mm_cvtss_f32(r) };
 
     while i < len {
-        out += *a.get_unchecked(i) * *b.get_unchecked(i);
+        // SAFETY: `i < len == a.len()` and `b.len() == a.len()`, so both
+        // unchecked tail reads are in bounds.
+        out += unsafe { *a.get_unchecked(i) * *b.get_unchecked(i) };
         i += 1;
     }
 

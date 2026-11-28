@@ -8,16 +8,16 @@
 //! destroyed. Destruction of real-time shared state cannot perform that drain
 //! because the consumer belongs to the control-plane lifecycle.
 //!
-//! [`drain_gc_channels`] is the canonical drain path: it drains the SPSC
-//! channel, the overflow buffer, and the RT parking lot. A host integration
-//! must call it periodically during control-plane housekeeping and once more
-//! during orderly teardown, after real-time producers have stopped. Any
-//! residual item at abrupt process termination is an integration-level
-//! shutdown concern, not permission to drop heap-owned values on the audio
-//! thread.
+//! `drain_gc_channels` is the canonical off-RT drain path. During live
+//! processing, periodic housekeeping must pass a separate empty parking lot;
+//! the non-atomic RT-owned lot must not be drained concurrently. Pass the live
+//! lot only after all real-time producers have stopped and ownership has been
+//! transferred to the control thread. Any residual item at abrupt process
+//! termination is an integration-level shutdown concern, not permission to
+//! drop heap-owned values on the audio thread.
 
 use crate::common::atomics::AtomicU64;
-use core::sync::atomic::Ordering;
+use core::sync::atomic::{AtomicBool, Ordering};
 use rtrb::Consumer;
 
 /// Unified declaration of GcItem variants and their dispatch methods.
@@ -386,6 +386,51 @@ fn park_without_drop(slot: &mut Option<GcItem>, value: Option<GcItem>) {
     std::mem::forget(std::mem::replace(slot, value));
 }
 
+#[inline(always)]
+fn flush_gc_parking_lot_inner(
+    gc_producer: &mut rtrb::Producer<GcItem>,
+    parking_lot: &mut [Option<GcItem>; 16],
+) -> bool {
+    for slot in parking_lot.iter_mut() {
+        let Some(parked) = slot.take() else { continue };
+        match gc_producer.push(parked) {
+            Ok(()) => {}
+            Err(rtrb::PushError::Full(returned)) => {
+                park_without_drop(slot, Some(returned));
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Flushes parked GC items into the SPSC channel without dropping them.
+///
+/// The bounded scan covers at most 16 slots. The caller must set
+/// `parking_lot_dirty` with `Release` whenever an item is parked. The latch is
+/// conservative: `GcSink::retire` sets it before each cascade, and an
+/// opportunistic cascade may empty the lot without clearing it, causing one
+/// extra bounded sweep. This function clears the latch only after the lot has
+/// been fully retried.
+///
+/// Returns `true` when the channel filled and at least one item remains parked.
+#[inline(always)]
+pub fn flush_gc_parking_lot(
+    gc_producer: &mut rtrb::Producer<GcItem>,
+    parking_lot: &mut [Option<GcItem>; 16],
+    parking_lot_dirty: &AtomicBool,
+) -> bool {
+    if !parking_lot_dirty.load(Ordering::Acquire) {
+        return false;
+    }
+
+    let any_remaining = flush_gc_parking_lot_inner(gc_producer, parking_lot);
+    if !any_remaining {
+        parking_lot_dirty.store(false, Ordering::Release);
+    }
+    any_remaining
+}
+
 /// RT-safe GC cascade: tries the SPSC channel, then a 16-slot parking lot,
 /// then the overflow buffer as a last resort.
 ///
@@ -405,6 +450,11 @@ fn park_without_drop(slot: &mut Option<GcItem>, value: Option<GcItem>) {
 /// lingering in real-time state. On exhaustion, the item cascades into the
 /// overflow buffer — it is **never** dropped on the audio thread.
 ///
+/// `GcSink::retire` sets its optional dirty latch before calling this function.
+/// Direct callers that later use [`flush_gc_parking_lot`] must likewise set
+/// their latch with `Release` whenever a cascade can leave an item parked;
+/// this function does not update an external latch.
+///
 /// # Parameters
 /// - `item`: The `GcItem` to dispose of outside the RT thread.
 /// - `gc_producer`: SPSC GC channel.
@@ -423,16 +473,7 @@ pub fn gc_cascade(
     // 0. Opportunistically flush items parked in a previous cycle back to the
     //    SPSC channel while it has free capacity, so the parking lot tends to
     //    empty every cycle and items reach the off-RT drain.
-    for slot in parking_lot.iter_mut() {
-        let Some(parked) = slot.take() else { continue };
-        match gc_producer.push(parked) {
-            Ok(()) => {}
-            Err(rtrb::PushError::Full(returned)) => {
-                park_without_drop(slot, Some(returned));
-                break;
-            }
-        }
-    }
+    let _ = flush_gc_parking_lot_inner(gc_producer, parking_lot);
 
     if let Some(i) = item.take() {
         if let Err(rtrb::PushError::Full(returned)) = gc_producer.push(i) {
@@ -482,14 +523,14 @@ pub fn drain_parking_lot(parking_lot: &mut [Option<GcItem>; 16]) -> usize {
 
 /// Aggressively drains the Garbage Collection channels to free memory.
 ///
-/// This function should be called periodically by the main thread (CLI/UI)
-/// or by the host event loop. It executes `drop()`
-/// on obsolete objects (models, resamplers) outside the RT thread.
+/// This function executes `drop()` on obsolete objects (models, resamplers)
+/// outside the RT thread. During live processing, periodic housekeeping must
+/// pass a separate empty parking lot; never pass the RT-owned lot concurrently
+/// with its producer. The RT parking lot may be passed only after all producers
+/// have stopped and ownership has been transferred to the control thread.
 ///
-/// It drains, in order: the SPSC channel, the overflow buffer, and the RT
-/// parking lot. The `parking_lot` must be handed over by the real-time side
-/// after its producers have stopped (single-owner handoff), so that parked
-/// items are also released off-RT.
+/// It drains, in order: the SPSC channel, the overflow buffer, and the supplied
+/// parking lot.
 ///
 /// Returns the total number of GC items dropped during this call.
 pub fn drain_gc_channels(

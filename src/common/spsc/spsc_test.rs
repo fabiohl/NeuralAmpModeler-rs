@@ -79,16 +79,18 @@ fn test_gc_overflow_overwrite() {
     // 1. Fill the 64-slot buffer
     for _ in 0..64 {
         let item = GcItem::Test(Box::new(counter.clone()));
-        overflow.push(item);
+        assert!(!overflow.push(item));
     }
 
     // 2. Attempt to insert the 65th item (should overwrite the 1st)
     let item_65 = GcItem::Test(Box::new(counter.clone()));
-    overflow.push(item_65);
+    assert!(overflow.push(item_65));
 
     // 3. Validate that drain returns 64 items
     let drained = overflow.drain(&rt_status);
     assert_eq!(drained.len(), 64);
+    drop(drained);
+    assert_eq!(Arc::strong_count(&counter), 2);
 }
 
 #[test]
@@ -103,20 +105,20 @@ fn test_gc_stress_no_leak() {
     let mut parking_lot: [Option<GcItem>; 16] = Default::default();
 
     // Stress: 1000 "resource" swaps
+    let mut dropped = 0;
     for _ in 0..1000 {
         let item = GcItem::Test(Box::new(counter.clone()));
         if let Err(rtrb::PushError::Full(returned_item)) = gc_prod.push(item) {
-            // If the main channel is full, go to overflow
             overflow.push(returned_item);
         }
 
-        // Drain periodically to avoid unbounded accumulation
-        super::drain_gc_channels(&mut gc_cons, &overflow, &mut parking_lot, &rt_status);
+        dropped += super::drain_gc_channels(&mut gc_cons, &overflow, &mut parking_lot, &rt_status);
     }
 
-    // Validate that the final counter is correct after dropping everything
     drop(gc_cons);
-    for _ in overflow.drain(&rt_status) {}
+    dropped += overflow.drain(&rt_status).len();
+    assert_eq!(dropped, 1000);
+    assert_eq!(Arc::strong_count(&counter), 1);
 }
 
 /// Simulates a corrupted slot (packed value with unknown type_id + valid pointer)
@@ -342,6 +344,64 @@ fn test_gc_cascade_flushes_parking_lot_to_spsc() {
     gc_cascade(None, &mut gc_prod, &mut parking_lot, &overflow, &rt_status);
     assert!(parking_lot.iter().all(|slot| slot.is_none()));
     assert!(gc_cons.pop().is_ok(), "parked item was not flushed to SPSC");
+}
+
+#[test]
+fn test_flush_gc_parking_lot_preserves_items_when_ring_is_saturated() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicU32};
+
+    let (mut gc_prod, mut gc_cons) = RingBuffer::<GcItem>::new(1);
+    let counter = Arc::new(AtomicU32::new(0));
+    let mut parking_lot: [Option<GcItem>; 16] = Default::default();
+    let dirty = AtomicBool::new(true);
+
+    gc_prod
+        .push(GcItem::Test(Box::new(counter.clone())))
+        .expect("SPSC fill should succeed");
+    parking_lot[0] = Some(GcItem::Test(Box::new(counter.clone())));
+    parking_lot[1] = Some(GcItem::Test(Box::new(counter.clone())));
+
+    assert!(flush_gc_parking_lot(&mut gc_prod, &mut parking_lot, &dirty,));
+    assert!(dirty.load(Ordering::Acquire));
+    assert!(parking_lot[0].is_some());
+    assert!(parking_lot[1].is_some());
+    assert_eq!(Arc::strong_count(&counter), 4);
+
+    drop(gc_cons.pop().expect("initial SPSC item should be present"));
+    assert!(flush_gc_parking_lot(&mut gc_prod, &mut parking_lot, &dirty,));
+    assert!(dirty.load(Ordering::Acquire));
+    assert!(parking_lot[0].is_none());
+    assert!(parking_lot[1].is_some());
+
+    drop(gc_cons.pop().expect("first parked item should be retried"));
+    assert!(!flush_gc_parking_lot(
+        &mut gc_prod,
+        &mut parking_lot,
+        &dirty,
+    ));
+    assert!(!dirty.load(Ordering::Acquire));
+    assert!(parking_lot.iter().all(|slot| slot.is_none()));
+
+    drop(gc_cons.pop().expect("second parked item should be retried"));
+    assert_eq!(Arc::strong_count(&counter), 1);
+}
+
+#[test]
+fn test_flush_gc_parking_lot_skips_clean_lot() {
+    use std::sync::atomic::AtomicBool;
+
+    let (mut gc_prod, _gc_cons) = RingBuffer::<GcItem>::new(1);
+    let mut parking_lot: [Option<GcItem>; 16] = Default::default();
+    let dirty = AtomicBool::new(false);
+
+    assert!(!flush_gc_parking_lot(
+        &mut gc_prod,
+        &mut parking_lot,
+        &dirty,
+    ));
+    assert!(!dirty.load(Ordering::Acquire));
+    assert!(parking_lot.iter().all(|slot| slot.is_none()));
 }
 
 /// A Tier 3 overflow must be signaled atomically so the main

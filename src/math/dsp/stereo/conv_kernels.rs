@@ -24,8 +24,10 @@
 ///   inside the generated body; release builds rely on the caller —
 ///   production callers pass 64-byte `AlignedVec` taps). The input pointers
 ///   have no alignment requirement (`$loadu`).
-/// - The CPU must support the features in the generated `#[target_feature]`
-///   attributes — callers dispatch through runtime CPUID detection.
+/// - ISA: AVX2+FMA instantiations require an x86-64-v3-compatible CPU; AVX-512
+///   instantiations are reached only after full AVX-512 detection (F+VL+BW+DQ)
+///   or a validated test override; aarch64 uses baseline NEON. The generated
+///   `#[target_feature]` attributes enable intrinsics but do not check the CPU.
 /// - The kernel performs reads only; aliasing between the three pointers
 ///   does not violate memory safety (though it changes the computed sum).
 #[macro_export]
@@ -59,6 +61,18 @@ macro_rules! impl_convolve_stereo {
             let mut i = 0;
 
             while i + $step_dbl <= taps {
+                // SAFETY: the generated function's `# Safety` contract guarantees
+                // the pointer extents and that the pointers are valid for
+                // initialized `taps` f32 elements; the loop guards keep every
+                // access within `[ptr, ptr + taps)`. The `$loadu` calls execute
+                // inside this unsafe scope; loop guards bound each vector-width
+                // load, and the closure's unaligned load requires no alignment. ISA: AVX2+FMA kernels
+                // require x86-64-v3-compatible CPUs; AVX-512F kernels rely on
+                // full runtime AVX-512 detection (F+VL+BW+DQ) or a validated
+                // override; direct unsafe callers must guarantee the ISA.
+                // aarch64 uses baseline NEON. `#[target_feature]` enables code
+                // but does not check CPU support.
+                unsafe {
                 let h0 = $loadu(coeffs.add(i));
                 let x0_l = $loadu(input_l.add(i));
                 let x0_r = $loadu(input_r.add(i));
@@ -72,15 +86,29 @@ macro_rules! impl_convolve_stereo {
                 sum_r1 = $fmadd(h1, x1_r, sum_r1);
 
                 i += $step_dbl;
+                }
             }
 
             while i + $half_step <= taps {
+                // SAFETY: the generated function's `# Safety` contract guarantees
+                // the pointer extents and that the pointers are valid for
+                // initialized `taps` f32 elements; the loop guards keep every
+                // access within `[ptr, ptr + taps)`. The `$loadu` calls execute
+                // inside this unsafe scope; loop guards bound each vector-width
+                // load, and the closure's unaligned load requires no alignment. ISA: AVX2+FMA kernels
+                // require x86-64-v3-compatible CPUs; AVX-512F kernels rely on
+                // full runtime AVX-512 detection (F+VL+BW+DQ) or a validated
+                // override; direct unsafe callers must guarantee the ISA.
+                // aarch64 uses baseline NEON. `#[target_feature]` enables code
+                // but does not check CPU support.
+                unsafe {
                 let h = $loadu(coeffs.add(i));
                 let x_l = $loadu(input_l.add(i));
                 let x_r = $loadu(input_r.add(i));
                 sum_l0 = $fmadd(h, x_l, sum_l0);
                 sum_r0 = $fmadd(h, x_r, sum_r0);
                 i += $half_step;
+                }
             }
 
             let sum_l = $add(sum_l0, sum_l1);
@@ -89,10 +117,21 @@ macro_rules! impl_convolve_stereo {
             let mut out_r = $reduce(sum_r);
 
             while i < taps {
+                // SAFETY: the generated function's `# Safety` contract guarantees
+                // the pointer extents and that the pointers are valid for
+                // initialized `taps` f32 elements; the loop guards keep every
+                // access within `[ptr, ptr + taps)`. ISA: AVX2+FMA kernels
+                // require x86-64-v3-compatible CPUs; AVX-512F kernels rely on
+                // full runtime AVX-512 detection (F+VL+BW+DQ) or a validated
+                // override; direct unsafe callers must guarantee the ISA.
+                // aarch64 uses baseline NEON. `#[target_feature]` enables code
+                // but does not check CPU support.
+                unsafe {
                 let h = *coeffs.add(i);
                 out_l += h * *input_l.add(i);
                 out_r += h * *input_r.add(i);
                 i += 1;
+                }
             }
 
             (out_l, out_r)
@@ -156,6 +195,18 @@ macro_rules! impl_convolve_stereo_dual {
             let mut i = 0;
 
             while i + $step_dbl <= taps {
+                // SAFETY: the generated function's `# Safety` contract guarantees
+                // the pointer extents and that the pointers are valid for
+                // initialized `taps` f32 elements; the loop guards keep every
+                // access within `[ptr, ptr + taps)`. The `$loadu` calls execute
+                // inside this unsafe scope; loop guards bound each vector-width
+                // load, and the closure's unaligned load requires no alignment. ISA: AVX2+FMA kernels
+                // require x86-64-v3-compatible CPUs; AVX-512F kernels rely on
+                // full runtime AVX-512 detection (F+VL+BW+DQ) or a validated
+                // override; direct unsafe callers must guarantee the ISA.
+                // aarch64 uses baseline NEON. `#[target_feature]` enables code
+                // but does not check CPU support.
+                unsafe {
                 let x0_l = $loadu(input_l.add(i));
                 let x0_r = $loadu(input_r.add(i));
 
@@ -179,9 +230,22 @@ macro_rules! impl_convolve_stereo_dual {
                 sum1_r1 = $fmadd(h1_1, x1_r, sum1_r1);
 
                 i += $step_dbl;
+                }
             }
 
             while i + $half_step <= taps {
+                // SAFETY: the generated function's `# Safety` contract guarantees
+                // the pointer extents and that the pointers are valid for
+                // initialized `taps` f32 elements; the loop guards keep every
+                // access within `[ptr, ptr + taps)`. The `$loadu` calls execute
+                // inside this unsafe scope; loop guards bound each vector-width
+                // load, and the closure's unaligned load requires no alignment. ISA: AVX2+FMA kernels
+                // require x86-64-v3-compatible CPUs; AVX-512F kernels rely on
+                // full runtime AVX-512 detection (F+VL+BW+DQ) or a validated
+                // override; direct unsafe callers must guarantee the ISA.
+                // aarch64 uses baseline NEON. `#[target_feature]` enables code
+                // but does not check CPU support.
+                unsafe {
                 let x_l = $loadu(input_l.add(i));
                 let x_r = $loadu(input_r.add(i));
 
@@ -194,6 +258,7 @@ macro_rules! impl_convolve_stereo_dual {
                 sum1_r0 = $fmadd(h1, x_r, sum1_r0);
 
                 i += $half_step;
+                }
             }
 
             let sum0_l = $add(sum0_l0, sum0_l1);
@@ -207,6 +272,16 @@ macro_rules! impl_convolve_stereo_dual {
             let mut out1_r = $reduce(sum1_r);
 
             while i < taps {
+                // SAFETY: the generated function's `# Safety` contract guarantees
+                // the pointer extents and that the pointers are valid for
+                // initialized `taps` f32 elements; the loop guards keep every
+                // access within `[ptr, ptr + taps)`. ISA: AVX2+FMA kernels
+                // require x86-64-v3-compatible CPUs; AVX-512F kernels rely on
+                // full runtime AVX-512 detection (F+VL+BW+DQ) or a validated
+                // override; direct unsafe callers must guarantee the ISA.
+                // aarch64 uses baseline NEON. `#[target_feature]` enables code
+                // but does not check CPU support.
+                unsafe {
                 let h0 = *coeffs0.add(i);
                 let h1 = *coeffs1.add(i);
                 let xl = *input_l.add(i);
@@ -216,6 +291,7 @@ macro_rules! impl_convolve_stereo_dual {
                 out1_l += h1 * xl;
                 out1_r += h1 * xr;
                 i += 1;
+                }
             }
 
             ((out0_l, out0_r), (out1_l, out1_r))
@@ -272,6 +348,18 @@ macro_rules! impl_convolve_mono_dual {
             let mut i = 0;
 
             while i + $step_dbl <= taps {
+                // SAFETY: the generated function's `# Safety` contract guarantees
+                // the pointer extents and that the pointers are valid for
+                // initialized `taps` f32 elements; the loop guards keep every
+                // access within `[ptr, ptr + taps)`. The `$loadu` calls execute
+                // inside this unsafe scope; loop guards bound each vector-width
+                // load, and the closure's unaligned load requires no alignment. ISA: AVX2+FMA kernels
+                // require x86-64-v3-compatible CPUs; AVX-512F kernels rely on
+                // full runtime AVX-512 detection (F+VL+BW+DQ) or a validated
+                // override; direct unsafe callers must guarantee the ISA.
+                // aarch64 uses baseline NEON. `#[target_feature]` enables code
+                // but does not check CPU support.
+                unsafe {
                 let x0 = $loadu(input.add(i));
 
                 let h0_0 = $loadu(coeffs0.add(i));
@@ -289,9 +377,22 @@ macro_rules! impl_convolve_mono_dual {
                 sum1_1 = $fmadd(h1_1, x1, sum1_1);
 
                 i += $step_dbl;
+                }
             }
 
             while i + $half_step <= taps {
+                // SAFETY: the generated function's `# Safety` contract guarantees
+                // the pointer extents and that the pointers are valid for
+                // initialized `taps` f32 elements; the loop guards keep every
+                // access within `[ptr, ptr + taps)`. The `$loadu` calls execute
+                // inside this unsafe scope; loop guards bound each vector-width
+                // load, and the closure's unaligned load requires no alignment. ISA: AVX2+FMA kernels
+                // require x86-64-v3-compatible CPUs; AVX-512F kernels rely on
+                // full runtime AVX-512 detection (F+VL+BW+DQ) or a validated
+                // override; direct unsafe callers must guarantee the ISA.
+                // aarch64 uses baseline NEON. `#[target_feature]` enables code
+                // but does not check CPU support.
+                unsafe {
                 let x = $loadu(input.add(i));
 
                 let h0 = $loadu(coeffs0.add(i));
@@ -301,6 +402,7 @@ macro_rules! impl_convolve_mono_dual {
                 sum1_0 = $fmadd(h1, x, sum1_0);
 
                 i += $half_step;
+                }
             }
 
             let sum0 = $add(sum0_0, sum0_1);
@@ -310,10 +412,21 @@ macro_rules! impl_convolve_mono_dual {
             let mut out1 = $reduce(sum1);
 
             while i < taps {
+                // SAFETY: the generated function's `# Safety` contract guarantees
+                // the pointer extents and that the pointers are valid for
+                // initialized `taps` f32 elements; the loop guards keep every
+                // access within `[ptr, ptr + taps)`. ISA: AVX2+FMA kernels
+                // require x86-64-v3-compatible CPUs; AVX-512F kernels rely on
+                // full runtime AVX-512 detection (F+VL+BW+DQ) or a validated
+                // override; direct unsafe callers must guarantee the ISA.
+                // aarch64 uses baseline NEON. `#[target_feature]` enables code
+                // but does not check CPU support.
+                unsafe {
                 let xl = *input.add(i);
                 out0 += *coeffs0.add(i) * xl;
                 out1 += *coeffs1.add(i) * xl;
                 i += 1;
+                }
             }
 
             (out0, out1)
@@ -357,6 +470,18 @@ macro_rules! impl_convolve_mono {
             let mut i = 0;
 
             while i + $step_dbl <= taps {
+                // SAFETY: the generated function's `# Safety` contract guarantees
+                // the pointer extents and that the pointers are valid for
+                // initialized `taps` f32 elements; the loop guards keep every
+                // access within `[ptr, ptr + taps)`. The `$loadu` calls execute
+                // inside this unsafe scope; loop guards bound each vector-width
+                // load, and the closure's unaligned load requires no alignment. ISA: AVX2+FMA kernels
+                // require x86-64-v3-compatible CPUs; AVX-512F kernels rely on
+                // full runtime AVX-512 detection (F+VL+BW+DQ) or a validated
+                // override; direct unsafe callers must guarantee the ISA.
+                // aarch64 uses baseline NEON. `#[target_feature]` enables code
+                // but does not check CPU support.
+                unsafe {
                 let h0 = $loadu(coeffs.add(i));
                 let x0 = $loadu(input.add(i));
                 sum0 = $fmadd(h0, x0, sum0);
@@ -366,22 +491,47 @@ macro_rules! impl_convolve_mono {
                 sum1 = $fmadd(h1, x1, sum1);
 
                 i += $step_dbl;
+                }
             }
 
             while i + $half_step <= taps {
+                // SAFETY: the generated function's `# Safety` contract guarantees
+                // the pointer extents and that the pointers are valid for
+                // initialized `taps` f32 elements; the loop guards keep every
+                // access within `[ptr, ptr + taps)`. The `$loadu` calls execute
+                // inside this unsafe scope; loop guards bound each vector-width
+                // load, and the closure's unaligned load requires no alignment. ISA: AVX2+FMA kernels
+                // require x86-64-v3-compatible CPUs; AVX-512F kernels rely on
+                // full runtime AVX-512 detection (F+VL+BW+DQ) or a validated
+                // override; direct unsafe callers must guarantee the ISA.
+                // aarch64 uses baseline NEON. `#[target_feature]` enables code
+                // but does not check CPU support.
+                unsafe {
                 let h = $loadu(coeffs.add(i));
                 let x = $loadu(input.add(i));
                 sum0 = $fmadd(h, x, sum0);
                 i += $half_step;
+                }
             }
 
             let sum = $add(sum0, sum1);
             let mut out = $reduce(sum);
 
             while i < taps {
+                // SAFETY: the generated function's `# Safety` contract guarantees
+                // the pointer extents and that the pointers are valid for
+                // initialized `taps` f32 elements; the loop guards keep every
+                // access within `[ptr, ptr + taps)`. ISA: AVX2+FMA kernels
+                // require x86-64-v3-compatible CPUs; AVX-512F kernels rely on
+                // full runtime AVX-512 detection (F+VL+BW+DQ) or a validated
+                // override; direct unsafe callers must guarantee the ISA.
+                // aarch64 uses baseline NEON. `#[target_feature]` enables code
+                // but does not check CPU support.
+                unsafe {
                 let h = *coeffs.add(i);
                 out += h * *input.add(i);
                 i += 1;
+                }
             }
 
             out

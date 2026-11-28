@@ -208,10 +208,9 @@ unsafe fn capture_dsp_pipeline_inner<M: SimdMath>(
     //
     // Stereo decoupling: the stereo-decoupled pair path runs independent L/R
     // adapters so no convolucional state is shared between channels. In mono
-    // mode only the left adapter advances (the right channel mirrors the
-    // processed left signal below); the shared-state single-adapter path is
-    // retained for mono-only consumers.
-    let convolved = if let Some(ref mut pair) = ctx.conv_pair {
+    // mode only the left adapter advances; the output stage mirrors the final
+    // processed left signal into R afterwards.
+    if let Some(ref mut pair) = ctx.conv_pair {
         if *ctx.process_mono {
             pair.l
                 .process_block(&mut bufs.resamp_out_l[..n_pw], Some(ctx.rt_status));
@@ -222,33 +221,15 @@ unsafe fn capture_dsp_pipeline_inner<M: SimdMath>(
                 Some(ctx.rt_status),
             );
         }
-        true
     } else if let Some(ref mut conv) = ctx.conv {
         conv.process_in_place(&mut bufs.resamp_out_l[..n_pw], Some(ctx.rt_status));
         if !*ctx.process_mono {
             conv.process_in_place(&mut bufs.resamp_out_r[..n_pw], Some(ctx.rt_status));
         }
-        true
-    } else {
-        false
-    };
-
-    if convolved && *ctx.process_mono {
-        // Mono: cab-sim runs on the left channel only; the right channel
-        // mirrors the processed left signal.
-        if bufs.resamp_out_l.len() >= n_pw && bufs.resamp_out_r.len() >= n_pw && n_pw > 0 {
-            // SAFETY: dynamically guarded bounds ensure `resamp_out_l` and `resamp_out_r`
-            // have at least `n_pw` capacity and `n_pw > 0`. The two buffers are distinct
-            // allocations, hence non-overlapping.
-            unsafe {
-                core::ptr::copy_nonoverlapping(
-                    bufs.resamp_out_l.as_ptr(),
-                    bufs.resamp_out_r.as_mut_ptr(),
-                    n_pw,
-                );
-            }
-        }
     }
+
+    // Mono cab-sim only advances the left adapter; the output stage below
+    // mirrors the fully processed left channel into R.
 
     // STAGE 4: FINAL ADJUSTMENT AND PROTECTION
     // SAFETY: buffers and context are valid; M corresponds to detected CPU features.
@@ -481,26 +462,6 @@ unsafe fn capture_dsp_pipeline_streaming_inner<M: SimdMath>(
         };
 
         if convolved {
-            if *ctx.process_mono {
-                // Mono mirror: cab-sim runs on the left channel only; the
-                // right channel mirrors the drained left signal.
-                if bufs.resamp_out_l.len() >= n_samples
-                    && bufs.resamp_out_r.len() >= n_samples
-                    && n_samples > 0
-                {
-                    // SAFETY: dynamically guarded bounds ensure `resamp_out_l` and
-                    // `resamp_out_r` have at least `n_samples` capacity and `n_samples > 0`.
-                    // The two buffers are distinct allocations, hence non-overlapping.
-                    unsafe {
-                        core::ptr::copy_nonoverlapping(
-                            bufs.resamp_out_l.as_ptr(),
-                            bufs.resamp_out_r.as_mut_ptr(),
-                            n_samples,
-                        );
-                    }
-                }
-            }
-
             // The ring-out is intentional signal, not noise floor — the
             // closed-gate multiplier (0.0) must not zero it. A fresh unity
             // gate (Open, multiplier 1.0, steady) yields exactly the wet
@@ -566,7 +527,7 @@ unsafe fn capture_dsp_pipeline_streaming_inner<M: SimdMath>(
     // above): each adapter chunks the host sub-block internally against its
     // fixed partition, in place, keeping the cab-sim latency decoupled from
     // the host block size. In mono mode only the left adapter advances.
-    let convolved = if let Some(ref mut pair) = ctx.conv_pair {
+    if let Some(ref mut pair) = ctx.conv_pair {
         if *ctx.process_mono {
             pair.l
                 .process_block(&mut bufs.resamp_out_l[..n_pw], Some(ctx.rt_status));
@@ -584,7 +545,6 @@ unsafe fn capture_dsp_pipeline_streaming_inner<M: SimdMath>(
             // which is what keeps the drain strictly bounded.
             pair.rearm_tail();
         }
-        true
     } else if let Some(ref mut conv) = ctx.conv {
         conv.process_in_place(&mut bufs.resamp_out_l[..n_pw], Some(ctx.rt_status));
         if !*ctx.process_mono {
@@ -594,27 +554,10 @@ unsafe fn capture_dsp_pipeline_streaming_inner<M: SimdMath>(
             // See the pair path above: re-arm on the active-audio path only.
             conv.rearm_tail();
         }
-        true
-    } else {
-        false
-    };
-
-    if convolved && *ctx.process_mono {
-        // Mono mirror: cab-sim runs on the left channel only; the right channel
-        // mirrors the processed left signal.
-        if bufs.resamp_out_l.len() >= n_pw && bufs.resamp_out_r.len() >= n_pw && n_pw > 0 {
-            // SAFETY: dynamically guarded bounds ensure `resamp_out_l` and `resamp_out_r`
-            // have at least `n_pw` capacity and `n_pw > 0`. The two buffers are disjoint
-            // slices of distinct allocations.
-            unsafe {
-                core::ptr::copy_nonoverlapping(
-                    bufs.resamp_out_l.as_ptr(),
-                    bufs.resamp_out_r.as_mut_ptr(),
-                    n_pw,
-                );
-            }
-        }
     }
+
+    // Mono cab-sim only advances the left adapter; the output stage below
+    // mirrors the fully processed left channel into R.
 
     // STAGE 4: FINAL ADJUSTMENT AND PROTECTION
     // SAFETY: Slices bufs.resamp_out_l and bufs.resamp_out_r are guaranteed to have length >= n_pw.

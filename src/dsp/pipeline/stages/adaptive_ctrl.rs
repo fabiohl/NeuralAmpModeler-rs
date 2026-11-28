@@ -7,10 +7,6 @@ use crate::common::spsc::RtStatusFlags;
 use crate::dsp::adaptive::{AdaptiveCompute, AdaptiveComputeMode, AdaptiveState, SlimOverride};
 use crate::models::StaticModel;
 
-/// Maximum number of WaveNet layer states to backup during double-pass crossfade.
-/// Worst-case: stereo (×2) × 8 arrays × 64 dilations = 1024 state entries.
-pub(crate) const WAVENET_CROSSFADE_MAX_STATES: usize = 1024;
-
 /// Evaluates adaptive compute FSM state and updates model effective layer count or slimmable size.
 ///
 /// Returns `true` if model processing should be skipped for this block (e.g., minimal mode on LSTM).

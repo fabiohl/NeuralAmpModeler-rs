@@ -1,11 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 // Specialized GEMM micro-kernels utilize unsafe SIMD intrinsics and parameter lists.
-#![allow(
-    unsafe_op_in_unsafe_fn,
-    clippy::missing_safety_doc,
-    clippy::too_many_arguments
-)]
+#![allow(clippy::missing_safety_doc, clippy::too_many_arguments)]
 
 //! Kernels Dot Product 4x — AVX-512 (dual-frame).
 

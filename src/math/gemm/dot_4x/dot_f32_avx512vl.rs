@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 // Specialized GEMM micro-kernels utilize unsafe SIMD intrinsics and parameter lists.
-#![allow(unsafe_op_in_unsafe_fn, clippy::missing_safety_doc)]
+#![allow(clippy::missing_safety_doc)]
 
 //! Dot Product 4x f32 — AVX-512 VL256 kernel (256-bit EVEX, 32 YMM registers, zero spill).
 //!
@@ -544,8 +544,16 @@ pub unsafe fn dot_product_4x_f32_dual_accumulate_avx512vl(
         weights.len(),
         core::cmp::min(state_f0.len(), state_f1.len()),
     );
-    let init_f0_128 = _mm_loadu_ps(init_f0.as_ptr());
-    let init_f1_128 = _mm_loadu_ps(init_f1.as_ptr());
+    // SAFETY: each `init_*` is a `&[f32; 4]`, so the 4-f32 unaligned loads are
+    // in bounds and read initialized values.
+    // ISA: dispatch requires full AVX-512 (F+VL+BW+DQ) or a validated override;
+    // direct unsafe callers must ensure AVX-512F+VL support.
+    let (init_f0_128, init_f1_128) = unsafe {
+        (
+            _mm_loadu_ps(init_f0.as_ptr()),
+            _mm_loadu_ps(init_f1.as_ptr()),
+        )
+    };
     let mut acc0 = _mm256_set_m128(init_f1_128, init_f0_128);
     let mut acc1 = _mm256_setzero_ps();
     let mut acc2 = _mm256_setzero_ps();

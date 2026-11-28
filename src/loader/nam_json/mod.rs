@@ -35,6 +35,17 @@ pub use data::{
 };
 pub use parse::parse_nam_json;
 pub(crate) use parse::validate_model_data;
+
+/// Returns `true` when the model is routed to the A2 engine.
+///
+/// Covers both the canonical A2 fast path and scalar-form A2-Dynamic models
+/// (`kernel_size` + `dilations` without `kernel_sizes`). The A2 builders
+/// consume the raw weight stream in A2 order and do not interpret
+/// `WeightsLayout`, so optimized layouts that assume a generic WaveNet graph
+/// must be rejected for every A2 shape.
+pub(crate) fn is_a2_model(data: &NamModelData) -> bool {
+    is_a2_shape(data).is_some() || data.is_wavenet_a2()
+}
 #[cfg(test)]
 pub(crate) use topology::parse_semver;
 pub use topology::{

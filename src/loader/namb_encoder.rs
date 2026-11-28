@@ -7,7 +7,7 @@
 //! binary format with pre-transposed weights.
 
 use super::nam_json::{NamModelData, WeightsLayout};
-use super::namb::{FLAG_HAS_CRC32, NambHeader, crc32_ieee, crc32_ieee_update};
+use super::namb::{FLAG_HAS_CRC32, NambHeader, crc32_ieee, crc32_ieee_update, v1_crc_is_missing};
 use super::transpose::{lstm::transpose_lstm_gate_major, wavenet::transpose_wavenet_interleaved4};
 use anyhow::Result;
 use std::io::Write;
@@ -22,7 +22,9 @@ use std::io::Write;
 /// # Arguments
 ///
 /// * `data` — Parsed model data (architecture, layers, weights, metadata).
-/// * `version` — `.namb` format version number (currently v2).
+/// * `version` — `.namb` format version number (`1` or `2`). Version `1`
+///   only supports [`WeightsLayout::Original`]; optimized layouts require
+///   version `2`.
 /// * `target_layout` — Weight matrix memory layout (`Original`, `Interleaved4`, etc.).
 ///
 /// # Returns
@@ -33,13 +35,45 @@ pub fn encode_namb(
     version: u16,
     target_layout: WeightsLayout,
 ) -> Result<Vec<u8>> {
+    if version != 1 && version != 2 {
+        anyhow::bail!("Unsupported .namb version for encoding: {version} (expected 1 or 2)");
+    }
+    // The v1 reader treats the layout byte as part of the legacy reserved
+    // region and always decodes `Original`. Writing any other layout into a
+    // v1 header would make encoder and parser disagree silently.
+    if version < 2 && target_layout != WeightsLayout::Original {
+        anyhow::bail!(
+            "NAMB v1 stores only the Original weight layout; requested {target_layout:?}"
+        );
+    }
+
     let mut buffer = Vec::new();
 
-    // 1. Prepares the transposed weights
-    let transposed_weights = if target_layout != WeightsLayout::Original {
-        transpose_weights(data, target_layout)?
-    } else {
+    // 1. Prepares the transposed weights. The transposers consume
+    // `Original`-layout tensors only, so the *source* layout recorded on the
+    // data (set by the parser for `.namb` v2 inputs) decides whether a
+    // conversion is admissible:
+    //   - source == target: pure copy (no double transposition);
+    //   - source Original -> optimized: forward transposition;
+    //   - source optimized -> different layout: no inverse is implemented,
+    //     so reject explicitly instead of mislabelling silently.
+    let source_layout = data.weights_layout;
+    let transposed_weights = if source_layout == target_layout {
         data.weights.clone()
+    } else {
+        match (source_layout, target_layout) {
+            (WeightsLayout::Original, WeightsLayout::GateMajorLstm) => {
+                transpose_weights(data, WeightsLayout::GateMajorLstm)?
+            }
+            (WeightsLayout::Original, WeightsLayout::Interleaved4WaveNet) => {
+                transpose_weights(data, WeightsLayout::Interleaved4WaveNet)?
+            }
+            (from, to) => anyhow::bail!(
+                "Cannot re-encode .namb weights from {from:?} to {to:?}: only \
+                 Original-layout sources can be transposed (no inverse layout \
+                 conversion is implemented)"
+            ),
+        }
     };
 
     let weights_bytes: Vec<u8> = transposed_weights
@@ -55,6 +89,30 @@ pub fn encode_namb(
 
     let header_flags = if version >= 2 { FLAG_HAS_CRC32 } else { 0 };
 
+    // The v1 parser treats CRC32 == 0 as its "missing checksum" sentinel and
+    // rejects it. An empty stream has CRC32 == 0 by definition, and a
+    // non-empty stream can (rarely) also collide with zero, so reject both
+    // explicitly instead of emitting a file our own reader refuses.
+    let v1_crc = if version < 2 {
+        if weights_bytes.is_empty() {
+            anyhow::bail!(
+                "NAMB v1 cannot encode an empty weight stream: CRC32(empty) == 0 \
+                 collides with the v1 missing-checksum sentinel"
+            );
+        }
+        let crc = crc32_ieee(&weights_bytes);
+        if v1_crc_is_missing(crc) {
+            anyhow::bail!(
+                "NAMB v1 CRC32 of the weight stream is 0, which collides with \
+                 the v1 missing-checksum sentinel; refusing to emit an \
+                 unreadable file"
+            );
+        }
+        crc
+    } else {
+        0
+    };
+
     // 3. Builds the Header
     let mut header = NambHeader {
         magic: 0x4E414D42,
@@ -64,11 +122,7 @@ pub fn encode_namb(
         reserved_v2: [0; 4],
         weights_offset: (std::mem::size_of::<NambHeader>() + json_bytes.len()) as u32,
         reserved1: [0; 2],
-        crc32: if version < 2 {
-            crc32_ieee(&weights_bytes)
-        } else {
-            0
-        },
+        crc32: v1_crc,
         reserved2: 0,
         version_str: [0; 32],
         sample_rate: data

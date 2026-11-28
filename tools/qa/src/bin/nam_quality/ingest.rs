@@ -177,9 +177,15 @@ pub(crate) fn run_ingest(
     // (P0.T3 — the reference_oracle_f64 phase passed but its values never
     // reached the verify key).
     let metrics = join_f64_oracle_esr(&metrics);
+    let telemetry_summary = synthesize_governance_records(&phases, &metrics, &latency);
 
     let mut rendered = String::new();
-    for line in phases.iter().chain(&metrics).chain(&latency) {
+    for line in phases
+        .iter()
+        .chain(&metrics)
+        .chain(&latency)
+        .chain(&telemetry_summary)
+    {
         rendered.push_str(line);
         rendered.push('\n');
     }
@@ -281,6 +287,100 @@ fn join_f64_oracle_esr(metrics: &[String]) -> Vec<String> {
         out[idx] = Some(serde_json::Value::Object(joined).to_string());
     }
     out.into_iter().flatten().collect()
+}
+
+/// Synthesizes `coverage_matrix` and `test_counts` records from the ingested
+/// phase, metric, and latency streams when those summary records are not
+/// already present in `metrics`.
+fn synthesize_governance_records(
+    phases: &[String],
+    metrics: &[String],
+    latency: &[String],
+) -> Vec<String> {
+    let mut has_coverage = false;
+    let mut has_counts = false;
+    let mut namcore_parity = 0u64;
+    let mut f64_table = 0u64;
+    let mut f64_joined = 0u64;
+    let mut isa_optimizations = 0u64;
+    let mut spectral_baselines = 0u64;
+
+    for line in metrics {
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        match v.get("kind").and_then(Value::as_str) {
+            Some("coverage_matrix") => has_coverage = true,
+            Some("test_counts") => has_counts = true,
+            Some("f64_table") => f64_table += 1,
+            Some("isa") => isa_optimizations += 1,
+            Some("spectral_baseline") => spectral_baselines += 1,
+            Some("fidelity") | None => {
+                if v.get("label").and_then(Value::as_str).is_some() {
+                    namcore_parity += 1;
+                    if v.get("esr_f64").is_some_and(|e| !e.is_null()) {
+                        f64_joined += 1;
+                    }
+                }
+            }
+            Some(_) => {}
+        }
+    }
+
+    let mut passed = 0u64;
+    let mut failed = 0u64;
+    let mut skip_capability = 0u64;
+    let mut has_phase_records = false;
+    for line in phases {
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let Some(status) = v.get("status").and_then(Value::as_str) else {
+            continue;
+        };
+        if v.get("phase_id").is_none() {
+            continue;
+        }
+        has_phase_records = true;
+        match status {
+            "PASS" | "PASSED" => passed += 1,
+            "FAIL" | "FAILED" => failed += 1,
+            "SKIP_CAPABILITY" | "NOT_VERIFIED" => skip_capability += 1,
+            _ => {}
+        }
+    }
+
+    let mut out = Vec::new();
+    if !has_coverage
+        && (namcore_parity > 0
+            || f64_table > 0
+            || f64_joined > 0
+            || isa_optimizations > 0
+            || spectral_baselines > 0
+            || !latency.is_empty())
+    {
+        let rec = serde_json::json!({
+            "kind": "coverage_matrix",
+            "namcore_parity": namcore_parity,
+            "f64_oracle": if f64_table > 0 { f64_table } else { f64_joined },
+            "isa_optimizations": isa_optimizations,
+            "spectral_baselines": spectral_baselines,
+            "rt_performance": latency.len() as u64,
+        });
+        out.push(rec.to_string());
+    }
+    if !has_counts && has_phase_records {
+        let rec = serde_json::json!({
+            "kind": "test_counts",
+            "passed": passed,
+            "failed": failed,
+            "ignored": 0,
+            "filtered": 0,
+            "skip_capability": skip_capability,
+        });
+        out.push(rec.to_string());
+    }
+    out
 }
 
 fn print_ingest_help() {

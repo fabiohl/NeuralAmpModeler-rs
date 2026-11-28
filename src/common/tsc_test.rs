@@ -322,3 +322,25 @@ fn bench_rdtsc_overhead() {
     );
     assert!(ns_per_call_cal < ns_per_call_uncal);
 }
+
+#[test]
+#[serial_test::serial]
+fn rdtsc_nanos_fallback_is_monotonic_and_reports_uncalibrated() {
+    // Uncalibrated hosts (for example, a platform where the cycle-counter
+    // calibration window was rejected) must still observe a monotonic clock:
+    // the `Instant` fallback never reads the raw counter and never returns a
+    // value older than a previous call on the same thread.
+    set_mult_for_test(0);
+    assert!(!is_tsc_calibrated());
+    let mut previous = rdtsc_nanos();
+    for _ in 0..1_000 {
+        let now = rdtsc_nanos();
+        assert!(now >= previous, "Instant fallback went backwards");
+        previous = now;
+    }
+    // Restore the calibrated state for tests that rely on the live counter.
+    let mult = mult_for_rate(100_000_000, 50_000_000).expect("valid window");
+    set_mult_for_test(mult);
+    assert!(is_tsc_calibrated());
+    set_mult_for_test(0);
+}

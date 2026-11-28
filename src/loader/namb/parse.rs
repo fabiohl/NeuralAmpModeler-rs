@@ -3,12 +3,51 @@
 
 //! Main parser for `.namb` binary files.
 
-use super::super::nam_json::{NamMetadata, NamModelData};
+use super::super::nam_json::{NamMetadata, NamModelData, WeightsLayout, is_a2_model};
 use super::error::NambError;
 use super::fallback::make_fallback_model_data;
-use super::header::{FLAG_HAS_CRC32, NambHeader, check_crc};
+use super::header::{FLAG_HAS_CRC32, NambHeader, check_crc, layout_name, v1_crc_is_missing};
 use anyhow::Result;
 use log::{debug, info};
+
+/// Rejects layouts that cannot describe the parsed architecture.
+///
+/// The decoder trusts `layout_type` when interpreting the weight stream, so an
+/// incoherent header would otherwise apply the wrong transposition and change
+/// the audio silently. Only combinations proven invalid are rejected.
+fn validate_layout_for_model(
+    layout: WeightsLayout,
+    model_data: &NamModelData,
+) -> std::result::Result<(), NambError> {
+    match layout {
+        WeightsLayout::Original => Ok(()),
+        WeightsLayout::GateMajorLstm => {
+            if model_data.architecture == "LSTM" {
+                Ok(())
+            } else {
+                Err(NambError::LayoutArchitectureMismatch {
+                    layout: layout_name(layout),
+                    architecture: model_data.architecture.clone(),
+                })
+            }
+        }
+        WeightsLayout::Interleaved4WaveNet => {
+            if model_data.architecture != "WaveNet" {
+                return Err(NambError::LayoutArchitectureMismatch {
+                    layout: layout_name(layout),
+                    architecture: model_data.architecture.clone(),
+                });
+            }
+            if is_a2_model(model_data) {
+                return Err(NambError::LayoutGeometryMismatch {
+                    layout: layout_name(layout),
+                    reason: "A2 topology (fast-path or scalar dynamic) is not representable",
+                });
+            }
+            Ok(())
+        }
+    }
+}
 
 /// Loads a model in the `.namb` binary format, returning a typed [`NambError`]
 /// directly — no `downcast` required.
@@ -43,8 +82,7 @@ pub fn parse_namb_typed(data: &[u8]) -> std::result::Result<NamModelData, NambEr
         hdr_version, hdr_weights_offset, hdr_flags, file_size
     );
 
-    // 2. Reads the JSON metadata section (optional in .namb, but common)
-    // If weights_offset > header_size, there is a JSON between them.
+    // 2. Validates the weights offset before touching any other section.
     let weights_offset = header.weights_offset as usize;
     if weights_offset > data.len() {
         return Err(NambError::WeightsOffsetOutOfBounds {
@@ -59,6 +97,45 @@ pub fn parse_namb_typed(data: &[u8]) -> std::result::Result<NamModelData, NambEr
         });
     }
 
+    // 3. Integrity Validation (CRC32), evaluated before the metadata JSON.
+    // The CRC covers the JSON section in v2, so corrupting metadata must be
+    // reported as an integrity failure, not as a parse failure. In v1 the CRC
+    // covers only the weights section; JSON errors still surface after a valid
+    // CRC because that section is not part of the checksum.
+    let version = header.version;
+    let crc32_header = header.crc32;
+
+    if version >= 2 && hdr_flags & FLAG_HAS_CRC32 == 0 {
+        // Structured rejection diagnostic (CRC integrity policy).
+        log::warn!(
+            "[Loader] Invalid CRC rejected: field='crc32', value=0 (FLAG_HAS_CRC32 absent, v{}), offset_bytes={}",
+            version,
+            std::mem::offset_of!(NambHeader, crc32)
+        );
+        return Err(NambError::CrcMissing { version });
+    }
+
+    if version == 1 && v1_crc_is_missing(crc32_header) {
+        // Structured rejection diagnostic (CRC integrity policy).
+        log::warn!(
+            "[Loader] Invalid CRC rejected: field='crc32', value=0 (v1 sentinel), offset_bytes={}",
+            std::mem::offset_of!(NambHeader, crc32)
+        );
+        return Err(NambError::CrcMissingV1);
+    }
+
+    check_crc(data, version, weights_offset, crc32_header)?;
+    debug!(
+        "[Loader] .namb CRC32 validated (v{}, crc=0x{:08X})",
+        version, crc32_header
+    );
+
+    // 4. Validates the declared layout. An unknown byte in v2 is rejected
+    // instead of being silently interpreted as `Original`.
+    let layout = header.try_get_layout()?;
+
+    // 5. Reads the JSON metadata section (optional in .namb, but common)
+    // If weights_offset > header_size, there is a JSON between them.
     let mut model_data = if weights_offset > header_size {
         let json_bytes = &data[header_size..weights_offset];
         // Truncate nulls if present (the NAMB buffer is usually padded)
@@ -88,36 +165,14 @@ pub fn parse_namb_typed(data: &[u8]) -> std::result::Result<NamModelData, NambEr
         make_fallback_model_data()
     };
 
-    // 3. Integrity Validation (CRC32)
-    let version = header.version;
-    let crc32_header = header.crc32;
+    // 6. Cross-validates the layout against the embedded architecture and
+    // geometry. These combinations are provably unrepresentable: the decoder
+    // would apply an LSTM transposition to a non-LSTM graph, or interpret
+    // heterogeneous A2 kernels as a uniform Interleaved-4 layout.
+    validate_layout_for_model(layout, &model_data)?;
+    model_data.weights_layout = layout;
 
-    if version >= 2 && hdr_flags & FLAG_HAS_CRC32 == 0 {
-        // Structured rejection diagnostic (CRC integrity policy).
-        log::warn!(
-            "[Loader] Invalid CRC rejected: field='crc32', value=0 (FLAG_HAS_CRC32 absent, v{}), offset_bytes={}",
-            version,
-            std::mem::offset_of!(NambHeader, crc32)
-        );
-        return Err(NambError::CrcMissing { version });
-    }
-
-    if version == 1 && crc32_header == 0 {
-        // Structured rejection diagnostic (CRC integrity policy).
-        log::warn!(
-            "[Loader] Invalid CRC rejected: field='crc32', value=0 (v1 sentinel), offset_bytes={}",
-            std::mem::offset_of!(NambHeader, crc32)
-        );
-        return Err(NambError::CrcMissingV1);
-    }
-
-    check_crc(data, version, weights_offset, crc32_header)?;
-    debug!(
-        "[Loader] .namb CRC32 validated (v{}, crc=0x{:08X})",
-        version, crc32_header
-    );
-
-    // 4. Reads the binary weights
+    // 7. Reads the binary weights
     let pesos_raw = &data[weights_offset..];
     if !pesos_raw.len().is_multiple_of(4) {
         let expected_len = weights_offset + pesos_raw.len() + (4 - pesos_raw.len() % 4);
@@ -228,7 +283,6 @@ pub fn parse_namb_typed(data: &[u8]) -> std::result::Result<NamModelData, NambEr
 
     model_data.weights = weights;
     model_data.sample_rate = Some(sample_rate_header);
-    model_data.weights_layout = header.get_layout();
 
     // Updates metadata if it exists
     if let Some(ref mut metadata) = model_data.metadata {

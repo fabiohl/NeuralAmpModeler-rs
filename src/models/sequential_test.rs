@@ -653,3 +653,75 @@ fn test_sequential_linear_prewarm_stabilizes_upstream_bias_first_block() {
         );
     }
 }
+
+#[test]
+fn test_sequential_prewarm_step_zero_capacity_keeps_balance() {
+    // `set_max_buffer_size(0)` without a later resize leaves no plane to
+    // feed. The split step must NOT retire the balance (fictitious
+    // convergence) and must make no progress instead of panicking.
+    let mut chain = chain_two_linears(&[1.0, 0.5], &[-2.0]).expect("chain builds");
+    chain.set_max_buffer_size(0).expect("zero capacity");
+    chain.prewarm_reset();
+    let armed = chain.prewarm_samples();
+    assert_eq!(armed, 3, "two Linear RFs sum to 3");
+    assert_eq!(chain.prewarm_step(64), armed);
+    assert_eq!(chain.prewarm_step(0), armed);
+    assert_eq!(chain.prewarm_step(usize::MAX), armed);
+    assert!(
+        !chain.prewarm_complete(),
+        "zero capacity cannot converge; the balance stays visible"
+    );
+}
+
+#[test]
+fn test_sequential_prewarm_step_debits_only_processed_frames() {
+    // The step budget may exceed the negotiated capacity: the chain clamps
+    // the feed to `stage_frames` and must debit exactly those frames, not
+    // the requested budget. Budget above capacity but below the balance.
+    let mut split = chain_two_linears(&[1.0, 0.5], &[-2.0]).expect("chain builds");
+    split.reset(48000, 1).expect("reset at capacity 1");
+    split.prewarm_reset();
+    let armed_one = split.prewarm_samples();
+    assert_eq!(split.prewarm_step(5), armed_one - 1);
+    assert_eq!(split.prewarm_step(usize::MAX), armed_one - 2);
+    assert_eq!(split.prewarm_step(usize::MAX), 0);
+    assert!(split.prewarm_complete());
+}
+
+#[test]
+fn test_sequential_split_budget_boundaries_match_integral() {
+    // Budgets 0, 1, capacity, capacity+1 and usize::MAX, in a rotating
+    // cycle, must reproduce the integral stabilization bit-exactly.
+    const CAP: usize = 4;
+    let build = || -> Box<SequentialModel> {
+        let stages = vec![lstm_stage(), linear_stage(1, 1, 0.0, &[1.0, 0.5])];
+        Box::new(SequentialModel::new(stages, vec![None, None], None).expect("chain builds"))
+    };
+
+    let mut integral = build();
+    integral.reset(48000, CAP).expect("integral reset");
+
+    let mut split = build();
+    split.reset(48000, CAP).expect("split reset");
+    split.prewarm_reset();
+
+    let cycle = [0usize, 1, CAP, CAP + 1, usize::MAX];
+    let mut i = 0usize;
+    let mut guard = 0usize;
+    while !split.prewarm_complete() {
+        split.prewarm_step(cycle[i % cycle.len()]);
+        i += 1;
+        guard += 1;
+        assert!(guard < 100_000, "split stabilization must terminate");
+    }
+
+    let input = test_input(CAP);
+    let mut out_integral = vec![0.0f32; input.len()];
+    let mut out_split = vec![0.0f32; input.len()];
+    integral.process(&input, &mut out_integral);
+    split.process(&input, &mut out_split);
+    assert_eq!(
+        out_integral, out_split,
+        "budget boundaries must not change the split result"
+    );
+}

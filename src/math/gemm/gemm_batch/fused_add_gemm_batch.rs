@@ -1,11 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 // Specialized GEMM micro-kernels utilize unsafe SIMD intrinsics and parameter lists.
-#![allow(
-    unsafe_op_in_unsafe_fn,
-    clippy::missing_safety_doc,
-    clippy::too_many_arguments
-)]
+#![allow(clippy::missing_safety_doc, clippy::too_many_arguments)]
 
 //! Fused Add GEMM Batch kernel — AVX2.
 //!
@@ -35,6 +31,8 @@ use crate::gemm_batch_outc_loop_avx2;
 /// - `weights.len()` must be >= `in_len * out_len` where `in_len = in_frames.len() / num_frames`
 ///   and `out_len = out_frames.len() / num_frames`.
 /// - If `do_bias` is true, `bias.len()` must be >= `out_len`.
+/// - The caller must run on an x86-64-v3-compatible CPU (AVX2+FMA) or on
+///   aarch64 with baseline NEON support; this kernel does no runtime ISA check.
 ///
 /// All slices must be valid and accessible for reading/writing.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
@@ -59,10 +57,16 @@ pub unsafe fn fused_add_gemm_batch_avx2(
         debug_assert!(bias.len() >= out_len);
     }
 
-    // SAFETY: the `debug_assert!`s above establish `weights.len() >=
-    // in_len * out_len` and `bias.len() >= out_len` (when `do_bias`), and the
-    // frame boundaries; the batch macros' loop guards keep every indexed
-    // access inside `in_frames`/`out_frames`/`weights`/`bias`.
+    // SAFETY: the caller `# Safety` contract requires `in_frames.len()` and
+    // `out_frames.len()` to be exact multiples of `num_frames` (so
+    // `in_len`/`out_len` are exact), `weights.len() >= in_len * out_len`, and
+    // `bias.len() >= out_len` when `do_bias`; the `debug_assert!`s above only
+    // re-check these in debug builds. The macro guards (`f + 4 <= num_frames`,
+    // `out_c + 8 <= out_len`, `in_c + 2 <= in_len` and scalar tails) keep
+    // every frame/channel index inside those extents. Slices provide initialized
+    // f32 data and exclusive `out_frames`; AVX2 loads/stores are unaligned.
+    // ISA: caller must provide x86-64-v3 (AVX2+FMA) or aarch64 baseline NEON;
+    // no runtime ISA check occurs here.
     unsafe {
         let mut f = 0;
         gemm_batch_frame_loop_avx2!(

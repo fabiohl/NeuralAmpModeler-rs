@@ -358,7 +358,7 @@ pub(crate) fn cmd_dashboard(args: &[String]) {
                         "--",
                         "--nocapture",
                     ],
-                    &[],
+                    &[("NAM_METRICS_JSONL", &metrics_path_str)],
                 ),
                 (
                     &[
@@ -374,7 +374,7 @@ pub(crate) fn cmd_dashboard(args: &[String]) {
                         "--ignored",
                         "--nocapture",
                     ],
-                    &[],
+                    &[("NAM_METRICS_JSONL", &metrics_path_str)],
                 ),
             ],
             &spec_log,

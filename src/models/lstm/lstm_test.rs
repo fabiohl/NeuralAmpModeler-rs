@@ -478,4 +478,21 @@ mod tests {
             );
         }
     }
+    // Public LSTM boundary: a short input is rejected by a release-stable
+    // assertion before any unchecked offset is formed. The exact-length input
+    // remains panic-free. See `layer_dyn_kernels.rs` and
+    // `docs/architecture.md` §4.7.
+    #[test]
+    #[should_panic(expected = "input slice too short")]
+    fn dyn_layer_process_rejects_short_input() {
+        let mut layer = LstmLayerDyn::new(2, 8).unwrap();
+        layer.process(&[0.5]);
+    }
+
+    #[test]
+    fn dyn_layer_process_accepts_exact_input_boundary() {
+        let mut layer = LstmLayerDyn::new(2, 8).unwrap();
+        layer.process(&[0.5, -0.5]);
+        assert!(layer.state().iter().all(|v| v.is_finite()));
+    }
 }

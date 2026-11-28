@@ -24,6 +24,41 @@ fn make_standard_secondary(num: usize) -> Vec<Option<ActivationType>> {
 }
 
 #[test]
+fn diagnostic_capture_is_inert_until_explicitly_enabled() {
+    let state = DiagnosticState::default();
+    assert!(
+        state.dump.is_none(),
+        "feature `testing` exposes capture but must not activate it by default"
+    );
+
+    let mut model = WaveNetA2Dyn::new(
+        1,
+        3,
+        3,
+        1,
+        3,
+        3,
+        crate::models::a2::params::A2_HEAD_KERNEL_SIZE,
+        &[3],
+        &[2],
+        make_standard_activations(1),
+        make_standard_gating(1),
+        make_standard_secondary(1),
+    )
+    .unwrap();
+    assert!(model.take_diagnostics().is_none());
+    model.enable_diagnostics(crate::testing::diagnostics::DiagnosticConfig::default());
+    assert!(
+        model.take_diagnostics().is_some(),
+        "explicit enable must arm the capture"
+    );
+    assert!(
+        model.take_diagnostics().is_none(),
+        "take must disarm capture again"
+    );
+}
+
+#[test]
 fn test_wavenet_a2_dyn_new_ch3() {
     let model = WaveNetA2Dyn::new(
         1,
@@ -1313,4 +1348,41 @@ fn test_wavenet_a2_dyn_split_prewarm_with_cond_dsp_and_wide_head_progress() {
     let rem2 = wide.prewarm_step(usize::MAX);
     assert_eq!(rem2, 0);
     assert!(wide.prewarm_complete());
+}
+
+#[test]
+fn test_wavenet_a2_dyn_prewarm_geometry_boundary() {
+    // `prewarm_step` services `max(input_channels, head_size)` from a fixed
+    // 512-float stack scratch. The public constructor must accept the exact
+    // bound and reject wider geometry explicitly (instead of silently
+    // skipping the feed and debiting fictitious progress).
+    let build = |head: usize| {
+        WaveNetA2Dyn::new(
+            1,
+            4,
+            4,
+            head,
+            4,
+            4,
+            1,
+            &[3],
+            &[2],
+            make_standard_activations(1),
+            make_standard_gating(1),
+            make_standard_secondary(1),
+        )
+    };
+    assert!(
+        build(512).is_ok(),
+        "head_size=512 is the admissible prewarm bound"
+    );
+    let err = match build(513) {
+        Ok(_) => panic!("head_size=513 must be rejected"),
+        Err(e) => e,
+    };
+    let msg = err.to_string();
+    assert!(
+        msg.contains("prewarm scratch bound"),
+        "rejection must name the geometry bound, got: {msg}"
+    );
 }

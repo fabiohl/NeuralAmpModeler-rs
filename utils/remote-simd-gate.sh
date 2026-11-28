@@ -49,10 +49,10 @@ fi
 if [ "$CHECK_ONLY" -eq 1 ]; then finish; exit 0; fi
 
 PHASE_NAME=parity; phase parity
-log_parity="$LOG_DIR/remote-simd-parity.log"; parity_jsonl="$LOG_DIR/remote-simd-parity-${NAM_RUN_ID}.jsonl"
+log_parity="$LOG_DIR/remote-simd-parity.log"; parity_jsonl="$LOG_DIR/remote-simd-parity-${NAM_RUN_ID}.jsonl"; metrics_jsonl="$LOG_DIR/remote-simd-metrics-${NAM_RUN_ID}.jsonl"
 rc_parity=0; rc_reconcile=0
-rm -f "$parity_jsonl"
-NAM_SIMD_PARITY_JSONL="$parity_jsonl" cargo test --locked --release --features avx512 --test parity -- avx2_vs_avx512 --include-ignored --test-threads=1 --nocapture > "$log_parity" 2>&1 || rc_parity=$?
+rm -f "$parity_jsonl" "$metrics_jsonl"
+NAM_SIMD_PARITY_JSONL="$parity_jsonl" NAM_METRICS_JSONL="$metrics_jsonl" cargo test --locked --release --features avx512 --test parity -- avx2_vs_avx512 --include-ignored --test-threads=1 --nocapture > "$log_parity" 2>&1 || rc_parity=$?
 env -u CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER cargo run --quiet --locked -p nam-qa --bin nam_simd_parity -- --jsonl "$parity_jsonl" --run-id "$NAM_RUN_ID" >> "$log_parity" 2>&1 || rc_reconcile=$?
 if [ "$rc_parity" -eq 0 ] && ran_tests "$log_parity" && [ "$rc_reconcile" -eq 0 ]; then
   emit "PHASE: parity PASS log=$log_parity"

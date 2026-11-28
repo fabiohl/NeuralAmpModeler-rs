@@ -3,7 +3,9 @@
 
 #[cfg(test)]
 mod tests {
+    use crate::loader::nam_json::{NamConfig, NamLayerConfig, NamModelData};
     use crate::loader::namb::*;
+    use crate::loader::namb_encoder::encode_namb;
     use anyhow::Result;
     use std::assert_matches;
 
@@ -101,39 +103,10 @@ mod tests {
 
     #[test]
     fn test_parse_namb_v2_gate_major() -> Result<()> {
-        // Tests whether the loader recognizes the new v2 format (with optimized layout).
-        let header_size = std::mem::size_of::<NambHeader>();
-        let w = [0.0f32; 4];
-        let mut data = vec![0u8; header_size + w.len() * 4];
-        // SAFETY: `data` is `vec![0u8; header_size + w.len() * 4]` (>= size_of::<NambHeader>()),
-        // so the cast pointer is aligned to `NambHeader` and valid for one read/write; `data` outlives the borrow.
-        let header = unsafe { &mut *data.as_mut_ptr().cast::<NambHeader>() };
-
-        header.magic = 0x4E414D42;
-        header.version = 2;
-        header.layout_type = 1; // 1 indicates "GateMajorLstm" (layout optimized for LSTM)
-        header.flags = FLAG_HAS_CRC32;
-        header.weights_offset = header_size as u32;
-        header.sample_rate = 48000.0;
-        header.input_level_dbu = 12.0;
-        header.output_level_dbu = -6.0;
-
-        // Writes the weights into the buffer
-        for (i, &f) in w.iter().enumerate() {
-            let offset = header_size + i * 4;
-            data[offset..offset + 4].copy_from_slice(&f.to_le_bytes());
-        }
-
-        // Compute whole-file CRC32
-        let crc = {
-            let mut crc_val = crc32_ieee_update(0xFFFFFFFFu32, &data[..24]);
-            crc_val = crc32_ieee_update(crc_val, &data[28..]);
-            crc_val ^ 0xFFFFFFFFu32
-        };
-        header.crc32 = crc;
-
+        // A v2 GateMajor layout must be paired with an LSTM metadata section;
+        // the encoder produces both coherently.
+        let data = encode_namb(&synthetic_lstm(), 2, WeightsLayout::GateMajorLstm)?;
         let parsed = parse_namb(&data)?;
-        // Ensures the program understood that this file needs a special reorganization.
         assert_eq!(parsed.weights_layout, WeightsLayout::GateMajorLstm);
         Ok(())
     }
@@ -175,7 +148,7 @@ mod tests {
 
         header.magic = 0x4E414D42;
         header.version = 2;
-        header.layout_type = 1;
+        header.layout_type = 0; // Original (no metadata section in this fixture)
         header.flags = FLAG_HAS_CRC32;
         header.weights_offset = header_size as u32;
         header.sample_rate = 48000.0;
@@ -1129,5 +1102,171 @@ mod tests {
             "Expected CrcMissing, got: {:?}",
             namb_err
         );
+    }
+
+    // ── Layout/version coherence and CRC precedence (S1) ────────────────
+
+    fn synthetic_lstm() -> NamModelData {
+        let mut config = NamConfig::new(vec![]);
+        config.head = None;
+        config.head_scale = Some(1.0);
+        config.num_layers = Some(1);
+        config.hidden_size = Some(8);
+        NamModelData::new(
+            Some("0.5.0".to_string()),
+            "LSTM".to_string(),
+            config,
+            vec![0.01; 4 * 8 * (1 + 8) + 4 * 8 + 2 * 8 + 8 + 1],
+            Some(48000.0),
+            None,
+            WeightsLayout::Original,
+        )
+    }
+
+    #[test]
+    fn test_v2_unknown_layout_rejected() {
+        let mut data =
+            encode_namb(&synthetic_lstm(), 2, WeightsLayout::Original).expect("encode v2 Original");
+        data[6] = 9; // layout_type
+        test_fix_v2_crc(&mut data);
+
+        let err = parse_namb_typed(&data).expect_err("unknown layout byte must be rejected");
+        assert_matches!(
+            err,
+            NambError::UnsupportedLayout {
+                version: 2,
+                layout_type: 9
+            }
+        );
+    }
+
+    #[test]
+    fn test_v2_layout_architecture_mismatch_rejected() {
+        let mut data =
+            encode_namb(&synthetic_lstm(), 2, WeightsLayout::Original).expect("encode v2 Original");
+        data[6] = WeightsLayout::Interleaved4WaveNet as u8;
+        test_fix_v2_crc(&mut data);
+
+        let err = parse_namb_typed(&data).expect_err("WaveNet layout on LSTM must be rejected");
+        assert_matches!(
+            err,
+            NambError::LayoutArchitectureMismatch {
+                layout: "Interleaved4WaveNet",
+                ..
+            }
+        );
+    }
+
+    fn a2_fixture_data() -> NamModelData {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/models/wavenet_a2_full.nam"
+        );
+        let json = std::fs::read_to_string(path).expect("A2 fixture must be readable");
+        crate::loader::nam_json::parse_nam_json(&json).expect("A2 fixture must parse")
+    }
+
+    #[test]
+    fn test_v2_interleaved4_rejects_heterogeneous_kernels() {
+        // A2-style geometry (per-layer kernel_sizes) cannot be represented by a
+        // uniform Interleaved-4 layout; a forged header must fail closed.
+        let mut encoded =
+            encode_namb(&a2_fixture_data(), 2, WeightsLayout::Original).expect("encode Original");
+        encoded[6] = WeightsLayout::Interleaved4WaveNet as u8;
+        test_fix_v2_crc(&mut encoded);
+
+        let err = parse_namb_typed(&encoded)
+            .expect_err("A2 geometry with Interleaved-4 must be rejected");
+        assert_matches!(
+            err,
+            NambError::LayoutGeometryMismatch {
+                layout: "Interleaved4WaveNet",
+                ..
+            }
+        );
+    }
+
+    #[test]
+    fn test_v1_optimized_layout_byte_is_ignored() {
+        // v1 has no layout field: byte 0x06 is legacy reserved data. The
+        // decoder must keep returning Original (documented incompatibility),
+        // which is why the encoder refuses to write optimized v1 layouts.
+        let mut data = build_valid_namb_v1(&[0.1, -0.2, 0.3]);
+        // SAFETY: `build_valid_namb_v1` returns at least `size_of::<NambHeader>()`
+        // bytes, so the cast pointer is aligned and valid for one write.
+        let header = unsafe { &mut *data.as_mut_ptr().cast::<NambHeader>() };
+        header.layout_type = WeightsLayout::GateMajorLstm as u8;
+
+        let parsed = parse_namb_typed(&data).expect("v1 stays readable");
+        assert_eq!(parsed.weights_layout, WeightsLayout::Original);
+    }
+
+    #[test]
+    fn test_encoder_rejects_v1_optimized_layout() {
+        let err = encode_namb(&synthetic_lstm(), 1, WeightsLayout::GateMajorLstm)
+            .expect_err("v1 + optimized layout must be rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("v1") && msg.contains("Original"),
+            "unexpected error: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_encoder_rejects_unsupported_version() {
+        let err = encode_namb(&synthetic_lstm(), 3, WeightsLayout::Original)
+            .expect_err("version 3 must be rejected");
+        assert!(err.to_string().contains("encoding: 3"), "{err}");
+    }
+
+    #[test]
+    fn test_encoder_rejects_interleaved4_for_heterogeneous_kernels() {
+        let err = encode_namb(&a2_fixture_data(), 2, WeightsLayout::Interleaved4WaveNet)
+            .expect_err("A2 heterogeneous kernels cannot be interleaved");
+        assert!(err.to_string().contains("A2 topology"), "{err}");
+    }
+
+    #[test]
+    fn test_layer_serialization_emits_unique_keys_and_preserves_raw() {
+        let mut layer = NamLayerConfig {
+            channels: Some(8),
+            dilations: Some(vec![1, 3]),
+            ..Default::default()
+        };
+        layer.layer_raw = Some(serde_json::json!({
+            "channels": 4,
+            "dilations": [9],
+            "activation": [{"type": "LeakyReLU"}],
+            "head1x1": {"active": true}
+        }));
+
+        let json = serde_json::to_string(&layer).expect("serialize layer");
+        assert_eq!(json.matches("\"channels\"").count(), 1, "{json}");
+        assert_eq!(json.matches("\"dilations\"").count(), 1, "{json}");
+        assert_eq!(json.matches("\"activation\"").count(), 1, "{json}");
+        assert!(json.contains("head1x1"), "{json}");
+
+        let value: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+        assert_eq!(value["channels"], 8, "typed value must win: {json}");
+    }
+
+    #[test]
+    fn test_crc_is_checked_before_metadata_json() {
+        let mut data =
+            encode_namb(&synthetic_lstm(), 2, WeightsLayout::Original).expect("encode v2 Original");
+        let header_size = std::mem::size_of::<NambHeader>();
+        // Make the JSON section syntactically invalid (first `{` -> `}`),
+        // leaving the stored CRC stale.
+        assert_eq!(data[header_size], b'{');
+        data[header_size] = b'}';
+
+        let err = parse_namb_typed(&data).expect_err("stale CRC must win over JSON errors");
+        assert_matches!(err, NambError::CrcMismatch { .. });
+
+        // With a valid CRC the same bytes are reported as invalid JSON,
+        // proving the fixture really carries a JSON failure.
+        test_fix_v2_crc(&mut data);
+        let err = parse_namb_typed(&data).expect_err("invalid JSON must still be rejected");
+        assert_matches!(err, NambError::MetadataJson(_));
     }
 }

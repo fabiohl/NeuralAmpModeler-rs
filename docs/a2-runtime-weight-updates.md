@@ -34,6 +34,24 @@ changes can cause audible discontinuities; this API does not interpolate weights
 or crossfade output. Input storage must remain available for the duration of the
 call; producing or replacing that storage is the caller's responsibility.
 
+Measured release cost of the complete validation + repack path on the reference
+host (`runtime_update_cost_probe`, AMD Ryzen 7 5700U, x86-64-v3):
+
+| Dense dynamic topology | Serialized weights | Cost per call |
+|:-----------------------|-------------------:|--------------:|
+| ch=3, bn=3, kernel=6   | 161                | 558 ns        |
+| ch=5, bn=7, kernel=2   | 421                | 427 ns        |
+| ch=4, bn=3, gated, k=7 | 381                | 406 ns        |
+| ch=9, bn=5, blended, k=1 | 778              | 784 ns        |
+| ch=8, bn=8, kernel=15  | 1562               | 1983 ns       |
+
+These values are context, not a portable deadline guarantee: a real-time
+callback that must also process audio has a 1.33 ms budget at 48 kHz/64 frames,
+so the measured update alone consumes under 0.2% of a block. They do not cover
+an audio signal transition; the first sample after a successful update uses the
+new coefficients with the existing history, so a discontinuity is possible by
+design.
+
 ## Scope and parametric models
 
 This API is a first primitive for hypernetwork-produced weights, not a parametric

@@ -910,4 +910,33 @@ mod tests {
         assert_eq!(adaptive.peek_slimmable_rebuild(), None);
         assert_eq!(adaptive.wavenet_full_ch, None);
     }
+    #[test]
+    fn crossfade_scratch_is_owned_by_the_controller() {
+        let mut adaptive = AdaptiveCompute::new(AdaptiveComputeMode::Off);
+        {
+            let (backup, post) = adaptive.crossfade_scratch();
+            assert_eq!(backup.len(), WAVENET_CROSSFADE_MAX_STATES);
+            assert_eq!(post.len(), WAVENET_CROSSFADE_MAX_STATES);
+            backup[0] = 0xDEAD_BEEF;
+            post[0] = 0xFEED_FACE;
+        }
+        let (backup, post) = adaptive.crossfade_scratch();
+        assert_eq!(backup[0], 0xDEAD_BEEF);
+        assert_eq!(post[0], 0xFEED_FACE);
+    }
+
+    #[test]
+    fn crossfade_stack_footprint_is_bounded_by_controller_state() {
+        // Measured: the two snapshots occupy 2 × 1024 × size_of::<usize>() =
+        // 16 KiB on 64-bit targets. Keeping them inside the controller removes
+        // that transient from the audio-callback frame; the remaining frame is
+        // the 2 KiB oversampled crossfade chunk.
+        let snapshots = 2 * WAVENET_CROSSFADE_MAX_STATES * std::mem::size_of::<usize>();
+        assert_eq!(snapshots, 16 * 1024);
+        assert!(std::mem::size_of::<AdaptiveCompute>() >= snapshots);
+        assert!(
+            std::mem::size_of::<AdaptiveCompute>() <= snapshots + 1024,
+            "controller metadata must not exceed the documented 1 KiB overhead"
+        );
+    }
 }

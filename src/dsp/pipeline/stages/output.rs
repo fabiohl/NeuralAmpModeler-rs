@@ -10,6 +10,27 @@ use crate::math::common::SimdMath;
 
 use super::input::DENORMAL_DITHER_OFFSET;
 
+/// Mirrors the authoritative mono left channel into the right channel.
+///
+/// Mono processing only advances the left channel (`process_mono == true`), so
+/// the right channel must receive the *final* left samples after gain, gating,
+/// dither subtraction, clipping detection and non-finite sanitization. Doing
+/// this at the end of the output stage keeps every consumer of the working
+/// buffers (recording, monitoring bridge, hosts) coherent: `R == L` in mono.
+#[inline(always)]
+fn mirror_mono_right(resamp_out_l: &[f32], resamp_out_r: &mut [f32], n_pw: usize) {
+    let n = n_pw.min(resamp_out_l.len()).min(resamp_out_r.len());
+    if n == 0 {
+        return;
+    }
+    // SAFETY: `n` is bounded by both slice lengths and the two buffers are
+    // distinct allocations (the pipeline never hands aliasing L/R slices to
+    // the output stage), so the regions cannot overlap.
+    unsafe {
+        core::ptr::copy_nonoverlapping(resamp_out_l.as_ptr(), resamp_out_r.as_mut_ptr(), n);
+    }
+}
+
 #[inline(always)]
 fn clamp_output_len(
     resamp_out_l: &[f32],
@@ -67,6 +88,12 @@ pub fn apply_output_stage_sanitized(
     crate::math::dsp::sanitize_nonfinite_f32(&mut resamp_out_l[..n_pw]);
     if !process_mono {
         crate::math::dsp::sanitize_nonfinite_f32(&mut resamp_out_r[..n_pw]);
+    }
+    // Mono: `R` is not an independent signal. Publish the sanitized final `L`
+    // only after every output-stage transform so consumers never observe a
+    // pre-gain/pre-dither/pre-gate right channel.
+    if process_mono {
+        mirror_mono_right(resamp_out_l, resamp_out_r, n_pw);
     }
 }
 
@@ -271,6 +298,13 @@ pub(crate) unsafe fn apply_output_stage_inner<M: SimdMath>(
         if !process_mono {
             crate::math::dsp::sanitize_nonfinite_f32(&mut resamp_out_r[..n_pw]);
         }
+    }
+
+    // Mono delivers a single authoritative channel. Mirror the fully processed
+    // left signal last so `resamp_out_r` is never a stale pre-output-stage copy
+    // (cabsim mirror, previous block, or pre-gate sample).
+    if process_mono {
+        mirror_mono_right(resamp_out_l, resamp_out_r, n_pw);
     }
 }
 

@@ -251,6 +251,17 @@ pub fn report_f64_table(filename: &str, family: &str, esr_linear: f64, esr_db: f
     }));
 }
 
+/// `spectral_baseline` — emitted when a model passes its spectral fidelity
+/// baseline check (`tests/models/spectral_fidelity.rs`).
+pub fn report_spectral_baseline(label: &str, thdn_percent: f64, imd_percent: f64) {
+    append_metric_line(serde_json::json!({
+        "kind": "spectral_baseline",
+        "label": label,
+        "thdn_percent": json_metric(thdn_percent),
+        "imd_percent": json_metric(imd_percent),
+    }));
+}
+
 /// `f64_decomp` — one source-decomposition record of the f64 oracle
 /// (`print_decomposition` in `tests/parity/reference_oracle_f64.rs`).
 /// Unmeasured decomposition terms (absent `Option` fields) are omitted from

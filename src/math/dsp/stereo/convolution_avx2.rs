@@ -8,7 +8,7 @@
 //! using AVX2+FMA intrinsics.
 
 // Architecture-specific AVX2 convolution helpers and parameter lists.
-#![allow(unsafe_op_in_unsafe_fn, clippy::too_many_arguments)]
+#![allow(clippy::too_many_arguments)]
 
 use crate::arch::simd::*;
 use crate::impl_convolve_mono;
@@ -44,10 +44,9 @@ macro_rules! avx2_add {
 /// Horizontal sum of an AVX2 register (8 lanes) to f32.
 ///
 /// # Safety
-/// The CPU must support AVX2 (the function uses `_mm256_*` intrinsics and
-/// carries `#[target_feature]` (AVX2+FMA on x86_64, NEON on aarch64)) — callers must dispatch
-/// through the runtime CPUID before calling. There is no memory access; any
-/// register value is valid input.
+/// The caller must ensure AVX2 support on x86 (or NEON on aarch64). The x86
+/// project build targets x86-64-v3 (AVX2+FMA); this is a CPU requirement, not a
+/// runtime check. There is no memory access; any register value is valid input.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
 #[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn avx2_hsum(r: __m256) -> f32 {
@@ -59,7 +58,10 @@ pub unsafe fn avx2_hsum(r: __m256) -> f32 {
     let shuf2 = _mm_movehl_ps(sums, sums);
     let r = _mm_add_ss(sums, shuf2);
     let mut out = 0.0f32;
-    _mm_store_ss(&mut out, r);
+    // SAFETY: `out` is a live stack-local f32 and `_mm_store_ss` writes one f32
+    // to a valid, properly aligned destination; no pointers are dereferenced
+    // otherwise. ISA: SSE is baseline for x86-64; aarch64 uses baseline NEON.
+    unsafe { _mm_store_ss(&mut out, r) };
     out
 }
 
@@ -75,7 +77,11 @@ impl_convolve_stereo!(
     avx2_loadu!(),
     avx2_fmadd!(),
     avx2_add!(),
-    avx2_hsum
+    |x| {
+        // SAFETY: caller must provide x86-64-v3-compatible CPU (AVX2+FMA);
+        // `avx2_hsum` dereferences no pointers and reduces a register.
+        unsafe { avx2_hsum(x) }
+    }
 );
 
 impl_convolve_stereo_dual!(
@@ -90,7 +96,11 @@ impl_convolve_stereo_dual!(
     avx2_loadu!(),
     avx2_fmadd!(),
     avx2_add!(),
-    avx2_hsum
+    |x| {
+        // SAFETY: caller must provide x86-64-v3-compatible CPU (AVX2+FMA);
+        // `avx2_hsum` dereferences no pointers and reduces a register.
+        unsafe { avx2_hsum(x) }
+    }
 );
 
 impl_convolve_mono_dual!(
@@ -105,7 +115,11 @@ impl_convolve_mono_dual!(
     avx2_loadu!(),
     avx2_fmadd!(),
     avx2_add!(),
-    avx2_hsum
+    |x| {
+        // SAFETY: caller must provide x86-64-v3-compatible CPU (AVX2+FMA);
+        // `avx2_hsum` dereferences no pointers and reduces a register.
+        unsafe { avx2_hsum(x) }
+    }
 );
 
 impl_convolve_mono!(
@@ -120,7 +134,11 @@ impl_convolve_mono!(
     avx2_loadu!(),
     avx2_fmadd!(),
     avx2_add!(),
-    avx2_hsum
+    |x| {
+        // SAFETY: caller must provide x86-64-v3-compatible CPU (AVX2+FMA);
+        // `avx2_hsum` dereferences no pointers and reduces a register.
+        unsafe { avx2_hsum(x) }
+    }
 );
 
 #[cfg(test)]

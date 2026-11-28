@@ -109,7 +109,7 @@ struct NamLayerConfigHelper {
 }
 
 /// The structural configuration of a single layer of the network (whether WaveNet or LSTM).
-#[derive(Serialize, Debug, Clone, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct NamLayerConfig {
     /// Optional: Input tensor size.
     pub input_size: Option<usize>,
@@ -142,8 +142,80 @@ pub struct NamLayerConfig {
     /// Raw JSON value for this layer, preserved for complex shape
     /// checks (activation arrays, FiLM keys, condition_dsp, etc.).
     /// `None` when the struct is constructed directly (not via JSON deserialization).
-    #[serde(skip)]
     pub layer_raw: Option<serde_json::Value>,
+}
+
+impl Serialize for NamLayerConfig {
+    /// Serializes the layer preserving fields that only exist in the raw JSON.
+    ///
+    /// A2 topology (per-layer `activation` arrays, `head`, `gating_mode`,
+    /// `head1x1`, `layer1x1`, `groups_*`) has no typed representation, so a
+    /// derive-only serialization drops it and makes an encoded `.namb`
+    /// metadata section unreadable. Raw keys are emitted first and typed
+    /// fields overlay them when present; a `None` typed field never erases a
+    /// preserved raw value.
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeMap;
+
+        let mut map = serializer.serialize_map(None)?;
+
+        // Typed values are authoritative, so raw keys that will be overlaid
+        // below are skipped to keep every JSON member unique.
+        let overlaid = [
+            ("input_size", self.input_size.is_some()),
+            ("condition_size", self.condition_size.is_some()),
+            ("head_size", self.head_size.is_some()),
+            ("head_kernel_size", self.head_kernel_size.is_some()),
+            ("head_dilation", self.head_dilation.is_some()),
+            ("channels", self.channels.is_some()),
+            ("kernel_size", self.kernel_size.is_some()),
+            ("kernel_sizes", self.kernel_sizes.is_some()),
+            ("dilations", self.dilations.is_some()),
+            ("activation", self.activation.is_some()),
+            ("gated", self.gated.is_some()),
+            ("head_bias", self.head_bias.is_some()),
+            ("bottleneck", self.bottleneck.is_some()),
+            ("slimmable", self.slimmable.is_some()),
+        ];
+        if let Some(serde_json::Value::Object(raw)) = &self.layer_raw {
+            for (key, value) in raw {
+                let will_overlay = overlaid
+                    .iter()
+                    .any(|(name, present)| *present && *name == key.as_str());
+                if !will_overlay {
+                    map.serialize_entry(key, value)?;
+                }
+            }
+        }
+
+        macro_rules! overlay {
+            ($name:literal, $value:expr) => {
+                if let Some(value) = $value.as_ref() {
+                    map.serialize_entry($name, value)?;
+                }
+            };
+        }
+
+        overlay!("input_size", self.input_size);
+        overlay!("condition_size", self.condition_size);
+        overlay!("head_size", self.head_size);
+        overlay!("head_kernel_size", self.head_kernel_size);
+        overlay!("head_dilation", self.head_dilation);
+        overlay!("channels", self.channels);
+        overlay!("kernel_size", self.kernel_size);
+        overlay!("kernel_sizes", self.kernel_sizes);
+        overlay!("dilations", self.dilations);
+        overlay!("activation", self.activation);
+        overlay!("gated", self.gated);
+        overlay!("head_bias", self.head_bias);
+        overlay!("bottleneck", self.bottleneck);
+        overlay!("slimmable", self.slimmable);
+
+        map.end()
+    }
 }
 
 impl NamLayerConfig {

@@ -101,20 +101,28 @@ impl WaveNetA2Dyn {
 
         let n = samples.min(self.prewarm_pending);
         if n > 0 {
-            const STACK_FLOATS: usize = 512;
             let in_ch = self.input_channels.max(1);
             let out_ch = self.head_size.max(1);
             let width = in_ch.max(out_ch);
-            if width <= STACK_FLOATS {
-                let max_chunk_frames = (STACK_FLOATS / width).clamp(1, WAVENET_MAX_NUM_FRAMES);
-                let zeros = [0.0f32; STACK_FLOATS];
-                let mut discard = [0.0f32; STACK_FLOATS];
-                let mut fed = 0usize;
-                while fed < n {
-                    let nf = (n - fed).min(max_chunk_frames);
-                    self.process(&zeros[..nf * in_ch], &mut discard[..nf * out_ch]);
-                    fed += nf;
-                }
+            if width > super::PREWARM_STACK_WIDTH {
+                // Unreachable through `WaveNetA2Dyn::new`, which rejects this
+                // geometry. Never retire the balance without feeding: that
+                // would report a fictitious convergence.
+                debug_assert!(
+                    width <= super::PREWARM_STACK_WIDTH,
+                    "A2 prewarm geometry {width} exceeds the stack scratch bound"
+                );
+                return self.prewarm_pending;
+            }
+            const STACK_FLOATS: usize = super::PREWARM_STACK_WIDTH;
+            let max_chunk_frames = (STACK_FLOATS / width).clamp(1, WAVENET_MAX_NUM_FRAMES);
+            let zeros = [0.0f32; STACK_FLOATS];
+            let mut discard = [0.0f32; STACK_FLOATS];
+            let mut fed = 0usize;
+            while fed < n {
+                let nf = (n - fed).min(max_chunk_frames);
+                self.process(&zeros[..nf * in_ch], &mut discard[..nf * out_ch]);
+                fed += nf;
             }
             self.prewarm_pending -= n;
         }
@@ -152,9 +160,6 @@ impl WaveNetA2Dyn {
     #[cold]
     pub fn prewarm(&mut self) {
         self.prewarm_reset();
-        while !self.prewarm_complete() {
-            let take = self.prewarm_pending.max(WAVENET_MAX_NUM_FRAMES);
-            self.prewarm_step(take);
-        }
+        crate::models::drain_prewarm_until_complete(self);
     }
 }

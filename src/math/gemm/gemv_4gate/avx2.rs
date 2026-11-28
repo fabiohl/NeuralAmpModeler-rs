@@ -1,11 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 // Specialized GEMM micro-kernels utilize unsafe SIMD intrinsics and parameter lists.
-#![allow(
-    unsafe_op_in_unsafe_fn,
-    clippy::missing_safety_doc,
-    clippy::too_many_arguments
-)]
+#![allow(clippy::missing_safety_doc, clippy::too_many_arguments)]
 
 //! AVX2 fused 4-gate LSTM GEMV kernel (gate-major `[Gate][IH][Hidden]` layout).
 
@@ -18,6 +14,13 @@ use crate::gemv_4gate_simd_outer_avx2;
 /// In an LSTM neural network, each step requires computing 4 sub-results (gates). This
 /// function executes all these computations at once, ensuring that the network's "memory"
 /// update is done with maximum performance and minimum latency.
+///
+/// # Safety
+/// `w0` through `w3` must each contain at least `in_frame.len() *
+/// (out_frame.len() / 4)` initialized f32 values. When `do_bias`, `bias` must
+/// contain at least `(out_frame.len() / 4) * 4` initialized f32 values. The x86
+/// caller must run on x86-64-v3 (AVX2+FMA+F16C); aarch64 uses baseline NEON.
+/// `#[target_feature]` enables code but performs no runtime CPU check.
 ///
 /// # Optimization
 /// Processes 2 input columns per iteration with 8 independent FMA accumulators
@@ -46,7 +49,10 @@ pub unsafe fn gemv_4gate_avx2(
     // SAFETY: the macro loops keep `out_c + 8 <= out_len` and `in_c + 2 <=
     // in_len`; with `out_frame.len() == 4 * out_len`, `bias.len() >= 4 *
     // out_len` (when `do_bias`), and each `w*.len() >= in_len * out_len`, all
-    // 8-lane loads/stores stay in bounds.
+    // 8-lane loads/stores stay in bounds. Slices provide initialized f32 data;
+    // `loadu`/`storeu` are unaligned and `out_frame` is exclusive. ISA: x86
+    // callers must provide x86-64-v3 (AVX2+FMA+F16C); aarch64 uses baseline
+    // NEON. The target-feature attribute performs no runtime CPU check.
     unsafe {
         let mut out_c = 0;
         gemv_4gate_simd_outer_avx2!(

@@ -41,7 +41,7 @@ The canonical value is `0x4E414D42`: the ASCII letters `N A M B` read as a big-e
 
 | Version | Description                                                                                                                                                                                                                                       |
 |:------- |:------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `1`     | Legacy format. No `flags` field — the byte at offset 0x07 is part of `reserved_v2: [u8;5]`. `layout_type` was part of the reserved region, treated as `0` (Original). Under integrity policy, sentinel `crc32 == 0` is rejected (`CrcMissingV1`). |
+| `1`     | Legacy format. No `flags` field — the byte at offset 0x07 is part of `reserved_v2: [u8;5]`. `layout_type` was part of the reserved region, treated as `0` (Original). Under integrity policy, sentinel `crc32 == 0` is rejected (`CrcMissingV1`). The encoder refuses to write a v1 file with an optimized layout, since the v1 reader cannot represent it, and also refuses an empty weight stream (whose CRC32 is 0 by definition) or a non-empty stream whose CRC32 collides with the zero sentinel. |
 | `2`     | Pre-transposed format. Byte 0x07 is `flags: u8`, `reserved_v2` reduced to 4 bytes. `layout_type` active. `FLAG_HAS_CRC32` is mandatory.                                                                                                           |
 
 Values of `version` other than `1` and `2` are rejected with `NambError::InvalidVersion`.
@@ -191,6 +191,17 @@ Array 2 (layer 1):
   ... (same structure with adapted IN/OUT)
 ```
 
+**Head geometry**: the head follows the same dispatch as the decoder. When
+`head_kernel_size == 1 && head_dilation == 1` it is the dense projection shown
+above (`[OUT][IN]` transposed to `[IN][OUT]`). Any other geometry
+(`head_kernel_size > 1` or `head_dilation > 1`) is a Conv1D head and uses the
+same interleaved-4 layout as the layer convolutions with `CO = HEAD`,
+`K = head_kernel_size`, `IN = CH`: `[BLOCK][K][IN][4]`, including zero padding
+when `HEAD % 4 != 0`. This keeps accepted `.namb` files from silently
+reinterpreting the head's weight stream. A missing `head_size` defaults to
+`1` in both the encoder and the decoder. Both cases are covered by
+`test_wavenet_interleaved4_conv_head_roundtrip`.
+
 #### Conv1d Interleaved-4
 
 Given `CO` = output channels, `K` = kernel, `IN` = input channels:
@@ -276,6 +287,8 @@ The `f32` values are read via `f32::from_le_bytes()` in 4-byte chunks. There is 
 - v1: `flags = 0`, CRC always calculated over the weights block and written.
 - v2+: `flags = FLAG_HAS_CRC32` (0x01), CRC always calculated over the whole file (excluding the CRC slot) and written.
 - `layout_type` is written from the requested layout for every version, but v1 decoders ignore it and always read `Original`; a v1 file must therefore be encoded with the `Original` layout.
+- **Layout conversion:** `encode_namb` reads `NamModelData::weights_layout` as the *source* layout (the parser sets it for `.namb` v2 inputs). Source and target equal is a pure copy; `Original -> GateMajorLstm` and `Original -> Interleaved4WaveNet` are transposed; any optimized-source-to-different-target re-encode is rejected before emitting bytes (no inverse conversion is implemented).
+- **Endianness:** the header is serialized and read through the native packed struct, so the format is restricted to little-endian targets; a `compile_error!` rejects big-endian builds rather than silently mis-decoding fields.
 - `sample_rate` falls back to `48000.0`, `input_level_dbu` to `12.0` and `output_level_dbu` to `-6.0` when the model data carries no value.
 
 ## 7. Hexadecimal Examples
@@ -377,24 +390,29 @@ NAMB parsing uses typed errors via `thiserror` for precise diagnostics. The `loa
 | `Truncated { got, need }`                       | E1204            | `NAMB_TRUNCATED`                               | File < 80 bytes or trailing bytes do not complete 4-byte float boundary           |
 | `InvalidMagic(u32)`                             | E1202            | `NAMB_INVALID_MAGIC`                           | Magic is not `0x4E414D42`                                                         |
 | `InvalidVersion(u16)`                           | E1203            | `NAMB_UNSUPPORTED_VERSION`                     | Version is not 1 or 2                                                             |
-| `WeightsOffsetOutOfBounds { offset, file_len }` | E1213 / E1204    | `NAMB_INVALID_HEADER_FIELD` / `NAMB_TRUNCATED` | `weights_offset` exceeds file size                                                |
-| `InvalidWeightsOffset { offset, header_size }`  | E1213 / E1204    | `NAMB_INVALID_HEADER_FIELD` / `NAMB_TRUNCATED` | `weights_offset` < 80 (less than header size)                                     |
+| `WeightsOffsetOutOfBounds { offset, file_len }` | E1213            | `NAMB_INVALID_HEADER_FIELD`                    | `weights_offset` exceeds file size                                                |
+| `InvalidWeightsOffset { offset, header_size }`  | E1213            | `NAMB_INVALID_HEADER_FIELD`                    | `weights_offset` < 80 (less than header size)                                     |
+| `UnsupportedLayout { version, layout_type }`    | E1213            | `NAMB_INVALID_HEADER_FIELD`                    | v2 `layout_type` is not one of `0`, `1`, `2`                                      |
+| `LayoutArchitectureMismatch { layout, architecture }` | E1213     | `NAMB_INVALID_HEADER_FIELD`                    | Declared layout cannot describe the embedded architecture (e.g. LSTM layout on WaveNet) |
+| `LayoutGeometryMismatch { layout, reason }`     | E1213            | `NAMB_INVALID_HEADER_FIELD`                    | Declared layout cannot describe the geometry (Interleaved-4 with A2 `kernel_sizes`) |
 | `CrcMismatch { got, expected }`                 | E1201            | `NAMB_CRC32_MISMATCH`                          | Calculated CRC ≠ header CRC                                                       |
 | `CrcMissing { version }`                        | E1205            | `NAMB_CRC32_MISSING`                           | File v2+ without `FLAG_HAS_CRC32` set                                             |
 | `CrcMissingV1`                                  | E1205            | `NAMB_CRC32_MISSING`                           | Legacy v1 file with `crc32 == 0` sentinel rejected by integrity policy            |
 | `WeightsTooLarge { got, max }`                  | E1304            | `MODEL_TOO_LARGE`                              | Float count exceeds `MAX_FLOAT_COUNT` (`MAX_MODEL_BYTES / 4` = 67,108,864 floats) |
 | `NonFiniteWeight { index, value }`              | E1212            | `NAMB_NON_FINITE_WEIGHT`                       | Non-finite weight float (`NaN`, `+Inf`, `-Inf`) in binary weight section          |
 | `InvalidHeaderField { field, value, reason }`   | E1213            | `NAMB_INVALID_HEADER_FIELD`                    | Invalid `sample_rate` or non-finite level in the header (§1.4)                    |
-| `MetadataNotUtf8 { offset, len }`               | E1200 / E1303    | `NAM_JSON_PARSE_ERROR` / `MODEL_BUILD_FAILED`  | Metadata section between header and weights is not valid UTF-8                    |
-| `MetadataJson(JsonError)`                       | E1200 / E1303    | `NAM_JSON_PARSE_ERROR` / `MODEL_BUILD_FAILED`  | Metadata section failed to parse as valid `.nam` JSON model                       |
+| `MetadataNotUtf8 { offset, len }`               | E1200            | `NAM_JSON_PARSE_ERROR`                         | Metadata section between header and weights is not valid UTF-8                    |
+| `MetadataJson(JsonError)`                       | E1200            | `NAM_JSON_PARSE_ERROR`                         | Metadata section failed to parse as valid `.nam` JSON model                       |
 
-*Note: The "API" code is returned by `LoadError::code()`; the "Log" code is the one recorded by the loader failure diagnostics in [`src/loader/build.rs`](../src/loader/build.rs). They differ for the two weights-offset errors (E1213 vs. E1204) and for the two metadata errors (E1200 vs. E1303). `E1210` in `error_codes.rs` is `NamJsonSubmodelsTooDeep`, not a NAMB code.*
+The loader failure diagnostics in [`src/loader/build.rs`](../src/loader/build.rs) derive their `code=` field from the returned `LoadError::code()`, so the code recorded in the `LogBuffer`/`DiagnosticBundle` and the code exposed by the typed error always coincide. `E1210` in `error_codes.rs` is `NamJsonSubmodelsTooDeep`, not a NAMB code.
 
 Global limit: `MAX_MODEL_BYTES = 256 MiB`. Files larger than this limit are rejected by the loader before parsing with `NamErrorCode::ModelTooLarge` (E1304).
 
 ### 8.1 Decoder Validation Order
 
-`parse_namb_typed` evaluates the checks in this order and returns the first failure: header length, magic, and version (`NambHeader::from_slice`); `weights_offset` bounds; metadata UTF-8 and JSON; CRC presence (`CrcMissing` for v2+, `CrcMissingV1` for v1); CRC value; trailing-byte alignment and float-count limit; finiteness of every weight; header numeric fields (§1.4).
+`parse_namb_typed` evaluates the checks in this order and returns the first failure: header length, magic, and version (`NambHeader::from_slice`); `weights_offset` bounds; CRC presence (`CrcMissing` for v2+, `CrcMissingV1` for v1); CRC value; declared layout (`UnsupportedLayout` for unknown v2 bytes); metadata UTF-8 and JSON; layout/architecture/geometry coherence (`LayoutArchitectureMismatch`, `LayoutGeometryMismatch`); trailing-byte alignment and float-count limit; finiteness of every weight; header numeric fields (§1.4).
+
+CRC is checked before the metadata JSON. In v2 the CRC covers the JSON section, so corrupting metadata is reported as `CrcMismatch` rather than a parse error. In v1 the CRC covers only the weights section, so a valid CRC still allows metadata JSON errors to surface afterwards.
 
 ## 9. Evolution and Compatibility Policy
 
@@ -406,7 +424,7 @@ Global limit: `MAX_MODEL_BYTES = 256 MiB`. Files larger than this limit are reje
 
 ### 9.2 Future Expansion
 
-- **New `layout_type`**: values `3..=255` are reserved for future layouts. The decoder currently treats unknown values as `Original`, so a file using a future layout would be mis-decoded rather than rejected; a new layout must therefore be introduced together with a new `version`.
+- **New `layout_type`**: values `3..=255` are reserved for future layouts. The decoder rejects them with `UnsupportedLayout` (E1213) instead of silently treating them as `Original`; a new layout must be introduced together with a new `version`. Layouts `1` and `2` are also rejected when the embedded architecture/geometry cannot be described by them.
 - **New flags**: bits `1..=4` are reserved for specific extensions (INT8, INT4, AMX, SVE2) and bits `5..=7` of the `flags` field are reserved for general future use. They must be `0` in current files. Future decoders can define new bits with fallbacks to current behavior when not set.
 - **`reserved_*` fields**: must be `0`. Reserved for adding fields without breaking binary header compatibility.
 - **New versions**: versions `>= 3` are reserved for structural changes that require revising the header format or weights block.

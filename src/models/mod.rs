@@ -443,14 +443,21 @@ pub trait NamModel: Send + Sync + sealed::Sealed {
     /// state is bit-equal to the integral stabilization regardless of the
     /// chunking the caller chooses.
     ///
-    /// Default: performs the integral stabilization pass over
-    /// [`prewarm_samples`](Self::prewarm_samples) and reports convergence.
-    /// This is the conservative fallback for families without a split
-    /// implementation; overriding it makes the stabilization amortizable.
+    /// Default: an all-or-nothing fallback for families without a split
+    /// implementation. It runs the integral stabilization only when the
+    /// caller's budget covers the **entire** pending pass
+    /// ([`prewarm_samples`](Self::prewarm_samples)); with a smaller budget it
+    /// performs no work and reports the outstanding count, so a bounded
+    /// real-time caller can never be surprised by an unbounded integral
+    /// pass. Overriding this method is what makes stabilization amortizable
+    /// and is required for families driven on the audio thread.
     fn prewarm_step(&mut self, samples: usize) -> usize {
-        let _ = samples;
+        let total = self.prewarm_samples();
+        if samples < total {
+            return total;
+        }
         core::hint::cold_path();
-        self.prewarm(self.prewarm_samples());
+        self.prewarm(total);
         0
     }
 
@@ -607,6 +614,26 @@ pub trait NamModel: Send + Sync + sealed::Sealed {
     }
 }
 
+/// Drains a split-stabilization pass to convergence, with a single shared
+/// non-progress guard.
+///
+/// Off-RT callers (`prewarm()` integral paths and cost measurement) use this
+/// instead of each re-implementing the loop: a step that cannot reduce the
+/// pending count (e.g. zero negotiated capacity or an inadmissible prewarm
+/// geometry) stops the drain instead of spinning forever. The model is left
+/// in its split-armed state and the caller can inspect
+/// [`prewarm_complete`](NamModel::prewarm_complete).
+pub(crate) fn drain_prewarm_until_complete<M: NamModel + ?Sized>(model: &mut M) {
+    let mut last_pending = usize::MAX;
+    while !model.prewarm_complete() {
+        let pending = model.prewarm_step(usize::MAX);
+        if pending == 0 || pending >= last_pending {
+            break;
+        }
+        last_pending = pending;
+    }
+}
+
 /// Core of [`NamModel::measure_cost_ns_per_sample`], generic over the concrete
 /// model so the provided trait method can require `Self: Sized` (keeping the
 /// trait object-safe) while still measuring every family through the shared
@@ -662,11 +689,7 @@ fn measure_cost_ns_per_sample_impl<M: NamModel>(model: &mut M, frames: usize) ->
     // Restore the freshly-built, stabilized condition via the bit-exact split
     // pass shared with `reset`, so the caller observes no state drift.
     model.prewarm_reset();
-    while !model.prewarm_complete() {
-        if model.prewarm_step(usize::MAX) == 0 {
-            break;
-        }
-    }
+    drain_prewarm_until_complete(model);
 
     if best == u64::MAX {
         return 0.0;

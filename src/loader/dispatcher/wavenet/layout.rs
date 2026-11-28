@@ -114,24 +114,7 @@ pub(crate) fn read_dense_head_weights_typed<T: DenseWeightsOutput>(
     out_size: usize,
     do_bias: bool,
 ) -> anyhow::Result<T> {
-    let total = checked_arith::checked_dense_total(out_size, in_size)?;
-    let raw = cursor.read_slice(total)?;
-    let mut f32_weights = AlignedVec::new(total, 0.0f32)?;
-    let interleaved = cursor.is_interleaved4();
-
-    if interleaved {
-        f32_weights.copy_from_slice(raw);
-    } else {
-        transpose_dense_layer_f32(raw, &mut f32_weights, in_size, out_size);
-    }
-
-    let bias = if do_bias {
-        AlignedVec::from_vec(cursor.read_slice(out_size)?.to_vec())?
-    } else {
-        AlignedVec::new(out_size, 0.0)?
-    };
-
-    T::from_parts(f32_weights, bias, do_bias, in_size, out_size)
+    read_dense_weights_typed(cursor, in_size, out_size, do_bias)
 }
 
 // =============================================================================
@@ -222,7 +205,8 @@ pub fn transpose_conv1d_interleaved_8wide(
 
 /// Rearranges convolution layer weights into the "Interleaved 16-Wide" format
 /// preserving full f32 precision.
-/// Groups 16 output channels per block for AVX-512 dot_product_16x_f32.
+/// Groups 16 output channels per block for 16-output-channel kernels such as
+/// `dot_product_16x_f32`, across the AVX2 and AVX-512 implementations.
 pub fn transpose_conv1d_interleaved_16wide(
     raw: &[f32],
     weights: &mut [f32],
@@ -241,7 +225,8 @@ pub fn transpose_conv1d_interleaved_16wide(
         "weights slice too short for interleaved output"
     );
     // Target layout: [block][kernel][in_ch][lane], 16 lanes per block, feeding
-    // `dot_product_16x_f32` (AVX-512). Lanes ≥ out_ch are zero-padded.
+    // 16-output-channel `dot_product_16x_f32` kernels on AVX2 or AVX-512. Lanes
+    // ≥ out_ch are zero-padded.
     for b in 0..num_blocks {
         for k in 0..kernel {
             for in_c in 0..in_ch {
@@ -262,7 +247,8 @@ pub fn transpose_conv1d_interleaved_16wide(
 }
 
 /// Converts 4-wide interleaved weights to 8-wide interleaved format.
-/// Used when .nam file stores weights in 4-wide layout but the model benefits from 8-wide.
+/// Used when a `.namb` file stores weights in Interleaved4 layout but the
+/// selected model kernel consumes 8-wide blocks.
 pub(crate) fn transpose_4wide_to_8wide(
     src: &[f32],
     dst: &mut [f32],
@@ -302,7 +288,8 @@ pub(crate) fn transpose_4wide_to_8wide(
 }
 
 /// Converts 4-wide interleaved weights to 16-wide interleaved format.
-/// Used when .nam file stores weights in 4-wide layout but the model benefits from 16-wide.
+/// Used when a `.namb` file stores weights in Interleaved4 layout but the
+/// selected model kernel consumes 16-wide blocks.
 pub(crate) fn transpose_4wide_to_16wide(
     src: &[f32],
     dst: &mut [f32],
@@ -362,6 +349,8 @@ pub(crate) fn transpose_4wide_to_16wide(
 /// Selects the optimal interleaving width based on output channel count.
 /// Must be used consistently by both the weight loader (to store weights
 /// in the correct layout) and the convolution processors (to read them back).
+/// The `out_ch == 12` case intentionally selects 16-wide padded blocks for the
+/// CH=12 kernel path.
 ///
 /// `const fn` so the per-SKU hot-path kernels (const-generic `OUT`) fold the
 /// choice at compile time and monomorphize exactly one `match` arm — verified

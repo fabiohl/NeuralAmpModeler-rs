@@ -275,12 +275,20 @@ const QUICK_REPS: &[(&str, &str, &[&str])] = &[
         "RT_LSTM_2x8",
         &["BossLSTM-2x8", "LSTM 2x8"],
     ),
-    ("A2 Full (CH8)", "RT_A2_Full_CH8", &["A2-Full", "A2 Full"]),
-    ("A2 Lite (CH3)", "RT_A2_Lite_CH3", &["A2-Lite", "A2 Lite"]),
+    (
+        "A2 Full (CH8)",
+        "RT_A2_Full_CH8",
+        &["WaveNet A2-Full", "A2-Full", "A2 Full"],
+    ),
+    (
+        "A2 Lite (CH3)",
+        "RT_A2_Lite_CH3",
+        &["WaveNet A2-Lite", "A2-Lite", "A2 Lite"],
+    ),
     (
         "A2-FiLM Lite (CH3)",
         "RT_A2_Lite_CH3",
-        &["A2-FiLM-Lite", "FiLM.*Lite"],
+        &["A2-FiLM-Lite", "A2-FiLM Lite"],
     ),
     ("ConvNet", "RT_ConvNet", &["ConvNet"]),
     (
@@ -294,12 +302,39 @@ fn find_representative<'a>(
     fidelity: &'a [FidelityRecord],
     patterns: &[&str],
 ) -> Option<&'a FidelityRecord> {
-    fidelity.iter().find(|record| {
-        let lower = record.label.to_lowercase();
-        patterns
-            .iter()
-            .any(|pat| lower.contains(&pat.to_lowercase()))
-    })
+    for pat in patterns {
+        let needle = pat.to_lowercase();
+        let mut best: Option<(u8, &'a FidelityRecord)> = None;
+        for record in fidelity {
+            if !record.label.to_lowercase().contains(&needle) {
+                continue;
+            }
+            let canonical = !is_redundant_measurement(&model_label(&record.label));
+            let is_48k = record.label.contains("@48000");
+            let is_proxy = record
+                .f64_oracle_provenance
+                .as_deref()
+                .is_some_and(|p| p.starts_with("proxy:"));
+            let has_real_f64 = metric_f64(&record.esr_f64).is_some() && !is_proxy;
+            let tier = match (canonical, is_48k, has_real_f64) {
+                (true, true, true) => 1,
+                (true, true, false) => 2,
+                (true, false, true) => 3,
+                (true, false, false) => 4,
+                (false, _, _) => 5,
+            };
+            if best.is_none_or(|(best_tier, _)| tier < best_tier) {
+                best = Some((tier, record));
+                if tier == 1 {
+                    break;
+                }
+            }
+        }
+        if let Some((_, record)) = best {
+            return Some(record);
+        }
+    }
+    None
 }
 
 fn latency_by_bench<'a>(latency: &'a [LatencyRecord], bench_id: &str) -> Option<&'a LatencyRecord> {
@@ -507,11 +542,13 @@ const BENCH_DISPLAY: &[(&str, &str)] = &[
     ("RT_LSTM_Dyn_1x7", "LSTM Dyn 1x7"),
     ("RT_A2_Dyn_Gated_CH8", "A2 Dyn Gated CH8"),
     ("RT_A2_Dyn_Blended_CH3", "A2 Dyn Blended CH3"),
+    ("RT_A2_Max_CH4", "A2 Max CH4"),
     ("RT_DSP_Resampler_44k1_to_48k", "DSP Resampler 44.1k->48k"),
     ("RT_DSP_Resampler_96k_to_48k", "DSP Resampler 96k->48k"),
     ("RT_DSP_CabSim_IR_Medium", "DSP CabSim IR Medium"),
     ("RT_DSP_Pipeline_Base_NoOS", "DSP Pipeline Base (No OS)"),
     ("RT_DSP_Pipeline_HQ_4xOS", "DSP Pipeline HQ (4x OS)"),
+    ("RT_DSP_Pipeline_AdaptiveOn", "DSP Pipeline (Adaptive On)"),
 ];
 
 /// Median latency (µs) for a bench id, if a matching latency record exists.
@@ -532,11 +569,13 @@ pub(super) fn render_performance(report: &QualityReport, p: &Palette) -> String 
     if report.performance_not_verified() {
         out.push_str(&p.yellow("  ⚠ NOT_VERIFIED — performance not verified against baseline.\n"));
         out.push_str(&p.yellow(
-            "    Performance is not certified in this run; --check against the quality contract fails on this.\n\n",
+            "    Performance is not certified in this run; full --check against the quality contract requires verified latency (skipped under --fidelity-only).\n\n",
         ));
-        out.push_str(
-            &p.yellow("    Raw measurements for reference (not comparable to baseline):\n\n"),
-        );
+        if !report.latency.is_empty() {
+            out.push_str(
+                &p.yellow("    Raw measurements for reference (not comparable to baseline):\n\n"),
+            );
+        }
     }
 
     let mut model_rows: Vec<(&str, Option<f64>)> = Vec::new();
@@ -573,7 +612,12 @@ pub(super) fn render_performance(report: &QualityReport, p: &Palette) -> String 
                 } else {
                     (format!("{pct:.1}%"), format!("{headroom:.1}%"))
                 };
-                (format!("{lat:.1} us"), pct, headroom)
+                let lat_str = if lat < 0.1 {
+                    format!("{lat:.3} us")
+                } else {
+                    format!("{lat:.1} us")
+                };
+                (lat_str, pct, headroom)
             }
             None => ("N/A".to_string(), "N/A".to_string(), "N/A".to_string()),
         };

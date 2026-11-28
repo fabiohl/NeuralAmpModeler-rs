@@ -613,6 +613,7 @@ Multi-model crossfade orchestrator ([`src/models/container.rs`](../src/models/co
 
 - Bundles multiple sub-models for dynamic compute scaling.
 - **Crossfading:** Executes smooth 32 ms linear crossfades during dynamic compute tier transitions, ensuring click-free handoffs.
+- **RT Transition Divergence:** The C++ `SetSlimmableSize` resets the target child inline under a mutex. The Rust engine treats the audio path (`rt_status = Some`) as fallible RT: it arms the target's split prewarm (`prewarm_reset`, zero heap) and drains one host block per callback, starting the crossfade only after convergence. The full-reset behavior remains on the off-RT path (`rt_status = None`). This intentionally diverges to keep the callback free of allocation, logging and unbounded work (M-RT-01).
 - **Nested Rate Provenance (DEC-01b):** Resolves sample rates across nested submodels without false 48 kHz conflicts ([§5.1.1](#dec-01b-decision-record--nested-rate-provenance-container--pair--condition_dsp)).
 - **Prewarm Alignment Candidate:** `ContainerModel::assemble` prewarms all submodels unconditionally upon construction; aligning this behavior with `LoadOptions.prewarm` is tracked as a future enhancement candidate.
 - Tested on official bundled capture `a2_example.nam` (CH 3→6): $\text{ESR} = 7.28 \times 10^{-14}$ vs. NAMcore ($\text{SNR} = 131.4\text{ dB}$).

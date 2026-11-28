@@ -365,14 +365,23 @@ fn test_zero_alloc_container_transition() {
     model.process(&input, &mut output);
 
     let count = {
+        let status = neural_amp_modeler_rs::common::spsc::RtStatusFlags::new();
         let _guard = TrackingGuard::new();
         if let StaticModel::Container(ref mut c) = model {
-            // Trigger transition: switch from Full to Lite
-            c.set_slimmable_size(0.25, None);
+            // Trigger the real-time transition path (the adaptive FSM passes
+            // `Some(&rt_status)`), not the off-RT full-reset path.
+            c.set_slimmable_size(0.25, Some(&status));
         }
-        // Run several blocks to process through the entire crossfade duration
-        for _ in 0..30 {
+        // Run enough blocks for the amortized split prewarm plus the crossfade.
+        for _ in 0..512 {
             model.process(&input, &mut output);
+        }
+        if let StaticModel::Container(ref c) = model {
+            assert_eq!(
+                c.active_index(),
+                0,
+                "Lite submodel must become active after prewarm + crossfade"
+            );
         }
         get_alloc_count()
     };

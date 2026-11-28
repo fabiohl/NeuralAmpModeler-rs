@@ -7,6 +7,7 @@ use super::FiLMLayer;
 
 /// Nonallocating errors from FiLM modulation updates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum FiLMModulationError {
     /// Every layer must already have a loaded activation-pre FiLM projection.
     #[error("Activation-pre FiLM is not prepared for every layer")]

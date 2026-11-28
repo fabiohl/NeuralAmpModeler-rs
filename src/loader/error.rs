@@ -102,6 +102,9 @@ impl LoadError {
                 NambError::InvalidVersion(_) => NamErrorCode::NambUnsupportedVersion,
                 NambError::WeightsOffsetOutOfBounds { .. }
                 | NambError::InvalidWeightsOffset { .. }
+                | NambError::UnsupportedLayout { .. }
+                | NambError::LayoutArchitectureMismatch { .. }
+                | NambError::LayoutGeometryMismatch { .. }
                 | NambError::InvalidHeaderField { .. } => NamErrorCode::NambInvalidHeaderField,
                 NambError::CrcMismatch { .. } => NamErrorCode::NambCrc32Mismatch,
                 NambError::CrcMissing { .. } | NambError::CrcMissingV1 => {

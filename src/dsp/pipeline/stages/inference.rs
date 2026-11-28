@@ -5,7 +5,7 @@
 
 use super::super::bridge::MAX_RESAMP_BUF;
 use super::super::context::DspPipelineContext;
-use super::adaptive_ctrl::{WAVENET_CROSSFADE_MAX_STATES, configure_adaptive_model};
+use super::adaptive_ctrl::configure_adaptive_model;
 use super::routing::{finish_downsample, model_process_stereo_with_os, passthru};
 use crate::common::spsc::{RT_STATUS_HOST_CONTRACT_VIOLATION, RtStatusFlags};
 use crate::dsp::oversample::OversampleEngine;
@@ -36,6 +36,8 @@ fn crossfade_wavenet_channel(
     t_start: f32,
     t_end: f32,
     rt_status: &RtStatusFlags,
+    backup_starts: &mut [usize],
+    post_first_starts: &mut [usize],
 ) {
     let Some(m) = model.as_deref_mut() else {
         passthru(model_in, m_out);
@@ -55,8 +57,6 @@ fn crossfade_wavenet_channel(
         return;
     }
 
-    let mut backup_starts = [0usize; WAVENET_CROSSFADE_MAX_STATES];
-    let mut post_first_starts = [0usize; WAVENET_CROSSFADE_MAX_STATES];
     if os.is_bypass() {
         let mid_t = 0.5 * (t_start + t_end);
         let old_second = mid_t < 0.5;
@@ -67,7 +67,7 @@ fn crossfade_wavenet_channel(
         };
 
         let mut offset = 0;
-        m.backup_buffer_starts(&mut backup_starts, &mut offset);
+        m.backup_buffer_starts(backup_starts, &mut offset);
         m.set_effective_layers(first_eff);
         if old_second {
             m.process(model_in, scr);
@@ -77,11 +77,11 @@ fn crossfade_wavenet_channel(
 
         if first_eff > second_eff {
             let mut post_off = 0;
-            m.backup_buffer_starts(&mut post_first_starts, &mut post_off);
+            m.backup_buffer_starts(post_first_starts, &mut post_off);
         }
 
         let mut offset_restore = 0;
-        m.restore_buffer_starts(&backup_starts, &mut offset_restore);
+        m.restore_buffer_starts(backup_starts, &mut offset_restore);
         m.set_effective_layers(second_eff);
         if old_second {
             m.process(model_in, m_out);
@@ -91,7 +91,7 @@ fn crossfade_wavenet_channel(
 
         if first_eff > second_eff {
             let mut post_restore = 0;
-            m.restore_buffer_starts(&post_first_starts, &mut post_restore);
+            m.restore_buffer_starts(post_first_starts, &mut post_restore);
         }
 
         let n = model_in.len().min(m_out.len()).min(scr.len());
@@ -131,7 +131,7 @@ fn crossfade_wavenet_channel(
             };
 
             let mut offset = 0;
-            m.backup_buffer_starts(&mut backup_starts, &mut offset);
+            m.backup_buffer_starts(backup_starts, &mut offset);
             m.set_effective_layers(first_eff);
             if old_second {
                 m.process(in_chunk, &mut new_chunk[..c]);
@@ -141,11 +141,11 @@ fn crossfade_wavenet_channel(
 
             if first_eff > second_eff {
                 let mut post_off = 0;
-                m.backup_buffer_starts(&mut post_first_starts, &mut post_off);
+                m.backup_buffer_starts(post_first_starts, &mut post_off);
             }
 
             let mut offset_restore = 0;
-            m.restore_buffer_starts(&backup_starts, &mut offset_restore);
+            m.restore_buffer_starts(backup_starts, &mut offset_restore);
             m.set_effective_layers(second_eff);
             if old_second {
                 m.process(in_chunk, out_chunk);
@@ -157,7 +157,7 @@ fn crossfade_wavenet_channel(
             // chunks and blocks whenever the first pass exercised more layers.
             if first_eff > second_eff {
                 let mut post_restore = 0;
-                m.restore_buffer_starts(&post_first_starts, &mut post_restore);
+                m.restore_buffer_starts(post_first_starts, &mut post_restore);
             }
 
             crossfade_blend_ramp_mono_simd(out_chunk, &new_chunk[..c], chunk_t_start, t_step_os);
@@ -278,6 +278,7 @@ fn process_model_core(
             let (t_start, t_end) = ctx.adaptive.crossfade_ramp_bounds(frame_advance);
 
             let scr_l = &mut scratch_l[..model_in_l.len()];
+            let (backup_starts, post_first_starts) = ctx.adaptive.crossfade_scratch();
             crossfade_wavenet_channel(
                 ctx.active_model_l,
                 ctx.os_l,
@@ -291,6 +292,8 @@ fn process_model_core(
                 t_start,
                 t_end,
                 ctx.rt_status,
+                backup_starts,
+                post_first_starts,
             );
 
             if *ctx.process_mono {
@@ -299,6 +302,7 @@ fn process_model_core(
                 }
             } else {
                 let scr_r = &mut scratch_r[..model_in_r.len()];
+                let (backup_starts, post_first_starts) = ctx.adaptive.crossfade_scratch();
                 crossfade_wavenet_channel(
                     ctx.active_model_r,
                     ctx.os_r,
@@ -312,6 +316,8 @@ fn process_model_core(
                     t_start,
                     t_end,
                     ctx.rt_status,
+                    backup_starts,
+                    post_first_starts,
                 );
             }
             return;

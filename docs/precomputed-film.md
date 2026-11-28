@@ -62,6 +62,13 @@ apply a DC blocker or load an extension format. Those operations belong to the
 host or a separate parametric model layer. In particular, block smoothing must
 use the host's actual frame count, not an engine's internal subchunk count.
 
+The override is a single final scale/shift pair, so it is **not equivalent** to
+per-sample conditioning: a continuously varying control network cannot be
+reproduced by one block-constant override. `precomputed_override_is_block_constant_not_per_sample_conditioning`
+pins that distinction. It also cannot be combined with runtime weight updates
+on the same model: the update preflight rejects any FiLM insertion point with
+`UnsupportedTopology` and leaves the model untouched.
+
 A schema-1 adapter can retain its original control-network coefficients and
 prepare a canonical A2 inference model with constant activation-pre FiLM
 projections. It then installs the evaluated gamma/beta once for each host block.

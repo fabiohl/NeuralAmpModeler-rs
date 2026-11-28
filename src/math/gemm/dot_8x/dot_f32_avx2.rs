@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 // Specialized GEMM micro-kernels utilize unsafe SIMD intrinsics and parameter lists.
-#![allow(unsafe_op_in_unsafe_fn, clippy::missing_safety_doc)]
+#![allow(clippy::missing_safety_doc)]
 
 //! Dot Product 8x f32 — AVX2/FMA kernel (f32 native weights).
 //!
@@ -200,7 +200,11 @@ pub unsafe fn dot_product_8x_f32_accumulate_avx2(
     init: &[f32; 8],
 ) -> [f32; 8] {
     let len = state.len();
-    let mut acc0 = _mm256_loadu_ps(init.as_ptr());
+    // SAFETY: `init` is a `&[f32; 8]`, so the 8-f32 unaligned load is in
+    // bounds and reads initialized values.
+    // ISA: x86 callers must provide a CPU compatible with x86-64-v3 (AVX2+FMA);
+    // aarch64 uses baseline NEON. `#[target_feature]` itself checks no CPU.
+    let mut acc0 = unsafe { _mm256_loadu_ps(init.as_ptr()) };
     let mut acc1 = _mm256_setzero_ps();
     let mut acc2 = _mm256_setzero_ps();
     let mut acc3 = _mm256_setzero_ps();
@@ -275,11 +279,21 @@ pub unsafe fn dot_product_8x_f32_dual_accumulate_avx2(
         weights.len(),
         core::cmp::min(state_f0.len(), state_f1.len()),
     );
-    let mut acc_f0_0 = _mm256_loadu_ps(init_f0.as_ptr());
+    // SAFETY: each `init_*` is a `&[f32; 8]`, so the 8-f32 unaligned loads are
+    // in bounds and read initialized values.
+    // ISA: x86 callers must provide a CPU compatible with x86-64-v3 (AVX2+FMA);
+    // aarch64 uses baseline NEON. `#[target_feature]` itself checks no CPU.
+    let (init_f0, init_f1) = unsafe {
+        (
+            _mm256_loadu_ps(init_f0.as_ptr()),
+            _mm256_loadu_ps(init_f1.as_ptr()),
+        )
+    };
+    let mut acc_f0_0 = init_f0;
     let mut acc_f0_1 = _mm256_setzero_ps();
     let mut acc_f0_2 = _mm256_setzero_ps();
     let mut acc_f0_3 = _mm256_setzero_ps();
-    let mut acc_f1_0 = _mm256_loadu_ps(init_f1.as_ptr());
+    let mut acc_f1_0 = init_f1;
     let mut acc_f1_1 = _mm256_setzero_ps();
     let mut acc_f1_2 = _mm256_setzero_ps();
     let mut acc_f1_3 = _mm256_setzero_ps();

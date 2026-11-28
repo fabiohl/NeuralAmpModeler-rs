@@ -519,16 +519,24 @@ impl NamModel for SequentialModel {
     /// frames through the whole chain (stage 0 zeros, last stage into the
     /// owned sink plane). Real-time safe.
     fn prewarm_step(&mut self, samples: usize) -> usize {
-        let take = samples.min(self.prewarm_pending);
-        if take == 0 {
+        // Zero budget or already-converged: no progress required, and the
+        // accounting must stay untouched.
+        if samples == 0 || self.prewarm_pending == 0 {
             return self.prewarm_pending;
         }
         if self.stage_frames == 0 {
-            // Pathological negotiation (`set_max_buffer_size(0)` without a
-            // later resize): no capacity to feed; drop the accounting.
-            self.prewarm_pending = 0;
-            return 0;
+            // No negotiated capacity (`set_max_buffer_size(0)` without a
+            // later resize): feeding is impossible without allocating. Do
+            // NOT retire the balance (that would report a fictitious
+            // convergence); keep the outstanding work visible and make no
+            // progress. Callers that need to converge must negotiate a
+            // non-zero capacity off-RT first (`prewarm()` does).
+            return self.prewarm_pending;
         }
+        // Never ask the chain for more frames than its reserved planes hold:
+        // `process_chain` would silently truncate to `stage_frames` while the
+        // accounting debited the larger requested `take`.
+        let take = samples.min(self.prewarm_pending).min(self.stage_frames);
         // SAFETY: stabilization planes sized for `take <= stage_frames`
         // per channel; internal feeds never alias user data. Table casts are
         // layout-identical (`usize` <-> raw pointer on this engine's

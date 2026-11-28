@@ -113,6 +113,8 @@ mod mirror_buf_fault_injection;
 mod multichannel_contract_test;
 #[path = "models/nam_infer_test.rs"]
 mod nam_infer_test;
+#[path = "models/namb_matrix.rs"]
+mod namb_matrix;
 #[path = "models/namb_v2_roundtrip.rs"]
 mod namb_v2_roundtrip;
 #[path = "models/namb_v2_validation.rs"]

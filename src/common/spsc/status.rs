@@ -71,8 +71,12 @@ pub const RT_STATUS_NEEDS_OS_REBUILD: u64 = 1 << 19;
 /// Flag indicating that the audio host provided a buffer violating the FFI contract
 /// (misaligned byte count, offset out of bounds). Set by the RT callback.
 pub const RT_STATUS_HOST_CONTRACT_VIOLATION: u64 = 1 << 20;
-/// Flag indicating that `ContainerModel::set_slimmable_size` failed to reset a submodel.
-/// Replaces `log::error!` for RT-zero-IO compliance. Set by RT callback, read by main thread.
+/// Reserved: a submodel reset failure while switching tiers.
+///
+/// The real-time container path no longer calls a child `reset()` (it uses
+/// the infallible split-stabilization primitives instead), so the RT callback
+/// does not set this bit. Kept for API compatibility and for off-RT callers
+/// that still perform a full reset and want to mirror the signal.
 pub const RT_STATUS_SLIMMABLE_RESET_FAILED: u64 = 1 << 21;
 /// Flag indicating that the host quantum (buffer size) changed.
 /// Set by the RT callback whenever the per-cycle sample count differs from the
@@ -170,7 +174,7 @@ pub const RT_STATUS_OUT_OF_ORDER_EVENT: u64 = RT_STATUS_EVENT_TIMING_ANOMALY;
 /// | 18 | `THP_ACTIVE` | Transparent huge pages(madvise) active — not explicit HugeTLB |
 /// | 19 | `NEEDS_OS_REBUILD` | DSP thread requests oversampling engine rebuild |
 /// | 20 | `HOST_CONTRACT_VIOLATION` | Host buffer FFI contract violated (misaligned or OOB) |
-/// | 21 | `SLIMMABLE_RESET_FAILED` | ContainerModel submodel reset failed on RT thread |
+/// | 21 | `SLIMMABLE_RESET_FAILED` | Reserved: submodel reset failure (RT container path no longer resets) |
 /// | 22 | `GC_TIER3` | GC cascade reached Tier 3 (overflow buffer) — item parked |
 /// | 23 | `NEEDS_QUANTUM_LOG` | Host quantum (buffer size in frames) changed |
 /// | 24 | `SPSC_DRAIN_TRUNCATED` | SPSC command queue drain limit reached (64 events) |

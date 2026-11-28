@@ -49,6 +49,15 @@ pub mod process_cascade;
 pub mod process_frame;
 mod update_weights;
 
+/// Maximum channel width the zero-allocation split prewarm feed can service
+/// from its fixed stack scratch (`max(input_channels, head_size)`).
+///
+/// This mirrors the loader's [`MAX_HEAD_SIZE`](crate::loader::nam_json) bound
+/// and is the real-time admissible prewarm geometry. Constructors reject
+/// wider models explicitly at the boundary instead of silently skipping the
+/// feed and reporting fictitious convergence.
+pub(crate) const PREWARM_STACK_WIDTH: usize = 512;
+
 /// Runtime-dimensioned WaveNet A2 model.
 ///
 /// Supports the full A2 topology spectrum: arbitrary channel counts,
@@ -274,6 +283,16 @@ impl WaveNetA2Dyn {
             anyhow::bail!(
                 "WaveNetA2Dyn::new: secondary_activations length ({}) != kernel_sizes length ({num_layers})",
                 secondary_activations.len()
+            );
+        }
+        // Real-time prewarm feed geometry: `prewarm_step` services
+        // `max(input_channels, head_size)` from a fixed stack scratch. Wider
+        // models have no admissible split-stabilization path, so reject them
+        // explicitly here instead of debiting work that is never fed.
+        if input_channels > PREWARM_STACK_WIDTH || head_size > PREWARM_STACK_WIDTH {
+            anyhow::bail!(
+                "WaveNetA2Dyn::new: max(input_channels={input_channels}, head_size={head_size}) \
+                 exceeds the {PREWARM_STACK_WIDTH}-channel real-time prewarm scratch bound"
             );
         }
 

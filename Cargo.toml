@@ -177,6 +177,10 @@ harness = false
 name = "dsp_bridge_bench"
 harness = false
 
+[[bench]]
+name = "s8_bench"
+harness = false
+
 
 [features]
 default = ["dual-mono"]

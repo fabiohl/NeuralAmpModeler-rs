@@ -14,16 +14,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [4.1.0] - Unreleased
 
-Minor feature release adding allocation-free runtime weight updates and host-precomputed FiLM modulation for WaveNet A2 models.
+Minor feature release adding allocation-free runtime weight updates, host-precomputed FiLM modulation, real-time incremental `ContainerModel` transitions, stricter `.namb` layout/CRC validation, and pipeline/API hygiene fixes.
 
 ### Added [4.1.0]
 
-- **Allocation-free runtime A2 weight updates ([`docs/a2-runtime-weight-updates.md`](docs/a2-runtime-weight-updates.md)):** Added in-place `update_weights` across `WaveNetA2::<3>`, `WaveNetA2::<8>`, `WaveNetA2Dyn`, and `WaveNetA2Cascade` (plus `runtime_weight_count` and typed `A2WeightUpdateError`), validating count and finiteness atomically while preserving causal streaming state and ring cursors.
-- **Host-precomputed FiLM modulation ([`docs/precomputed-film.md`](docs/precomputed-film.md)):** Added allocation-free block-rate FiLM override APIs on `FiLMLayer` (`set_precomputed_modulation`, `has_precomputed_modulation`, `use_conditioned_modulation`) and atomic model-level helpers on `WaveNetA2<CH>`, `WaveNetA2Dyn`, and `WaveNetA2Cascade` (`activation_modulation_size`, `set_activation_modulation`, `resume_activation_conditioning`, `FiLMModulationError`).
+- **Allocation-free runtime A2 weight updates ([`docs/a2-runtime-weight-updates.md`](docs/a2-runtime-weight-updates.md)):** Added in-place `update_weights` across `WaveNetA2::<3>`, `WaveNetA2::<8>`, `WaveNetA2Dyn`, and `WaveNetA2Cascade` (plus `runtime_weight_count` and typed `#[non_exhaustive]` `A2WeightUpdateError`), validating count and finiteness atomically while preserving causal streaming state and ring cursors.
+- **Host-precomputed FiLM modulation ([`docs/precomputed-film.md`](docs/precomputed-film.md)):** Added allocation-free block-rate FiLM override APIs on `FiLMLayer` (`set_precomputed_modulation`, `has_precomputed_modulation`, `use_conditioned_modulation`) and atomic model-level helpers on `WaveNetA2<CH>`, `WaveNetA2Dyn`, and `WaveNetA2Cascade` (`activation_modulation_size`, `set_activation_modulation`, `resume_activation_conditioning`, and `#[non_exhaustive]` `FiLMModulationError`).
+- **Bounded SPSC parking-lot flush:** Added `common::spsc::flush_gc_parking_lot` for latch-gated, bounded flushing of parked GC items back into the SPSC channel without real-time drops.
+- **`ContainerModel` RT preparation accessors:** Added `preparing_index`, `requested_index`, and `is_preparing` on `ContainerModel` to inspect in-flight split-prewarm and queued transitions.
+- **`.namb` layout validation helpers & typed errors:** Added `NambHeader::try_get_layout`, `layout_name`, `v1_crc_is_missing`, and `NambError` variants `UnsupportedLayout`, `LayoutArchitectureMismatch`, and `LayoutGeometryMismatch`.
 
 ### Changed [4.1.0]
 
+- **Zero-allocation RT `ContainerModel::set_slimmable_size`:** Real-time calls (`rt_status = Some(...)`) now perform incremental split-prewarm (`Preparing -> Crossfading`) with per-sample linear crossfade ramps and replacement queuing instead of synchronous child `reset()`, leaving `RT_STATUS_SLIMMABLE_RESET_FAILED` reserved; off-RT calls (`rt_status = None`) retain synchronous reset semantics.
+- **Fail-closed `.namb` parsing & encoding:** `parse_namb_typed` validates CRC32 before parsing JSON metadata and rejects unknown or architecture/geometry-incompatible `WeightsLayout` headers; `encode_namb` rejects unsupported versions, non-`Original` v1 layouts, v1 `crc32 == 0` sentinel collisions, and non-`Original` re-transpositions, and enforces little-endian targets at compile time.
+- **A2 dynamic prewarm geometry bound:** `WaveNetA2Dyn::new` explicitly rejects geometries with `input_channels > 512` or `head_size > 512` (the fixed real-time prewarm scratch bound) instead of skipping stabilization.
+- **`testing` feature isolation:** `panic_hook::crash_directory()` no longer redirects production crash directories when `feature = "testing"` is enabled (redirection is scoped to `#[cfg(test)]`).
+- **Bounded split-prewarm defaults:** `NamModel::prewarm_step` default fallback now behaves all-or-nothing when the caller's budget is smaller than `prewarm_samples()`, and `ContainerModel::prewarm_step` enforces an aggregate per-callback budget across incomplete submodels.
 - Updated `anyhow` minimum version to `1.0.105` and refreshed patch dependency resolutions in `Cargo.lock`.
+
+### Fixed [4.1.0]
+
+- **Mono output-stage mirroring:** `apply_output_stage_inner` and `apply_output_stage_sanitized` now mirror the final processed/sanitized left channel into the right channel at the end of the output stage rather than mid-pipeline.
+- **Preserved A2 JSON metadata on `.namb` round-trip:** Implemented custom `Serialize` on `NamLayerConfig` preserving raw JSON keys (`layer_raw`) overlaid by typed fields so A2 topology keys survive `.namb` re-encoding.
+- **Interleaved-4 WaveNet head transposition:** Aligned `transpose_wavenet_interleaved4` with the decoder (`head_size` default `1`, Conv1D transposition for `head_kernel_size > 1` or `head_dilation > 1`, and explicit rejection of A2 topologies).
+- **Prewarm & container reset accounting:** `SequentialModel::prewarm_step` debits only actually processed frames bounded by `stage_frames` and avoids fictitious convergence at zero capacity; `ContainerModel::reset` cancels in-flight transitions before clearing inactive submodels.
+- **Unified loader error code diagnostics:** Aligned the logged `NamErrorCode` with `LoadError::code()` in `parse_model_bytes` while preserving v4.0.0 `LoadError` variants and `Display` output.
+- **Adaptive crossfade callback stack usage:** Moved WaveNet double-pass crossfade snapshot scratch arrays from the audio callback stack into `AdaptiveCompute`.
 
 ## [4.0.0] - 2026-11-23
 

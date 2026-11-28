@@ -330,7 +330,6 @@ pub fn format_panic_report_for_audit_test(
 /// On Windows, prefers `%LOCALAPPDATA%\neural-amp-modeler-rs\crashes`, then
 /// `%USERPROFILE%\.cache\neural-amp-modeler-rs`, then `HOME`. On POSIX, uses
 /// `$HOME/.cache/neural-amp-modeler-rs`.
-#[cfg(any(test, not(feature = "testing")))]
 fn production_crash_directory_for(
     is_windows: bool,
     local_app_data: Option<&std::ffi::OsStr>,
@@ -365,7 +364,12 @@ fn production_crash_directory_for(
 
 /// Returns the path to the directory used for crash reports:
 /// 1. `NAM_CRASH_DIR` environment variable, if set and non-empty.
-/// 2. Under `cfg(test)` or feature `testing`: `CARGO_TARGET_TMPDIR` or `target/test_crashes`.
+/// 2. Only when the library itself is compiled under `cfg(test)` (unit tests):
+///    `CARGO_TARGET_TMPDIR` or `target/test_crashes`. The public `testing`
+///    feature deliberately does **not** redirect this path: enabling test
+///    utilities in a consumer build must not change where production crashes
+///    are written. Integration tests request an isolated directory through
+///    `NAM_CRASH_DIR` instead.
 /// 3. In production:
 ///    - On Windows: `%LOCALAPPDATA%\neural-amp-modeler-rs\crashes`, then
 ///      `%USERPROFILE%\.cache\neural-amp-modeler-rs`, then `$HOME/.cache/neural-amp-modeler-rs`.
@@ -375,7 +379,7 @@ pub fn crash_directory() -> Option<PathBuf> {
     if let Some(dir) = std::env::var_os("NAM_CRASH_DIR").filter(|d| !d.is_empty()) {
         return Some(PathBuf::from(dir));
     }
-    #[cfg(any(test, feature = "testing"))]
+    #[cfg(test)]
     {
         if let Some(tmp) = std::env::var_os("CARGO_TARGET_TMPDIR")
             .or_else(|| option_env!("CARGO_TARGET_TMPDIR").map(Into::into))
@@ -384,7 +388,7 @@ pub fn crash_directory() -> Option<PathBuf> {
         }
         Some(PathBuf::from("target/test_crashes"))
     }
-    #[cfg(not(any(test, feature = "testing")))]
+    #[cfg(not(test))]
     production_crash_directory_for(
         cfg!(windows),
         std::env::var_os("LOCALAPPDATA").as_deref(),

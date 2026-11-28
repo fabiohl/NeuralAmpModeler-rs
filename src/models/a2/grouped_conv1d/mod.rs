@@ -2,11 +2,7 @@
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
 // Grouped convolution module using internal helper signatures.
-#![allow(
-    unsafe_op_in_unsafe_fn,
-    clippy::missing_safety_doc,
-    clippy::too_many_arguments
-)]
+#![allow(clippy::missing_safety_doc, clippy::too_many_arguments)]
 
 //! Grouped dilated causal Conv1D (`groups > 1`) for the A2 architecture.
 //!

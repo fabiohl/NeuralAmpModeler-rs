@@ -143,3 +143,42 @@ fn precomputed_modulation_rejects_before_changing_mode_or_values() {
     );
     assert_eq!(&*actual.scale_shift_buf, before);
 }
+
+#[test]
+fn precomputed_override_is_block_constant_not_per_sample_conditioning() {
+    // The override installs one final scale/shift pair; it cannot reproduce a
+    // control network evaluated per sample. This pins that documented
+    // non-equivalence instead of implying a smoothing/variable-conditioning
+    // contract the API does not provide.
+    let mut overridden = layer(3);
+    let mut conditioned = layer(3);
+    overridden
+        .set_precomputed_modulation(&[2.0, -0.5, 0.25], &[0.1, 0.2, -0.3])
+        .unwrap();
+
+    let mut a = [0.4; 3];
+    let mut b = [0.4; 3];
+    let mut c = [0.4; 3];
+    // SAFETY: cond_size=2 in both layers and inputs are exactly 3 channels.
+    unsafe {
+        overridden.process(&mut a, &[0.0, 0.0]);
+        overridden.process(&mut b, &[1.0, 0.5]);
+        conditioned.process(&mut c, &[0.0, 0.0]);
+    }
+    assert_eq!(
+        a, b,
+        "a block-constant override must not vary with condition"
+    );
+
+    let mut d = [0.4; 3];
+    // SAFETY: identical loaded condition width and input extent.
+    unsafe { conditioned.process(&mut d, &[1.0, 0.5]) };
+    assert_ne!(
+        c, d,
+        "per-sample conditioning must react to a changed input"
+    );
+    assert_ne!(
+        a, c,
+        "the override is not equivalent to any fixed condition"
+    );
+}

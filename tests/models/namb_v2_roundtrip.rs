@@ -389,7 +389,7 @@ fn expected_interleaved4_weights(data: &NamModelData) -> Vec<f32> {
         let ch = layer_cfg.channels.unwrap_or(16);
         let cond_ch = layer_cfg.condition_size.unwrap_or(1);
         let k = layer_cfg.kernel_size.unwrap_or(3);
-        let head_ch = layer_cfg.head_size.unwrap_or(8);
+        let head_ch = layer_cfg.head_size.unwrap_or(1);
         let dilations = layer_cfg.dilations.as_ref().unwrap();
         let gated = layer_cfg.gated.unwrap_or(false);
         let conv_out_ch = if gated { 2 * ch } else { ch };
@@ -455,15 +455,39 @@ fn expected_interleaved4_weights(data: &NamModelData) -> Vec<f32> {
             cursor += ch;
         }
 
-        // 3. Head Rechannel
-        let size = head_ch * ch;
-        let raw = &data.weights[cursor..cursor + size];
-        for in_c in 0..ch {
-            for out_c in 0..head_ch {
-                out.push(raw[out_c * ch + in_c]);
+        // 3. Head Rechannel — dense when (k,dilation) == (1,1), Conv1D otherwise,
+        // matching the decoder dispatch.
+        let head_k = layer_cfg.head_kernel_size.unwrap_or(1);
+        let head_dilation = layer_cfg.head_dilation.unwrap_or(1);
+        if head_k == 1 && head_dilation == 1 {
+            let size = head_ch * ch;
+            let raw = &data.weights[cursor..cursor + size];
+            for in_c in 0..ch {
+                for out_c in 0..head_ch {
+                    out.push(raw[out_c * ch + in_c]);
+                }
             }
+            cursor += size;
+        } else {
+            let size = head_ch * ch * head_k;
+            let raw = &data.weights[cursor..cursor + size];
+            let num_blocks = ceil_div(head_ch, 4);
+            for b in 0..num_blocks {
+                for ki in 0..head_k {
+                    for in_c in 0..ch {
+                        for lane in 0..4 {
+                            let out_c = b * 4 + lane;
+                            if out_c < head_ch {
+                                out.push(raw[(out_c * ch + in_c) * head_k + ki]);
+                            } else {
+                                out.push(0.0);
+                            }
+                        }
+                    }
+                }
+            }
+            cursor += size;
         }
-        cursor += size;
 
         // Head Rechannel Bias (pass-through)
         if layer_cfg.head_bias.unwrap_or(false) {
@@ -723,5 +747,144 @@ fn test_lstm_multichannel_2to2_gate_major_roundtrip() {
         mse < 1e-10,
         "LSTM 2->2 multi-I/O GateMajor divergence! MSE = {:e}",
         mse
+    );
+}
+
+// =============================================================================
+// Tests — Interleaved4WaveNet with a Conv1D (non-A2) head geometry
+// =============================================================================
+
+/// Builds a non-A2 free-geometry WaveNet whose first layer-array head uses
+/// `head_kernel_size = 3`, `head_dilation = 2` (Conv1D head, no padding because
+/// `head_size = 4` is already a multiple of the 4-wide interleave).
+fn make_synthetic_wavenet_conv_head() -> NamModelData {
+    let ch = 4;
+    let head = 4;
+    let head_k = 3;
+    const K: usize = 3;
+
+    let mut weights = Vec::new();
+    let mut val = 0.05f32;
+    let mut push_seq = |n: usize| {
+        for _ in 0..n {
+            weights.push(val);
+            val = (val + 0.007) % 0.3;
+        }
+    };
+
+    // ---- Array 1: IN=1, CH=4, HEAD=4, Conv1D head ----
+    push_seq(ch); // rechannel [CH*IN]
+    for _ in 0..2 {
+        push_seq(ch * ch * K); // conv1d
+        push_seq(ch); // bias
+        push_seq(ch); // input_mixin [CH*COND]
+        push_seq(ch * ch); // 1x1
+        push_seq(ch); // 1x1 bias
+    }
+    push_seq(head * ch * head_k); // head Conv1D [HEAD*CH*K] (no bias)
+
+    // ---- Array 2: IN=4, CH=4, HEAD=1, dense head ----
+    push_seq(ch * head); // rechannel [CH*IN]
+    for _ in 0..2 {
+        push_seq(ch * ch * K);
+        push_seq(ch);
+        push_seq(ch);
+        push_seq(ch * ch);
+        push_seq(ch);
+    }
+    push_seq(ch); // head dense (final head_size defaults to 1)
+    weights.push(0.04); // head bias
+    weights.push(0.06); // head_scale
+
+    NamModelData::new(
+        Some("0.5.4".to_string()),
+        "WaveNet".to_string(),
+        {
+            let mut config = NamConfig::new(vec![
+                NamLayerConfig {
+                    input_size: Some(1),
+                    condition_size: Some(1),
+                    head_size: Some(head),
+                    head_kernel_size: Some(head_k),
+                    head_dilation: Some(2),
+                    channels: Some(ch),
+                    kernel_size: Some(K),
+                    dilations: Some(vec![1, 2]),
+                    activation: Some("Tanh".to_string()),
+                    gated: Some(false),
+                    head_bias: Some(false),
+                    ..Default::default()
+                },
+                NamLayerConfig {
+                    input_size: Some(head),
+                    condition_size: Some(1),
+                    // Deliberately omitted: the decoder and the encoder must
+                    // agree that a missing head_size means 1.
+                    head_size: None,
+                    channels: Some(ch),
+                    kernel_size: Some(K),
+                    dilations: Some(vec![1, 2]),
+                    activation: Some("Tanh".to_string()),
+                    gated: Some(false),
+                    head_bias: Some(true),
+                    ..Default::default()
+                },
+            ]);
+            config.head = None;
+            config.head_scale = None;
+            config.num_layers = None;
+            config.hidden_size = None;
+            config.receptive_field = None;
+            config.bias = None;
+            config.submodels = None;
+            config
+        },
+        weights,
+        Some(48000.0),
+        None,
+        WeightsLayout::Original,
+    )
+}
+
+/// Distinguishes the Dense and Conv1D head layouts in `.namb` v2 and proves the
+/// `Interleaved4WaveNet` file is bit-exact and audibly identical to `Original`.
+#[test]
+fn test_wavenet_interleaved4_conv_head_roundtrip() {
+    let _guard = PrecisionGuard::new(ActivationPrecision::Standard);
+    let orig_data = make_synthetic_wavenet_conv_head();
+
+    let namb = encode_namb(&orig_data, 2, WeightsLayout::Interleaved4WaveNet).unwrap();
+    let decoded = parse_namb(&namb).expect("parse NAMB with Conv1D head (CRC must validate)");
+    assert_eq!(decoded.weights_layout, WeightsLayout::Interleaved4WaveNet);
+
+    // Bit-exact layout comparison against the independent encoder mirror.
+    let expected = expected_interleaved4_weights(&orig_data);
+    assert_eq!(
+        decoded.weights, expected,
+        "Interleaved4 Conv1D head weights must be bit-exact"
+    );
+    assert_eq!(
+        decoded.weights.len(),
+        orig_data.weights.len(),
+        "Conv1D head transposition must preserve the weight count"
+    );
+
+    // Original vs Interleaved4 audio parity. A dense-only head transposition
+    // reinterprets the weights and makes this comparison diverge.
+    let mut model_orig = build_model(&orig_data).unwrap();
+    model_orig.prewarm(4096);
+    let mut model_v2 = build_model(&decoded).unwrap();
+    model_v2.prewarm(4096);
+
+    let input = generate_sine(1024);
+    let mut out_orig = vec![0.0f32; 1024];
+    let mut out_v2 = vec![0.0f32; 1024];
+    model_orig.process(&input, &mut out_orig);
+    model_v2.process(&input, &mut out_v2);
+
+    let mse = compute_mse(&out_orig, &out_v2);
+    assert!(
+        mse < 1e-10,
+        "Conv1D head Interleaved4 divergence! MSE = {mse:e}"
     );
 }

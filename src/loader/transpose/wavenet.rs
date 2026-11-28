@@ -9,7 +9,7 @@
 //! interleaved-4 block read pattern.
 
 use super::super::namb_encoder::ensure_capacity;
-use crate::loader::nam_json::NamModelData;
+use crate::loader::nam_json::{NamModelData, is_a2_model};
 use anyhow::{Context, Result};
 
 /// Transposes WaveNet weight tensors into Interleaved-4 memory layout.
@@ -25,6 +25,11 @@ pub fn transpose_wavenet_interleaved4(data: &NamModelData) -> Result<Vec<f32>> {
     if data.architecture != "WaveNet" {
         anyhow::bail!("Layout Interleaved4WaveNet requires WaveNet architecture");
     }
+    if is_a2_model(data) {
+        anyhow::bail!(
+            "Layout Interleaved4WaveNet does not support A2 topology (fast-path or scalar dynamic)"
+        );
+    }
 
     let mut cursor: usize = 0;
     let mut out_weights = Vec::with_capacity(data.weights.len());
@@ -34,7 +39,7 @@ pub fn transpose_wavenet_interleaved4(data: &NamModelData) -> Result<Vec<f32>> {
         let ch = layer_cfg.channels.unwrap_or(16);
         let cond_ch = layer_cfg.condition_size.unwrap_or(1);
         let k = layer_cfg.kernel_size.unwrap_or(3);
-        let head_ch = layer_cfg.head_size.unwrap_or(8);
+        let head_ch = layer_cfg.head_size.unwrap_or(1);
         let dilations = layer_cfg
             .dilations
             .as_ref()
@@ -168,25 +173,73 @@ pub fn transpose_wavenet_interleaved4(data: &NamModelData) -> Result<Vec<f32>> {
             })?;
         }
 
-        // 3. Head Rechannel projection: Linear mapping from residual channels to head dimension.
-        let size = head_ch
-            .checked_mul(ch)
-            .ok_or_else(|| anyhow::anyhow!("Head Rechannel weights size overflow in layer {li}"))?;
-        ensure_capacity(
-            &data.weights,
-            cursor,
-            size,
-            format!("Array {li} Head Rechannel Weights"),
-        )?;
-        let raw = &data.weights[cursor..cursor + size];
-        for in_c in 0..ch {
-            for out_c in 0..head_ch {
-                out_weights.push(raw[out_c * ch + in_c]);
-            }
+        // 3. Head Rechannel projection.
+        //
+        // The decoder dispatches on the same predicate: `head_kernel_size == 1
+        // && head_dilation == 1` reads a dense `[OUT][IN]` projection, while any
+        // other geometry is read as a Conv1D `[OUT][IN][K]` through the
+        // interleaved Conv1D path (`dispatcher/wavenet/dynamic.rs`). The head
+        // must therefore follow the exact same split; treating a Conv1D head as
+        // dense would silently reinterpret the weight stream.
+        let head_k = layer_cfg.head_kernel_size.unwrap_or(1);
+        let head_dilation = layer_cfg.head_dilation.unwrap_or(1);
+        if head_k == 0 {
+            anyhow::bail!("Head kernel size is 0 in layer {li} — invalid geometry");
         }
-        cursor = cursor.checked_add(size).ok_or_else(|| {
-            anyhow::anyhow!("Cursor overflow after Head Rechannel weights in layer {li}")
-        })?;
+        if head_k == 1 && head_dilation == 1 {
+            // Dense head projection: [OUT][IN] -> [IN][OUT].
+            let size = head_ch.checked_mul(ch).ok_or_else(|| {
+                anyhow::anyhow!("Head Rechannel weights size overflow in layer {li}")
+            })?;
+            ensure_capacity(
+                &data.weights,
+                cursor,
+                size,
+                format!("Array {li} Head Rechannel Weights"),
+            )?;
+            let raw = &data.weights[cursor..cursor + size];
+            for in_c in 0..ch {
+                for out_c in 0..head_ch {
+                    out_weights.push(raw[out_c * ch + in_c]);
+                }
+            }
+            cursor = cursor.checked_add(size).ok_or_else(|| {
+                anyhow::anyhow!("Cursor overflow after Head Rechannel weights in layer {li}")
+            })?;
+        } else {
+            // Conv1D head: [OUT][IN][K] -> Interleaved-4 `[block, tap, in, lane]`.
+            let size = head_ch
+                .checked_mul(ch)
+                .and_then(|x| x.checked_mul(head_k))
+                .ok_or_else(|| {
+                    anyhow::anyhow!("Head Conv1D weights size overflow in layer {li}")
+                })?;
+            ensure_capacity(
+                &data.weights,
+                cursor,
+                size,
+                format!("Array {li} Head Conv1D Weights"),
+            )?;
+            let raw = &data.weights[cursor..cursor + size];
+            let num_blocks = head_ch.div_ceil(4);
+            for b in 0..num_blocks {
+                for ki in 0..head_k {
+                    for in_c in 0..ch {
+                        for lane in 0..4 {
+                            let out_c = b * 4 + lane;
+                            if out_c < head_ch {
+                                out_weights.push(raw[(out_c * ch + in_c) * head_k + ki]);
+                            } else {
+                                out_weights.push(0.0);
+                            }
+                        }
+                    }
+                }
+            }
+            cursor = cursor.checked_add(size).ok_or_else(|| {
+                anyhow::anyhow!("Cursor overflow after Head Conv1D weights in layer {li}")
+            })?;
+        }
 
         // Head Rechannel additive bias vector (when enabled in layer topology).
         if layer_cfg.head_bias.unwrap_or(false) {

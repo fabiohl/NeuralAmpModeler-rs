@@ -638,6 +638,7 @@ fn validate_model_against_baseline(filename: &str, label: &str, sr: u32) {
     assert_imd_baseline(label, &measured.imd, &fixture_entry.imd);
     assert_farina_baseline(label, &measured.farina, &fixture_entry.farina);
 
+    common::report_spectral_baseline(label, measured.thdn.thdn_percent, measured.imd.imd_percent);
     eprintln!("  ✅ {label}: all spectral fidelity metrics within baseline tolerance");
 }
 

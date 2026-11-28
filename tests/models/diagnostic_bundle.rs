@@ -216,10 +216,19 @@ fn test_panic_hook_behavior() {
     let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     use std::fs;
 
+    // Integration tests compile the library with the public `testing` feature,
+    // not `cfg(test)`, so the engine keeps the production crash path. Point
+    // the hook at an isolated directory instead of the user's cache.
+    let crash_dir = std::env::temp_dir().join(format!("nam-crash-test-{}", std::process::id()));
+    let previous_crash_dir = std::env::var_os("NAM_CRASH_DIR");
+    // SAFETY: serialized by `TEST_MUTEX` and restored before the test returns.
+    unsafe { std::env::set_var("NAM_CRASH_DIR", &crash_dir) };
+
     let cache_dir = match neural_amp_modeler_rs::common::panic_hook::crash_directory() {
         Some(dir) => dir,
         None => return,
     };
+    assert_eq!(cache_dir, crash_dir);
     let _ = fs::create_dir_all(&cache_dir);
 
     // Part 1: Test persistence when shutdown is NOT in progress.
@@ -379,6 +388,15 @@ fn test_panic_hook_behavior() {
         !found_suppressed_report,
         "No report should be written while PanicReportSuppressionGuard is active"
     );
+
+    // SAFETY: serialized by `TEST_MUTEX`; restore the previous process value.
+    unsafe {
+        match previous_crash_dir {
+            Some(value) => std::env::set_var("NAM_CRASH_DIR", value),
+            None => std::env::remove_var("NAM_CRASH_DIR"),
+        }
+    }
+    let _ = fs::remove_dir_all(&crash_dir);
 }
 
 #[test]

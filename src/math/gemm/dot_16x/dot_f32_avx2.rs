@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
-// Specialized GEMM micro-kernels utilize unsafe SIMD intrinsics and parameter lists.
-#![allow(unsafe_op_in_unsafe_fn, clippy::missing_safety_doc)]
 
 //! Dot Product 16x f32 — AVX2/FMA kernel (f32 native weights).
 //!
@@ -74,7 +72,9 @@ use crate::dot4x_simd4;
 ///
 /// # Safety
 /// Caller must ensure `weights.len() >= state.len()` and that the memory regions
-/// are valid for unaligned load.
+/// are valid for unaligned load. The CPU must support AVX2+FMA on x86 (the
+/// project's x86-64-v3 baseline) or NEON on aarch64; `#[target_feature]` does
+/// not perform a runtime check.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
 #[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn dot_product_16x_f32_avx2(weights: &[[f32; 16]], state: &[f32]) -> [f32; 16] {
@@ -91,7 +91,9 @@ pub unsafe fn dot_product_16x_f32_avx2(weights: &[[f32; 16]], state: &[f32]) -> 
 
     // SAFETY: `i < len = state.len()` (loop guard) and the caller guarantees
     // `weights.len() >= state.len()`, so `state.get_unchecked(i)` and the
-    // 16-f32 `_mm256_loadu_ps` loads from `weights[i]` stay in bounds.
+    // 16-f32 `_mm256_loadu_ps` loads from `weights[i]` stay in bounds. ISA:
+    // caller must provide x86-64-v3 (AVX2+FMA) or aarch64 NEON; the
+    // `#[target_feature]` attribute is not a runtime CPU check.
     unsafe {
         dot4x_simd4!(i, len, {
             let s0 = _mm256_set1_ps(*state.get_unchecked(i));
@@ -175,7 +177,9 @@ pub unsafe fn dot_product_16x_f32_avx2(weights: &[[f32; 16]], state: &[f32]) -> 
 ///
 /// # Safety
 /// Caller must ensure `weights.len() >= state_f0.len()` and
-/// `weights.len() >= state_f1.len()`.
+/// `weights.len() >= state_f1.len()`. The CPU must support AVX2+FMA on x86
+/// (the project's x86-64-v3 baseline) or NEON on aarch64; `#[target_feature]`
+/// does not perform a runtime check.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
 #[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn dot_product_16x_f32_dual_avx2(
@@ -206,7 +210,9 @@ pub unsafe fn dot_product_16x_f32_dual_avx2(
 
     // SAFETY: `len` is the minimum of `weights.len()`, `state_f0.len()`, and
     // `state_f1.len()`; the `dot4x_simd4!` loop guard keeps `i < len`, so all
-    // unchecked reads and 16-f32 loads stay in bounds.
+    // unchecked reads and 16-f32 loads stay in bounds. ISA: caller must provide
+    // x86-64-v3 (AVX2+FMA) or aarch64 NEON; `#[target_feature]` is not a runtime
+    // CPU check.
     unsafe {
         let mut i = 0;
 
@@ -329,11 +335,21 @@ pub unsafe fn dot_product_16x_f32_accumulate_avx2(
     init: &[f32; 16],
 ) -> [f32; 16] {
     let len = state.len();
-    let mut acc_lo0 = _mm256_loadu_ps(init.as_ptr());
+    // SAFETY: `init` is a `&[f32; 16]`, so the two 8-f32 unaligned loads at
+    // offsets 0 and 8 are fully in bounds and read initialized values.
+    // ISA: x86 callers must provide a CPU compatible with x86-64-v3 (AVX2+FMA);
+    // aarch64 uses baseline NEON. `#[target_feature]` itself checks no CPU.
+    let (init_lo, init_hi) = unsafe {
+        (
+            _mm256_loadu_ps(init.as_ptr()),
+            _mm256_loadu_ps(init.as_ptr().add(8)),
+        )
+    };
+    let mut acc_lo0 = init_lo;
     let mut acc_lo1 = _mm256_setzero_ps();
     let mut acc_lo2 = _mm256_setzero_ps();
     let mut acc_lo3 = _mm256_setzero_ps();
-    let mut acc_hi0 = _mm256_loadu_ps(init.as_ptr().add(8));
+    let mut acc_hi0 = init_hi;
     let mut acc_hi1 = _mm256_setzero_ps();
     let mut acc_hi2 = _mm256_setzero_ps();
     let mut acc_hi3 = _mm256_setzero_ps();
@@ -341,7 +357,9 @@ pub unsafe fn dot_product_16x_f32_accumulate_avx2(
 
     // SAFETY: `i < len = state.len()` (loop guard) and the caller guarantees
     // `weights.len() >= state.len()`, so `state.get_unchecked(i)` and the
-    // 16-f32 `_mm256_loadu_ps` loads from `weights[i]` stay in bounds.
+    // 16-f32 `_mm256_loadu_ps` loads from `weights[i]` stay in bounds. ISA:
+    // caller must provide x86-64-v3 (AVX2+FMA) or aarch64 NEON; the
+    // `#[target_feature]` attribute is not a runtime CPU check.
     unsafe {
         dot4x_simd4!(i, len, {
             let s0 = _mm256_set1_ps(*state.get_unchecked(i));
@@ -425,7 +443,9 @@ pub unsafe fn dot_product_16x_f32_accumulate_avx2(
 ///
 /// # Safety
 /// Caller must ensure `weights.len() >= state_f0.len()` and
-/// `weights.len() >= state_f1.len()`.
+/// `weights.len() >= state_f1.len()`. The CPU must support AVX2+FMA on x86
+/// (the project's x86-64-v3 baseline) or NEON on aarch64; `#[target_feature]`
+/// does not perform a runtime check.
 #[cfg_attr(target_arch = "x86_64", target_feature(enable = "avx2,fma"))]
 #[cfg_attr(target_arch = "aarch64", target_feature(enable = "neon"))]
 pub unsafe fn dot_product_16x_f32_dual_accumulate_avx2(
@@ -439,26 +459,40 @@ pub unsafe fn dot_product_16x_f32_dual_accumulate_avx2(
         weights.len(),
         core::cmp::min(state_f0.len(), state_f1.len()),
     );
-    let mut acc_f0_lo0 = _mm256_loadu_ps(init_f0.as_ptr());
+    // SAFETY: each `init_*` is a `&[f32; 16]`; the 8-f32 unaligned loads at
+    // offsets 0 and 8 are fully in bounds and read initialized values.
+    // ISA: x86 callers must provide a CPU compatible with x86-64-v3 (AVX2+FMA);
+    // aarch64 uses baseline NEON. `#[target_feature]` itself checks no CPU.
+    let (f0_lo, f0_hi, f1_lo, f1_hi) = unsafe {
+        (
+            _mm256_loadu_ps(init_f0.as_ptr()),
+            _mm256_loadu_ps(init_f0.as_ptr().add(8)),
+            _mm256_loadu_ps(init_f1.as_ptr()),
+            _mm256_loadu_ps(init_f1.as_ptr().add(8)),
+        )
+    };
+    let mut acc_f0_lo0 = f0_lo;
     let mut acc_f0_lo1 = _mm256_setzero_ps();
     let mut acc_f0_lo2 = _mm256_setzero_ps();
     let mut acc_f0_lo3 = _mm256_setzero_ps();
-    let mut acc_f0_hi0 = _mm256_loadu_ps(init_f0.as_ptr().add(8));
+    let mut acc_f0_hi0 = f0_hi;
     let mut acc_f0_hi1 = _mm256_setzero_ps();
     let mut acc_f0_hi2 = _mm256_setzero_ps();
     let mut acc_f0_hi3 = _mm256_setzero_ps();
-    let mut acc_f1_lo0 = _mm256_loadu_ps(init_f1.as_ptr());
+    let mut acc_f1_lo0 = f1_lo;
     let mut acc_f1_lo1 = _mm256_setzero_ps();
     let mut acc_f1_lo2 = _mm256_setzero_ps();
     let mut acc_f1_lo3 = _mm256_setzero_ps();
-    let mut acc_f1_hi0 = _mm256_loadu_ps(init_f1.as_ptr().add(8));
+    let mut acc_f1_hi0 = f1_hi;
     let mut acc_f1_hi1 = _mm256_setzero_ps();
     let mut acc_f1_hi2 = _mm256_setzero_ps();
     let mut acc_f1_hi3 = _mm256_setzero_ps();
 
     // SAFETY: `len` is the minimum of `weights.len()`, `state_f0.len()`, and
     // `state_f1.len()`; the `dot4x_simd4!` loop guard keeps `i < len`, so all
-    // unchecked reads and 16-f32 loads stay in bounds.
+    // unchecked reads and 16-f32 loads stay in bounds. ISA: caller must provide
+    // x86-64-v3 (AVX2+FMA) or aarch64 NEON; `#[target_feature]` is not a runtime
+    // CPU check.
     unsafe {
         let mut i = 0;
 

@@ -43,6 +43,10 @@ use crate::common::unlikely;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::Ordering;
 
+/// Maximum number of WaveNet layer states to snapshot during a double-pass
+/// crossfade. Worst case: 8 arrays × 64 dilations per array.
+pub(crate) const WAVENET_CROSSFADE_MAX_STATES: usize = 1024;
+
 /// Manual slim override — forces a fixed quality level, bypassing the FSM.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -180,6 +184,17 @@ pub struct AdaptiveCompute {
     /// Whether the loaded WaveNet model explicitly declares slimmability support.
     /// Conventional WaveNets (default) set this to `false` and maintain full channel size.
     wavenet_slimmable_capable: bool,
+    /// Snapshot of `buffer_start` for every active WaveNet layer during the
+    /// first half of a double-pass crossfade.
+    ///
+    /// Kept here, in caller-owned controller state, so the audio callback does
+    /// not allocate a 16 KiB lookup table on its own stack each crossfade
+    /// block. `crossfade_post_first_starts` holds the second snapshot
+    /// needed when the higher-weighted branch changes after the first pass.
+    crossfade_backup_starts: [usize; WAVENET_CROSSFADE_MAX_STATES],
+    /// Snapshot taken after the first crossfade pass when `first_eff >
+    /// second_eff`, restored after the second pass.
+    crossfade_post_first_starts: [usize; WAVENET_CROSSFADE_MAX_STATES],
 }
 
 const DEGRADE_CONSECUTIVE: u32 = 3;
@@ -212,7 +227,22 @@ impl AdaptiveCompute {
             wavenet_mono_rt: false,
             wavenet_rt_target_ch: None,
             wavenet_slimmable_capable: false,
+            crossfade_backup_starts: [0; WAVENET_CROSSFADE_MAX_STATES],
+            crossfade_post_first_starts: [0; WAVENET_CROSSFADE_MAX_STATES],
         }
+    }
+
+    /// Returns the two preallocated WaveNet crossfade snapshots.
+    ///
+    /// The arrays live in the controller rather than the audio callback frame,
+    /// so crossfade blocks keep a small, fixed stack footprint. Borrowing both
+    /// slices is exclusive and allocation-free.
+    #[inline(always)]
+    pub(crate) fn crossfade_scratch(&mut self) -> (&mut [usize], &mut [usize]) {
+        (
+            &mut self.crossfade_backup_starts,
+            &mut self.crossfade_post_first_starts,
+        )
     }
 
     /// Resets the FSM to its initial Full state: zeroes the hysteresis

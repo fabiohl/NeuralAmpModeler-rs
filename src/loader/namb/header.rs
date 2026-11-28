@@ -3,6 +3,17 @@
 
 //! Binary header and CRC32 utilities for `.namb` files.
 
+// The on-disk header declares little-endian fields, but the encoder and the
+// zero-copy `from_slice` reader materialize the packed struct with the host's
+// native byte order. Rather than silently mis-decoding every field on a
+// big-endian target, the format support is restricted to little-endian
+// targets at compile time (the reference platform is x86-64-v3 LE).
+#[cfg(target_endian = "big")]
+compile_error!(
+    "The .namb format is little-endian; big-endian targets are not supported \
+     (header serialization is native-endian)"
+);
+
 use super::super::nam_json::WeightsLayout;
 use super::error::NambError;
 
@@ -22,6 +33,13 @@ pub fn crc32_ieee_update(mut crc: u32, data: &[u8]) -> u32 {
 /// Replaces the external `crc32fast` dependency with a lightweight software version.
 pub fn crc32_ieee(data: &[u8]) -> u32 {
     crc32_ieee_update(0xFFFFFFFFu32, data) ^ 0xFFFFFFFFu32
+}
+
+/// The v1 integrity policy treats `crc32 == 0` as a missing-checksum
+/// sentinel (rejected with [`NambError::CrcMissingV1`]). Both the parser and
+/// the encoder must agree on this predicate; keep it single-sourced here.
+pub const fn v1_crc_is_missing(crc: u32) -> bool {
+    crc == 0
 }
 
 /// Validates the CRC32 checksum of the file (or weight section depending on version).
@@ -113,9 +131,14 @@ pub struct NambHeader {
     pub input_level_dbu: f32,
     /// Default output level dBu (e.g. 12.0).
     pub output_level_dbu: f32,
-    /// Reserved (total header size must be at least 80 bytes).
+    /// Reserved (the packed header must remain exactly 80 bytes).
     pub reserved3: [u32; 1],
 }
+
+// On-disk format contract: the 80-byte header is defined by `docs/namb-spec.md`
+// and consumed by third-party writers, so a layout change must fail the build
+// instead of silently shifting `weights_offset` for every existing file.
+const _: () = assert!(NAMB_HEADER_LEN == 80);
 
 impl NambHeader {
     /// Parses a `NambHeader` from a byte slice in a fully alignment-safe manner.
@@ -156,16 +179,43 @@ impl NambHeader {
     }
 
     /// Returns the weight layout based on the version and the flag.
+    ///
+    /// Unknown `layout_type` bytes are treated as `Original`. Prefer
+    /// [`Self::try_get_layout`] when decoding a file: a future layout must be
+    /// rejected rather than silently mis-decoded.
     pub fn get_layout(&self) -> WeightsLayout {
+        self.try_get_layout().unwrap_or(WeightsLayout::Original)
+    }
+
+    /// Returns the validated weight layout for this header.
+    ///
+    /// For v1 the layout byte is part of the legacy reserved region and is
+    /// always `Original` (see [`Self::get_layout`]). For v2 any value other
+    /// than the three defined layouts is rejected with
+    /// [`NambError::UnsupportedLayout`].
+    pub fn try_get_layout(&self) -> Result<WeightsLayout, NambError> {
         let version = self.version;
         if version < 2 {
-            return WeightsLayout::Original;
+            return Ok(WeightsLayout::Original);
         }
         match self.layout_type {
-            1 => WeightsLayout::GateMajorLstm,
-            2 => WeightsLayout::Interleaved4WaveNet,
-            _ => WeightsLayout::Original,
+            0 => Ok(WeightsLayout::Original),
+            1 => Ok(WeightsLayout::GateMajorLstm),
+            2 => Ok(WeightsLayout::Interleaved4WaveNet),
+            layout_type => Err(NambError::UnsupportedLayout {
+                version,
+                layout_type,
+            }),
         }
+    }
+}
+
+/// Human-readable name of a weight layout (used by structured diagnostics).
+pub fn layout_name(layout: WeightsLayout) -> &'static str {
+    match layout {
+        WeightsLayout::Original => "Original",
+        WeightsLayout::GateMajorLstm => "GateMajorLstm",
+        WeightsLayout::Interleaved4WaveNet => "Interleaved4WaveNet",
     }
 }
 

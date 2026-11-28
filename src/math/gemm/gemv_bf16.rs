@@ -1,11 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 // Specialized GEMM micro-kernels utilize unsafe SIMD intrinsics and parameter lists.
-#![allow(
-    unsafe_op_in_unsafe_fn,
-    clippy::missing_safety_doc,
-    clippy::too_many_arguments
-)]
+#![allow(clippy::missing_safety_doc, clippy::too_many_arguments)]
 
 //! GEMV BF16 kernel — matrix-vector multiplication with data in BF16 format.
 //!
@@ -19,6 +15,16 @@ use crate::arch::simd::*;
 ///
 /// Processes the linear projection in blocks of 16 output channels, with 8 independent
 /// ZMM accumulators and step 16 in the inner loop (16 BF16 pairs = 32 elements).
+///
+/// # Safety
+/// `weights.len()` must be at least `in_frame.len() * out_frame.len()`, and
+/// `bias.len() >= out_frame.len()` when `do_bias`. `in_frame.as_ptr()` must be
+/// 4-byte aligned for packed pair reads; all source slices contain initialized
+/// values and `out_frame` is an exclusive mutable slice. On x86, the CPU must
+/// support AVX-512F+VL+BF16+VNNI; normal dispatch never selects this kernel and
+/// only a validated override can reach it. Direct unsafe callers must ensure
+/// these features; `#[target_feature]` does not check them at runtime. Aarch64
+/// uses baseline NEON.
 #[cfg(nam_avx512)]
 #[cfg_attr(docsrs, doc(cfg(feature = "avx512")))]
 #[cfg_attr(
@@ -38,31 +44,40 @@ pub unsafe fn gemv_overwrite_bf16_avx512(
 
     let mut out_c = 0;
     while out_c + 16 <= out_len {
-        let mut acc0 = if do_bias {
-            _mm512_loadu_ps(bias.as_ptr().add(out_c))
-        } else {
-            _mm512_setzero_ps()
-        };
-        let mut acc1 = _mm512_setzero_ps();
-        let mut acc2 = _mm512_setzero_ps();
-        let mut acc3 = _mm512_setzero_ps();
-        let mut acc4 = _mm512_setzero_ps();
-        let mut acc5 = _mm512_setzero_ps();
-        let mut acc6 = _mm512_setzero_ps();
-        let mut acc7 = _mm512_setzero_ps();
+        // SAFETY: `out_c + 16 <= out_len`; the caller guarantees `weights`
+        // holds `in_len * out_len` BF16 values, `bias` covers `out_len`, and
+        // the input/weight buffers are valid for the pair reads below. With
+        // `in_c + 16 <= in_len` (and the 2-wide / 1-wide tails), every load,
+        // store, `transmute`, and `get_unchecked` is in bounds. ISA:
+        // AVX-512F+VL+BF16; normal dispatch never selects this kernel and only
+        // a validated VnniBf16 override can reach it. Direct unsafe callers must
+        // ensure AVX-512F+VL+BF16+VNNI; `#[target_feature]` is not a CPU check.
+        unsafe {
+            let mut acc0 = if do_bias {
+                _mm512_loadu_ps(bias.as_ptr().add(out_c))
+            } else {
+                _mm512_setzero_ps()
+            };
+            let mut acc1 = _mm512_setzero_ps();
+            let mut acc2 = _mm512_setzero_ps();
+            let mut acc3 = _mm512_setzero_ps();
+            let mut acc4 = _mm512_setzero_ps();
+            let mut acc5 = _mm512_setzero_ps();
+            let mut acc6 = _mm512_setzero_ps();
+            let mut acc7 = _mm512_setzero_ps();
 
-        let mut in_c = 0;
-        while in_c + 16 <= in_len {
-            // Unrolled step macro: processes 2 input channels across 16 output channels per step.
-            //
-            // Instruction mechanics for `_mm512_dpbf16_ps`:
-            // - Calculates the dot product of two pairs of BF16 values packed into 32-bit dwords:
-            //   `acc[lane] += in_pair.low * weight_pair.low + in_pair.high * weight_pair.high`
-            // - To feed this, we pack adjacent input channels (idx, idx+1) into a single 32-bit dword
-            //   and broadcast it across all 16 SIMD lanes.
-            // - For weights, row `idx` provides the low 16 bits and row `idx+1` provides the high
-            //   16 bits for each of the 16 output channels.
-            macro_rules! bf16_gemv_step {
+            let mut in_c = 0;
+            while in_c + 16 <= in_len {
+                // Unrolled step macro: processes 2 input channels across 16 output channels per step.
+                //
+                // Instruction mechanics for `_mm512_dpbf16_ps`:
+                // - Calculates the dot product of two pairs of BF16 values packed into 32-bit dwords:
+                //   `acc[lane] += in_pair.low * weight_pair.low + in_pair.high * weight_pair.high`
+                // - To feed this, we pack adjacent input channels (idx, idx+1) into a single 32-bit dword
+                //   and broadcast it across all 16 SIMD lanes.
+                // - For weights, row `idx` provides the low 16 bits and row `idx+1` provides the high
+                //   16 bits for each of the 16 output channels.
+                macro_rules! bf16_gemv_step {
                 ($acc:ident, $k:expr) => {
                     let idx = in_c + ($k) * 2;
                     // 1. Load two consecutive BF16 inputs as a single 32-bit integer and broadcast:
@@ -93,77 +108,84 @@ pub unsafe fn gemv_overwrite_bf16_avx512(
                     );
                 };
             }
-            // Execute 8 independent steps (16 input channels total) across 8 accumulator registers
-            // to saturate execution ports and break dependency chains (Instruction Level Parallelism).
-            bf16_gemv_step!(acc0, 0);
-            bf16_gemv_step!(acc1, 1);
-            bf16_gemv_step!(acc2, 2);
-            bf16_gemv_step!(acc3, 3);
-            bf16_gemv_step!(acc4, 4);
-            bf16_gemv_step!(acc5, 5);
-            bf16_gemv_step!(acc6, 6);
-            bf16_gemv_step!(acc7, 7);
-            in_c += 16;
+                // Execute 8 independent steps (16 input channels total) across 8 accumulator registers
+                // to saturate execution ports and break dependency chains (Instruction Level Parallelism).
+                bf16_gemv_step!(acc0, 0);
+                bf16_gemv_step!(acc1, 1);
+                bf16_gemv_step!(acc2, 2);
+                bf16_gemv_step!(acc3, 3);
+                bf16_gemv_step!(acc4, 4);
+                bf16_gemv_step!(acc5, 5);
+                bf16_gemv_step!(acc6, 6);
+                bf16_gemv_step!(acc7, 7);
+                in_c += 16;
+            }
+
+            // Tree reduction: sum 8 parallel accumulators into acc0 in a balanced binary tree:
+            acc0 = _mm512_add_ps(acc0, acc1);
+            acc2 = _mm512_add_ps(acc2, acc3);
+            acc4 = _mm512_add_ps(acc4, acc5);
+            acc6 = _mm512_add_ps(acc6, acc7);
+            acc0 = _mm512_add_ps(acc0, acc2);
+            acc4 = _mm512_add_ps(acc4, acc6);
+            acc0 = _mm512_add_ps(acc0, acc4);
+
+            // Process remaining even pairs (step 2 input channels) with _mm512_dpbf16_ps:
+            while in_c + 2 <= in_len {
+                let v_in_raw = _mm256_set1_epi32(*(in_frame.as_ptr().add(in_c) as *const i32));
+                let v_in = _mm512_broadcast_i32x8(v_in_raw);
+                let w_ptr = weights.as_ptr().add(in_c * out_len + out_c);
+                let lo = _mm256_loadu_si256(w_ptr as *const __m256i);
+                let hi = _mm256_loadu_si256(w_ptr.add(out_len) as *const __m256i);
+                let vw = _mm512_or_si512(
+                    _mm512_cvtepu16_epi32(lo),
+                    _mm512_slli_epi32(_mm512_cvtepu16_epi32(hi), 16),
+                );
+                acc0 = _mm512_dpbf16_ps(
+                    acc0,
+                    // SAFETY: __m512 → __m512bh: no-op 512-bit transmute, identical ABI.
+                    core::mem::transmute::<__m512, __m512bh>(_mm512_castsi512_ps(v_in)),
+                    // SAFETY: __m512i → __m512bh: no-op 512-bit transmute, identical ABI.
+                    core::mem::transmute::<__m512i, __m512bh>(vw),
+                );
+                in_c += 2;
+            }
+
+            // Remaining odd element: convert BF16 to f32 (shift left 16 bits to place exponent/mantissa)
+            // and accumulate using standard single-precision FMA:
+            if in_c < in_len {
+                let si = f32::from_bits((*in_frame.get_unchecked(in_c) as u32) << 16);
+                let v_in = _mm512_set1_ps(si);
+                let w_ptr = weights.as_ptr().add(in_c * out_len + out_c);
+                let vw_raw = _mm512_cvtepu16_epi32(_mm256_loadu_si256(w_ptr as *const __m256i));
+                let vw = _mm512_castsi512_ps(_mm512_slli_epi32(vw_raw, 16));
+                acc0 = _mm512_fmadd_ps(v_in, vw, acc0);
+            }
+
+            _mm512_storeu_ps(out_frame.as_mut_ptr().add(out_c), acc0);
         }
-
-        // Tree reduction: sum 8 parallel accumulators into acc0 in a balanced binary tree:
-        acc0 = _mm512_add_ps(acc0, acc1);
-        acc2 = _mm512_add_ps(acc2, acc3);
-        acc4 = _mm512_add_ps(acc4, acc5);
-        acc6 = _mm512_add_ps(acc6, acc7);
-        acc0 = _mm512_add_ps(acc0, acc2);
-        acc4 = _mm512_add_ps(acc4, acc6);
-        acc0 = _mm512_add_ps(acc0, acc4);
-
-        // Process remaining even pairs (step 2 input channels) with _mm512_dpbf16_ps:
-        while in_c + 2 <= in_len {
-            let v_in_raw = _mm256_set1_epi32(*(in_frame.as_ptr().add(in_c) as *const i32));
-            let v_in = _mm512_broadcast_i32x8(v_in_raw);
-            let w_ptr = weights.as_ptr().add(in_c * out_len + out_c);
-            let lo = _mm256_loadu_si256(w_ptr as *const __m256i);
-            let hi = _mm256_loadu_si256(w_ptr.add(out_len) as *const __m256i);
-            let vw = _mm512_or_si512(
-                _mm512_cvtepu16_epi32(lo),
-                _mm512_slli_epi32(_mm512_cvtepu16_epi32(hi), 16),
-            );
-            acc0 = _mm512_dpbf16_ps(
-                acc0,
-                // SAFETY: __m512 → __m512bh: no-op 512-bit transmute, identical ABI.
-                core::mem::transmute::<__m512, __m512bh>(_mm512_castsi512_ps(v_in)),
-                // SAFETY: __m512i → __m512bh: no-op 512-bit transmute, identical ABI.
-                core::mem::transmute::<__m512i, __m512bh>(vw),
-            );
-            in_c += 2;
-        }
-
-        // Remaining odd element: convert BF16 to f32 (shift left 16 bits to place exponent/mantissa)
-        // and accumulate using standard single-precision FMA:
-        if in_c < in_len {
-            let si = f32::from_bits((*in_frame.get_unchecked(in_c) as u32) << 16);
-            let v_in = _mm512_set1_ps(si);
-            let w_ptr = weights.as_ptr().add(in_c * out_len + out_c);
-            let vw_raw = _mm512_cvtepu16_epi32(_mm256_loadu_si256(w_ptr as *const __m256i));
-            let vw = _mm512_castsi512_ps(_mm512_slli_epi32(vw_raw, 16));
-            acc0 = _mm512_fmadd_ps(v_in, vw, acc0);
-        }
-
-        _mm512_storeu_ps(out_frame.as_mut_ptr().add(out_c), acc0);
         out_c += 16;
     }
 
     // Remaining output channels via scalar fallback (already corrected).
     while out_c < out_len {
-        let mut sum = if do_bias {
-            *bias.get_unchecked(out_c)
-        } else {
-            0.0f32
-        };
-        for in_c in 0..in_len {
-            let s = f32::from_bits((*in_frame.get_unchecked(in_c) as u32) << 16);
-            sum +=
-                s * f32::from_bits((*weights.get_unchecked(in_c * out_len + out_c) as u32) << 16);
+        // SAFETY: `out_c < out_len` and `in_c < in_len`; the caller-guaranteed
+        // BF16 matrix/bias/out extents bound every unchecked access. ISA: same
+        // AVX-512F+VL+BF16 validated-override guarantee as above.
+        unsafe {
+            let mut sum = if do_bias {
+                *bias.get_unchecked(out_c)
+            } else {
+                0.0f32
+            };
+            for in_c in 0..in_len {
+                let s = f32::from_bits((*in_frame.get_unchecked(in_c) as u32) << 16);
+                sum += s * f32::from_bits(
+                    (*weights.get_unchecked(in_c * out_len + out_c) as u32) << 16,
+                );
+            }
+            *out_frame.get_unchecked_mut(out_c) = sum;
         }
-        *out_frame.get_unchecked_mut(out_c) = sum;
         out_c += 1;
     }
 }

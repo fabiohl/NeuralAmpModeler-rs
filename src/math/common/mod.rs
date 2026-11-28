@@ -144,7 +144,22 @@ macro_rules! dispatch_simd {
             use $crate::math::common::InstructionSet;
             use $crate::math::common::traits::SimdMath;
             let __isa = $crate::math::common::effective_instruction_set();
-            // SAFETY: Inner safety guarantees are upheld by caller invariants or the execution environment.
+            // SAFETY: two separate obligations are met at this call.
+            // 1) ISA selection: the `Avx512` arm is reachable only when
+            //    `__isa` is `Avx512`, which `SIMD_MATH` obtained from
+            //    `detect_best_simd()` (gated on `has_full_avx512()`:
+            //    F+VL+BW+DQ) or from a test override installed through the
+            //    validated `set_test_isa_override` (which additionally checks
+            //    BF16+VNNI for `Avx512VnniBf16`). `effective_instruction_set`
+            //    only reads that cached value; it does not revalidate per call.
+            //    Safety relies on validated detection/override state; the
+            //    caller must not install unsupported raw values. The dispatch
+            //    performs no unsafe memory access; `#[target_feature]` only
+            //    enables intrinsics and is not a runtime CPU check.
+            // 2) Kernel contract: the wrapped `SimdMath` associated function's
+            //    pointer validity, bounds, alignment, aliasing, and
+            //    initialized-data preconditions remain the caller's obligation
+            //    and are neither checked nor relaxed by this dispatch.
             #[allow(clippy::macro_metavars_in_unsafe, clippy::allow_attributes, deprecated)]
             unsafe {
                 match __isa {
@@ -186,7 +201,17 @@ macro_rules! dispatch_simd {
     ($method:ident ($($arg:expr),*)) => {
         {
             use $crate::math::common::traits::SimdMath;
-            // SAFETY: Inner safety guarantees are upheld by caller invariants or the execution environment.
+            // SAFETY: two separate obligations are met at this call.
+            // 1) ISA selection: this build statically resolves to the AVX2
+            //    baseline backend; x86_64 builds target x86-64-v3 (AVX2+FMA),
+            //    which is a runtime CPU requirement, not a runtime check. The
+            //    caller/environment must provide that CPU (or aarch64 NEON,
+            //    which is baseline there). This dispatch performs no unsafe
+            //    memory access.
+            // 2) Kernel contract: the wrapped `SimdMath` associated function's
+            //    pointer validity, bounds, alignment, aliasing, and
+            //    initialized-data preconditions remain the caller's obligation
+            //    and are neither checked nor relaxed by this dispatch.
             #[allow(clippy::macro_metavars_in_unsafe, clippy::allow_attributes)]
             unsafe {
                 <$crate::math::common::Avx2Math as SimdMath>::$method($($arg),*)

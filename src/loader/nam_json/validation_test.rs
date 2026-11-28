@@ -979,8 +979,8 @@ fn test_training_budget_on_real_nam_namb_and_peek_paths() {
         false,
         crate::loader::LoadOptions::default(),
     ) {
-        // The file-loading path aggregates size-class JSON rejections into its
-        // own `ModelTooLarge` variant; the typed cause is logged with E1207.
+        // The file-loading path preserves the historical `ModelTooLarge`
+        // unit variant (E1304) and its `Display` message.
         Err(crate::loader::LoadError::ModelTooLarge) => {}
         other => panic!(".nam loading path must surface ModelTooLarge: {other:?}"),
     }

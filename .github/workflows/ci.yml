@@ -353,7 +353,7 @@ jobs:
         with:
           name: parity-vectors-${{ matrix.name }}
           path: target/parity-vectors/${{ matrix.name }}/*
-          retention-days: 7
+          retention-days: 14
       - name: Publish step summary
         if: always()
         uses: ./.github/actions/qa-summary
@@ -366,7 +366,7 @@ jobs:
         with:
           name: logs-${{ matrix.name }}
           path: target/logs/**
-          retention-days: 7
+          retention-days: 14
 
   # MSRV job: validates compilation with rust-version from Cargo.toml (1.99.0).
   # rust-toolchain.toml pins `stable`, so RUSTUP_TOOLCHAIN is required to override it;
@@ -608,7 +608,7 @@ jobs:
             "BossWN-standard.bin" "BossLSTM-1x16.bin" "BossLSTM-2x8.bin"
             "wavenet_a2_lite.bin" "wavenet_a2_full.bin" "convnet_nobn.bin" "linear_nobias.bin"
           )
-          PLATFORMS=("x86_64-linux" "linux-arm64" "macos-arm64" "windows-arm64")
+          PLATFORMS=("x86_64-linux" "linux-arm64" "macos-arm64")
           AVX512_GENERATED=0
           if [ -f "target/parity-vectors/x86_64-avx512/status.env" ]; then
             . "target/parity-vectors/x86_64-avx512/status.env"
@@ -623,6 +623,14 @@ jobs:
             WIN_X64_READY="${WIN_HOST_READY:-${WIN_V3_READY:-0}}"
           fi
           [ "${WIN_X64_READY:-0}" = "1" ] && PLATFORMS+=("windows-x64")
+
+          WIN_ARM64_READY=0
+          if [ -f "target/parity-vectors/windows-arm64/status.env" ]; then
+            WIN_HOST_READY=0
+            . "target/parity-vectors/windows-arm64/status.env"
+            WIN_ARM64_READY="${WIN_HOST_READY:-0}"
+          fi
+          [ "${WIN_ARM64_READY:-0}" = "1" ] && PLATFORMS+=("windows-arm64")
 
           for m in "${MODELS[@]}"; do
             for p in "${PLATFORMS[@]}"; do
@@ -655,18 +663,25 @@ jobs:
           # Pairwise cross-ISA comparisons (calibrated numerical envelope)
           compare_pair x86_64-linux linux-arm64 --max-esr 1e-6 --min-snr-db 100.0
           compare_pair x86_64-linux macos-arm64 --max-esr 1e-6 --min-snr-db 100.0
-          compare_pair x86_64-linux windows-arm64 --max-esr 1e-6 --min-snr-db 100.0
           # Pairwise intra-ISA NEON comparisons (strict bitwise identity)
           compare_pair linux-arm64 macos-arm64
-          compare_pair linux-arm64 windows-arm64
-          compare_pair macos-arm64 windows-arm64
+
+          if [ "${WIN_ARM64_READY:-0}" = "1" ]; then
+            compare_pair x86_64-linux windows-arm64 --max-esr 1e-6 --min-snr-db 100.0
+            compare_pair linux-arm64 windows-arm64
+            compare_pair macos-arm64 windows-arm64
+          else
+            gap "windows-arm64-host-preflight-unsupported"
+          fi
 
           if [ "${WIN_X64_READY:-0}" = "1" ]; then
             # Pairwise intra-ISA x86-64-v3 comparison (strict bitwise identity)
             compare_pair x86_64-linux windows-x64
             compare_pair windows-x64 linux-arm64 --max-esr 1e-6 --min-snr-db 100.0
             compare_pair windows-x64 macos-arm64 --max-esr 1e-6 --min-snr-db 100.0
-            compare_pair windows-x64 windows-arm64 --max-esr 1e-6 --min-snr-db 100.0
+            if [ "${WIN_ARM64_READY:-0}" = "1" ]; then
+              compare_pair windows-x64 windows-arm64 --max-esr 1e-6 --min-snr-db 100.0
+            fi
           else
             gap "windows-x64-cpu-missing-x86-64-v3"
           fi
@@ -675,7 +690,9 @@ jobs:
             compare_pair x86_64-linux x86_64-avx512 --max-esr 1e-6 --min-snr-db 100.0
             compare_pair x86_64-avx512 linux-arm64 --max-esr 1e-6 --min-snr-db 100.0
             compare_pair x86_64-avx512 macos-arm64 --max-esr 1e-6 --min-snr-db 100.0
-            compare_pair x86_64-avx512 windows-arm64 --max-esr 1e-6 --min-snr-db 100.0
+            if [ "${WIN_ARM64_READY:-0}" = "1" ]; then
+              compare_pair x86_64-avx512 windows-arm64 --max-esr 1e-6 --min-snr-db 100.0
+            fi
             if [ "${WIN_X64_READY:-0}" = "1" ]; then
               compare_pair x86_64-avx512 windows-x64 --max-esr 1e-6 --min-snr-db 100.0
             fi

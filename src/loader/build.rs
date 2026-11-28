@@ -417,118 +417,55 @@ fn parse_model_bytes(
     match format {
         ModelFormat::Wav => {
             let wav_data = super::wav::parse_wav_ir(&bytes).map_err(|e| {
-                let code = e.error_code();
+                let load_err = LoadError::from(e);
+                let code = load_err.code();
                 error!(
                     "[Loader] Model build failed: file='{}', size={} bytes, code={:?} — \
                      invalid WAV impulse response (detail: {}).",
-                    source_label, file_size, code, e
+                    source_label, file_size, code, load_err
                 );
-                LoadError::from(e)
+                load_err
             })?;
             Ok(super::wav::wav_ir_to_model_data(wav_data))
         }
         ModelFormat::Namb => {
             let data = namb::parse_namb_typed(&bytes).map_err(|e| {
-                let code = match &e {
-                    namb::NambError::Truncated { .. } => NamErrorCode::NambTruncated,
-                    namb::NambError::InvalidMagic(_) => NamErrorCode::NambInvalidMagic,
-                    namb::NambError::InvalidVersion(_) => NamErrorCode::NambUnsupportedVersion,
-                    namb::NambError::WeightsOffsetOutOfBounds { .. }
-                    | namb::NambError::InvalidWeightsOffset { .. } => NamErrorCode::NambTruncated,
-                    namb::NambError::CrcMismatch { .. } => NamErrorCode::NambCrc32Mismatch,
-                    namb::NambError::CrcMissing { .. } | namb::NambError::CrcMissingV1 => {
-                        NamErrorCode::NambCrc32Missing
-                    }
-                    namb::NambError::WeightsTooLarge { .. } => NamErrorCode::ModelTooLarge,
-                    namb::NambError::NonFiniteWeight { .. } => NamErrorCode::NambNonFiniteWeight,
-                    namb::NambError::InvalidHeaderField { .. } => {
-                        NamErrorCode::NambInvalidHeaderField
-                    }
-                    namb::NambError::MetadataNotUtf8 { .. } | namb::NambError::MetadataJson(_) => {
-                        NamErrorCode::ModelBuildFailed
-                    }
-                };
-                // Structured failure diagnostic (path + size + code). The typed
-                // error payload travels in the returned `LoadError::Namb`.
+                let load_err = LoadError::from(e);
+                // Single source of truth: the code recorded in the LogBuffer is
+                // exactly the code exposed by the returned `LoadError`.
+                let code = load_err.code();
                 error!(
                     "[Loader] Model build failed: file='{}', size={} bytes, code={:?} — \
                      invalid \".namb\" file (detail: {}).",
-                    source_label, file_size, code, e
+                    source_label, file_size, code, load_err
                 );
-                LoadError::from(e)
+                load_err
             })?;
             Ok(data)
         }
         ModelFormat::Nam => {
             let json = String::from_utf8(bytes.into_owned()).map_err(|e| {
+                let load_err = LoadError::InvalidUtf8(e);
+                let code = load_err.code();
                 error!(
                     "[Loader] Model build failed: file='{}', size={} bytes, code={:?} — \
-                 file contains invalid UTF-8 (utf8_error: {}). Only UTF-8 encoded \
+                 file contains invalid UTF-8 (detail: {}). Only UTF-8 encoded \
                  .nam files are supported.",
-                    source_label,
-                    file_size,
-                    NamErrorCode::FileReadError,
-                    e
+                    source_label, file_size, code, load_err
                 );
-                LoadError::InvalidUtf8(e)
+                load_err
             })?;
             let data = nam_json::parse_nam_json(&json).map_err(|e| {
-                let code = match &e {
-                    nam_json::JsonError::InvalidEnvelope { .. } => {
-                        NamErrorCode::NamJsonInvalidEnvelope
-                    }
-                    nam_json::JsonError::WeightsExceedLimit { .. } => {
-                        NamErrorCode::NamJsonWeightsExceedLimit
-                    }
-                    nam_json::JsonError::TrainingTooLarge { .. } => {
-                        NamErrorCode::NamJsonTrainingTooLarge
-                    }
-                    nam_json::JsonError::TrainingTooDeep { .. } => {
-                        NamErrorCode::NamJsonTrainingTooDeep
-                    }
-                    nam_json::JsonError::SubmodelsExceedLimit { .. } => {
-                        NamErrorCode::NamJsonSubmodelsExceedLimit
-                    }
-                    nam_json::JsonError::SubmodelsTooDeep { .. } => {
-                        NamErrorCode::NamJsonSubmodelsTooDeep
-                    }
-                    nam_json::JsonError::JsonValueExceedsLimit { .. } => {
-                        NamErrorCode::NamJsonValueExceedsLimit
-                    }
-                    nam_json::JsonError::JsonValueTooDeep { .. } => {
-                        NamErrorCode::NamJsonValueTooDeep
-                    }
-                    nam_json::JsonError::SequentialChildrenExceedLimit { .. } => {
-                        NamErrorCode::SequentialChildrenExceedLimit
-                    }
-                    nam_json::JsonError::WeightNotFinite { .. } => {
-                        NamErrorCode::NamJsonWeightNotFinite
-                    }
-                    nam_json::JsonError::InvalidSampleRate { .. } => {
-                        NamErrorCode::NamJsonInvalidSampleRate
-                    }
-                    nam_json::JsonError::UnsupportedTopology { .. } => {
-                        NamErrorCode::NamJsonUnsupportedTopology
-                    }
-                    nam_json::JsonError::InvalidVersionFormat { .. } => {
-                        NamErrorCode::NamJsonInvalidVersionFormat
-                    }
-                    nam_json::JsonError::UnsupportedVersion { .. } => {
-                        NamErrorCode::NamJsonUnsupportedVersion
-                    }
-                    nam_json::JsonError::UnsupportedMultiChannel { .. } => {
-                        NamErrorCode::NamJsonUnsupportedMultiChannel
-                    }
-                    _ => NamErrorCode::NamJsonParseError,
-                };
-                // Structured failure diagnostic (path + size + code). The typed
-                // error payload travels in the returned `LoadError` variant.
-                error!(
-                    "[Loader] Model build failed: file='{}', size={} bytes, code={:?} — \
-                 error parsing model JSON (detail: {}).",
-                    source_label, file_size, code, e
-                );
-                match e {
+                let detail = e.to_string();
+                // Compatibility-first classification (v4.0.0 contract): the
+                // legacy `LoadError` unit/string variants and their `Display`
+                // messages are preserved verbatim. Consumers that match on
+                // `ModelTooLarge`, `NonFiniteWeights` or
+                // `UnsupportedArchitecture(_)` keep observing exactly those
+                // variants; the structured `JsonError` remains available from
+                // the raw parser API (`parse_nam_json`). R1.8 records the
+                // typed-source alternative as an explicit non-breaking GAP.
+                let load_err = match e {
                     nam_json::JsonError::InvalidEnvelope { .. } => LoadError::Json(e),
                     nam_json::JsonError::WeightsExceedLimit { .. }
                     | nam_json::JsonError::TrainingTooLarge { .. }
@@ -541,18 +478,27 @@ fn parse_model_bytes(
                     | nam_json::JsonError::TrainingTooDeep { .. }
                     | nam_json::JsonError::SubmodelsExceedLimit { .. }
                     | nam_json::JsonError::SequentialChildrenExceedLimit { .. } => {
-                        LoadError::UnsupportedArchitecture(e.to_string())
+                        LoadError::UnsupportedArchitecture(detail.clone())
+                    }
+                    // v4.0.0 dedicated payload shape (not `JsonError`'s
+                    // Display): "Invalid version format: {raw}".
+                    nam_json::JsonError::InvalidVersionFormat { ref raw } => {
+                        LoadError::UnsupportedArchitecture(format!("Invalid version format: {raw}"))
                     }
                     nam_json::JsonError::JsonValueTooDeep { .. } => LoadError::Json(e),
-                    nam_json::JsonError::InvalidVersionFormat { raw } => {
-                        LoadError::UnsupportedArchitecture(format!(
-                            "Invalid version format: {}",
-                            raw
-                        ))
-                    }
                     nam_json::JsonError::InvalidSampleRate { .. } => LoadError::Json(e),
                     nam_json::JsonError::Serde(_) => LoadError::Json(e),
-                }
+                };
+                // Single source of truth: the logged code is the code exposed
+                // by the returned `LoadError` (they used to diverge for size,
+                // topology and metadata classifications).
+                let code = load_err.code();
+                error!(
+                    "[Loader] Model build failed: file='{}', size={} bytes, code={:?} — \
+                 error parsing model JSON (detail: {}).",
+                    source_label, file_size, code, detail
+                );
+                load_err
             })?;
             Ok(data)
         }

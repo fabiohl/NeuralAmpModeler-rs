@@ -200,6 +200,13 @@ impl Default for LogBuffer {
 
 impl LogBuffer {
     /// Creates a new `LogBuffer` with the given capacity.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `capacity == 0`. A zero-capacity FIFO has no meaningful
+    /// retention semantics, so this is a documented constructor contract rather
+    /// than a recoverable error; changing it to `Result` would be a breaking
+    /// public API change.
     pub fn new(capacity: usize) -> Self {
         assert!(capacity > 0, "LogBuffer capacity must be > 0");
         Self {

@@ -263,3 +263,72 @@ fn failed_reload_invalidates_the_runtime_weight_layout_until_successful_load() {
     model.set_weights(&initial).unwrap();
     model.update_weights(&initial).unwrap();
 }
+
+#[test]
+fn runtime_updates_reject_film_topologies_without_mutating_state() {
+    use crate::models::a2::{FiLMConfig, FiLMLayer};
+
+    let mut model = make_model(5, 7, GatingMode::None, 2, 1);
+    let initial = weights(count(&model), 17);
+    model.set_weights(&initial).unwrap();
+    let next = weights(initial.len(), 42);
+    let before = stored_weights(&model);
+    let film = FiLMLayer::load(
+        FiLMConfig {
+            active: true,
+            shift: true,
+            groups: 1,
+        },
+        1,
+        model.layers[0].conv.out_ch(),
+        vec![0.1; model.layers[0].conv.out_ch() * 2],
+        vec![0.2; model.layers[0].conv.out_ch() * 2],
+    )
+    .unwrap();
+    model.layers[0].activation_pre_film = Some(film);
+    model.prepare_runtime_weight_layout();
+    assert_eq!(
+        model.runtime_weight_count(),
+        Err(A2WeightUpdateError::UnsupportedTopology)
+    );
+    assert_eq!(
+        model.update_weights(&next),
+        Err(A2WeightUpdateError::UnsupportedTopology)
+    );
+    assert_eq!(stored_weights(&model), before);
+    assert!(model.layers[0].activation_pre_film.is_some());
+}
+
+#[test]
+#[ignore = "long: probe do custo de validação/repacking do update de pesos A2"]
+fn runtime_update_cost_probe() {
+    use std::time::Instant;
+
+    const ITERS: u32 = 2_000;
+    for (ch, bn, gating, kernel) in [
+        (3usize, 3usize, GatingMode::None, 6usize),
+        (8, 8, GatingMode::None, 15),
+        (5, 7, GatingMode::None, 2),
+        (4, 3, GatingMode::Gated, 7),
+        (9, 5, GatingMode::Blended, 1),
+    ] {
+        let mut model = make_model(ch, bn, gating, kernel, 1);
+        let initial = weights(count(&model), 17);
+        let next = weights(initial.len(), 42);
+        model.set_weights(&initial).unwrap();
+        for _ in 0..64 {
+            model.update_weights(&initial).unwrap();
+        }
+        let start = Instant::now();
+        for _ in 0..ITERS {
+            model.update_weights(std::hint::black_box(&next)).unwrap();
+        }
+        let ns = start.elapsed().as_nanos() as f64 / f64::from(ITERS);
+        std::hint::black_box(&model);
+        println!(
+            "[MEASURED] A2 update ch={ch} bn={bn} gating={gating:?} kernel={kernel} \
+             weights={} cost={ns:.0} ns/call",
+            initial.len()
+        );
+    }
+}

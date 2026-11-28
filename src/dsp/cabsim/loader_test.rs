@@ -536,7 +536,6 @@ fn test_ir_resample_long_ir_chunking() {
 
 /// Regression: downsampling an IR longer than `MAX_RESAMP_BUF` overran the input buffer.
 #[test]
-#[ignore = "long: parse e verificação de todos os fixtures NAM"]
 fn test_ir_resample_long_ir_downsampling() {
     let rate_pairs: &[(u32, u32)] = &[(48000, 44100), (96000, 48000), (192000, 44100)];
     for &(input_rate, output_rate) in rate_pairs {

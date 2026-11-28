@@ -365,9 +365,26 @@ Dilated 1D convolution (`Conv1D`) accounts for ~45% of WaveNet inference time. T
 1. **Static WaveNet (`WaveNetLayer`): Single-Frame Strictly Preserved**
    * *Finding:* Dual-frame tiling requires doubling SIMD accumulators (from 4 YMM to 8 YMM per channel). On x86-64-v3, this creates severe register pressure, leading to stack spilling and port contention on shuffle/blend units (Port 5), causing a **~19% latency regression** (~92.6 µs $\to$ ~110 µs for CH=16).
    * *Invariant:* The static processing loop in `src/models/wavenet/layer.rs::process_block_internal` uses **Single-Frame processing exclusively**.
-2. **Dynamic WaveNet (`Conv1dDyn`): Dual-Frame Tiling Retained**
-   * *Finding:* `Conv1dDyn::process_block` uses runtime-dimensioned channel counts and dynamic tap pointers. Dual-frame tiling amortizes per-frame fixed overhead (tap-pointer array setup and prefetch dispatch) across frame pairs, yielding a **5% to 13% speedup** across CH=4, 8, and 16.
-   * *Invariant:* Dual-frame processing is retained as the primary loop in dynamic convolution (`chunks_exact_mut(2 * out_ch)`), falling back to single-frame only for odd frame remainders.
+2. **Dynamic WaveNet (`Conv1dDyn`): Dual-Frame Retained, Shape-Dependent**
+   * *Finding (Zen3 / AVX2, 64 frames, K=3, production bias+mixin, `conv1d_dyn_dual_vs_single`):* the tiling policy is shape-dependent and does **not** follow the static result. Single-frame wins on full-width shapes (CH=4 ≈ +17%, CH=8 ≈ +22%, CH=16 ≈ +6% at dilation 16); dual-frame wins on partial-width shapes, where it shares weight loads across the pair and amortizes the masked stores (CH=7 in an 8-lane block ≈ +11–16%, CH=12 in a 16-lane block ≈ +2%).
+   * *Model-level check:* the free-shape fixture (`wavenet_dyn_free.nam`, CH=7/4) is dominated by its CH=7 layers. Switching the whole `process_block` loop to single-frame regressed `RT_WaveNet_Dyn_Free` from a contemporaneous 18.64 µs control to 20.82 µs (**+11.7%**). Switching only full-width shapes (CH=4) produced no gain above noise (18.57 µs vs 18.64 µs control), so both candidates were reverted.
+   * *Invariant:* Dual-frame processing is retained as the primary loop in dynamic convolution (`chunks_exact_mut(2 * out_ch)`), falling back to single-frame only for odd frame remainders. Any future per-shape routing must be re-measured at model level, not only in the microbench, and must cover partial widths.
+
+### Runtime ISA Dispatch Cost (FFT and pipeline)
+
+The default production build (`avx512` feature disabled) resolves every `dispatch_simd!` call statically to `Avx2Math` (`src/math/common/mod.rs`), with no atomic load or branch. The FFT butterfly loop still contains one macro invocation per block per stage — 15, 63 and 255 invocations for N=128, 512 and 2048 respectively — but on AVX2 those are direct calls to the same monomorphized kernel, so they add no runtime dispatch cost. AVX-512 builds replace each invocation with an `effective_instruction_set()` load and a match; hoisting that selection is only acceptable after native AVX-512 measurement, which the current reference host cannot provide (GAP).
+
+Local RFFT full-transform medians on the same core (f32, AVX2):
+
+| N    | Forward   | Inverse   |
+|:---- |:--------- |:--------- |
+| 64   | 226.6 ns  | 195.6 ns  |
+| 128  | 424.1 ns  | 367.2 ns  |
+| 256  | 850.7 ns  | 733.2 ns  |
+| 512  | 1.708 µs  | 1.493 µs  |
+| 1024 | 3.510 µs  | 3.031 µs  |
+
+The end-to-end consumers on the same run were `RT_Linear_Fft_RF2048` = 5.14 µs, `RT_DSP_CabSim_IR_Medium` = 83.45 µs per 64-block batch (1.30 µs/block), and `RT_DSP_Pipeline_Base_NoOS` = 44.64 µs. No dispatch change was accepted: the AVX2 path has no measurable dispatch overhead, and the AVX-512 path is unmeasurable here.
 
 ### WaveNet Hot-Path Cycle Budget & Kernel Fusion
 
@@ -595,6 +612,56 @@ The cabinet simulator uses Uniform-Partitioned Overlap-Save (UPOLS) convolution:
 * Partition FFTs are pre-computed during initialization.
 * `ConvEngine::process()` executes with **zero heap allocations**, operating entirely on pre-allocated aligned buffers.
 * Median processing latency for a 2048-tap impulse response (32 partitions of 64 samples) is **~1.22 µs per block** (~0.09% of RT budget).
+
+### Mono and Cab-Sim Data Traffic (S8)
+
+Measured on the reference host (Ryzen 7 5700U, Zen2, AVX2+FMA, isolated core 8,
+`performance` governor, Rust 1.100.1, 64-sample blocks unless stated) with
+`cargo bench --bench s8_bench`. Values are Criterion medians; two consecutive
+runs of the mono pipeline are reported to expose the ~3–5% thermal run-to-run
+drift documented in §4.
+
+| Scenario (64 samples)            | Median        | Notes                                                |
+|:-------------------------------- |:------------- |:---------------------------------------------------- |
+| Pipeline mono, no cab            | 44.4–45.9 µs  | Mono detection locks one model (`process_mono`).     |
+| Pipeline mono, cab 2048 taps     | 47.6–49.3 µs  | +3.25–3.39 µs in situ.                               |
+| Pipeline stereo, no cab          | 94.0 µs       | Distinct L/R content forces two models.              |
+| Pipeline stereo, cab 2048 taps   | 97.6 µs       | +3.52 µs over stereo/no-cab.                         |
+| Bridge write mono / stereo, 64   | 17.4 / 17.6 ns| Indistinguishable; mono adds one 256 B `L→R` copy.    |
+| Bridge write mono / stereo, 256  | 28.4 / 28.5 ns| Same conclusion at larger blocks.                    |
+| Cab adapter−raw engine, IR 2048, p=64 | +12.8 ns | +0.95% over the raw `ConvEngine::process`.           |
+| Cab adapter−raw engine, IR 2048, p=256| +228 ns  | +6.3%, dominated by the FIFO accumulate/deliver and overlap-save shift. |
+| Cab tail, 512 samples, IR 2048, p=64  | 10.48 µs | Eight partitions; inherent FDL MAC cost.             |
+| Cab tail, 512 samples, IR 16384, p=64 | 34.39 µs | 128 partitions.                                      |
+
+Data-traffic accounting per 64-sample block: the output-stage mono mirror is
+256 B, the bridge mono delivery duplicates 256 B, and one cab partition moves
+about 1.25 KiB of linear copies (accumulate 256 B, engine input 256 B,
+overlap-save shift 256 B, inverse-FFT output 256 B, delivery 256 B) plus the
+frequency-domain working set. The measured bridge and adapter deltas are at or
+below timer resolution relative to the model cost, so the proposed
+mono-header/ownership protocol changes (M-PERF-05) are **rejected**: they would
+change the bridge contract or move the overlap-save ring into `ConvEngine` for
+no measurable gain. The in-situ cab cost (~3.3 µs) is ~2.4× the isolated
+`ConvEngine::process` median because the full chain evicts the 16 KiB
+frequency-domain working set between blocks; this is a cache effect, not a copy
+pathology, and no copy removal addresses it.
+
+#### S8 micro-optimisation audit (T8.2)
+
+| Candidate                         | Measurement                                             | Decision |
+|:--------------------------------- |:------------------------------------------------------- |:-------- |
+| `advance_frames` runtime division | 4.77 ns/call; division alone 4.42 ns vs 0.48 ns cached. BossWN-standard has 20 layers → ≤95 ns/block (~0.21% of 45.3 µs). | Not applied: a cached-frames field breaks the public struct, and the ceiling is below noise. |
+| A2 output pre-fill                | Removing the fill when `head_conv` is `Some`: +2.8% (worse, within noise) on `wavenet_a2_full.nam`. Pre-dirtied output is fully overwritten (existing dirty-memory tests). | Keep the fill; the empty-layer return must still zero the output. |
+| Per-frame slicing bounds checks   | Static `layer.rs` and dynamic arrays already use `chunks_exact_mut`/`MirroredBuffer` windows. | No residual candidate. |
+| LSTM dynamic `_mm_prefetch`       | Removing the state prefetch: +1.0% (slower, within noise) on `lstm_dyn_test.nam`. | Retained. |
+| LSTM `is_hf` per-sample branch    | The branch exists only in the scalar reference fallback; production dispatches to the AVX2 fused-gate kernel. | Not a production hot-path candidate. |
+| LSTM head Kahan4 → SIMD pairwise  | Head dot 10.1 ns (H=16) / 19.3 ns (H=32), ~10% of the per-frame `RT_LSTM_1x16` cost. Pairwise reduction changes accumulation order. | Deferred: needs long-horizon/adversarial f64 evidence; gain limited to the LSTM SKU. |
+| `ParamSmoother` closed form       | 68.5 ns per 64 ticks (~1.07 ns/tick) in the engine crate; the engine pipeline does not call it (hosts do). | Deferred to X-04/S9: closed form changes f32 rounding and requires host integration. |
+
+No product code was changed by S8. GAPs: no native AVX-512 host, no hardware
+performance counters (`perf_event_paranoid=4`), and `tests-long.sh` remains
+operator-only.
 
 ### Lock-Free SPSC & Multi-Tier GC Cascade (`spsc_swap_bench`)
 

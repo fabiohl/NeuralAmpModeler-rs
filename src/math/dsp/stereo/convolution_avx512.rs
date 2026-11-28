@@ -8,7 +8,7 @@
 //! compared to the AVX2 path.
 
 // Architecture-specific AVX-512 convolution helpers and parameter lists.
-#![allow(unsafe_op_in_unsafe_fn, clippy::too_many_arguments)]
+#![allow(clippy::too_many_arguments)]
 
 use crate::impl_convolve_mono;
 use crate::impl_convolve_mono_dual;

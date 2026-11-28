@@ -31,6 +31,19 @@
 //! 8..12 over the same taps. Both order per-lane accumulation identically
 //! (same tap order, same unroll/tree reduction), so the 12 useful lanes are
 //! bit-equal — asserted once in setup below.
+//!
+//! ## `conv1d_dyn_dual_vs_single` — dynamic Conv1D tiling policy
+//!
+//! Compares `Conv1dDyn::process_single_frame` against the dual-frame kernel
+//! (`process_dual_frame`, the current `process_block` main loop) for the
+//! catalog and free-shape geometries, with production bias+mixin semantics.
+//! The dynamic path must be evaluated here rather than extrapolated from the
+//! static ~19% dual-frame regression: the result is shape-dependent (see
+//! docs/benchmarks.md §"Temporal Tiling (Dual-Frame) on Conv1D").
+//!
+//! ```sh
+//! taskset -c <isolated-cpu> cargo bench --bench conv1d_hotpath_bench -- conv1d_dyn_dual_vs_single
+//! ```
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use neural_amp_modeler_rs::math::common::{AlignedVec, Avx2Math, SimdMath};
@@ -213,71 +226,86 @@ fn bench_ch12_lane_route(c: &mut Criterion) {
     group.finish();
 }
 
+/// Compares the two dynamic Conv1D main-loop policies per channel shape and
+/// dilation: `single_frame` (one frame per kernel call) against `dual_frame`
+/// (two frames per call, as `Conv1dDyn::process_block` currently loops).
+///
+/// Each iteration processes the same 64 frames, so the timings are directly
+/// comparable. Shapes mirror the catalog fixtures and the free-shape
+/// `wavenet_dyn_free.nam` model (CH=7/4), which is what makes this bench the
+/// evidence for the dynamic-tiling decision instead of extrapolating the
+/// static Conv1D result.
 fn bench_conv1d_dyn_dual_vs_single(c: &mut Criterion) {
     let mut group = c.benchmark_group("conv1d_dyn_dual_vs_single");
     group.warm_up_time(Duration::from_millis(500));
     group.measurement_time(Duration::from_secs(2));
 
-    for &ch in &[4usize, 8, 16] {
-        let raw = match ch {
-            4 => interleaved_weights::<4>(ch, ch, K),
-            8 => interleaved_weights::<8>(ch, ch, K),
-            16 => interleaved_weights::<16>(ch, ch, K),
-            _ => unreachable!(),
-        };
-        let weights = AlignedVec::from_vec(raw).expect("bench weight allocation failed");
-        let bias = AlignedVec::from_vec(vec![0.0; ch]).expect("bench bias allocation failed");
-        let dilation = 1;
-        let conv = Conv1dDyn::try_from_parts(weights, bias, false, dilation, ch, ch, K, ch)
-            .expect("Conv1dDyn creation failed");
+    // (channels, interleave width): 4/8 use their native width, 7 is padded to
+    // 8, and 12/16 use the 16-wide path selected by the loader.
+    for &(ch, iw) in &[(4usize, 4usize), (7, 8), (8, 8), (12, 16), (16, 16)] {
+        for &dilation in &[1usize, 4, 16] {
+            let raw = match iw {
+                4 => interleaved_weights::<4>(ch, ch, K),
+                8 => interleaved_weights::<8>(ch, ch, K),
+                16 => interleaved_weights::<16>(ch, ch, K),
+                _ => unreachable!(),
+            };
+            let weights = AlignedVec::from_vec(raw).expect("bench weight allocation failed");
+            let bias = AlignedVec::from_vec(vec![0.01; ch]).expect("bench bias allocation failed");
+            let conv = Conv1dDyn::try_from_parts(weights, bias, true, dilation, ch, ch, K, iw)
+                .expect("Conv1dDyn creation failed");
 
-        let buf_frames = dilation * (K - 1) + N_FRAMES + 16;
-        let input: Vec<f32> = (0..buf_frames * ch)
-            .map(|i| (i as f32 * 0.07 + 0.3).sin() * 0.8)
-            .collect();
-        let start_frame = dilation * (K - 1);
+            let buf_frames = dilation * (K - 1) + N_FRAMES + 16;
+            let input: Vec<f32> = (0..buf_frames * ch)
+                .map(|i| (i as f32 * 0.07 + 0.3).sin() * 0.8)
+                .collect();
+            let mixin: Vec<f32> = (0..N_FRAMES * ch)
+                .map(|i| (i as f32 * 0.03 + 0.1).cos() * 0.1)
+                .collect();
+            let start_frame = dilation * (K - 1);
 
-        group.bench_function(format!("single_frame_ch{ch}"), |b| {
-            b.iter(|| {
-                let mut out = [0.0f32; 16];
-                for f in 0..N_FRAMES {
-                    // SAFETY: `input` spans `buf_frames * ch` f32s and
-                    // `start_frame >= dilation * (K - 1)`.
-                    unsafe {
-                        conv.process_single_frame::<Avx2Math>(
-                            &input,
-                            &mut out[..ch],
-                            start_frame + f,
-                            None,
-                        );
+            group.bench_function(format!("single_frame_ch{ch}_dil{dilation}"), |b| {
+                b.iter(|| {
+                    let mut out = [0.0f32; 16];
+                    for f in 0..N_FRAMES {
+                        // SAFETY: `input` spans `buf_frames * ch` f32s and
+                        // `start_frame >= dilation * (K - 1)`.
+                        unsafe {
+                            conv.process_single_frame::<Avx2Math>(
+                                &input,
+                                &mut out[..ch],
+                                start_frame + f,
+                                Some(&mixin[f * ch..(f + 1) * ch]),
+                            );
+                        }
                     }
-                }
-                black_box(out)
-            })
-        });
+                    black_box(out)
+                })
+            });
 
-        group.bench_function(format!("dual_frame_ch{ch}"), |b| {
-            b.iter(|| {
-                let mut out_f0 = [0.0f32; 16];
-                let mut out_f1 = [0.0f32; 16];
-                for f in 0..(N_FRAMES / 2) {
-                    // SAFETY: `input` spans `buf_frames * ch` f32s and
-                    // `start_frame + 2 * f + 1` is within causal receptive field and buffer bounds.
-                    unsafe {
-                        conv.process_dual_frame::<Avx2Math>(
-                            &input,
-                            &mut out_f0[..ch],
-                            &mut out_f1[..ch],
-                            start_frame + 2 * f,
-                            start_frame + 2 * f + 1,
-                            None,
-                            None,
-                        );
+            group.bench_function(format!("dual_frame_ch{ch}_dil{dilation}"), |b| {
+                b.iter(|| {
+                    let mut out_f0 = [0.0f32; 16];
+                    let mut out_f1 = [0.0f32; 16];
+                    for f in 0..(N_FRAMES / 2) {
+                        // SAFETY: `input` spans `buf_frames * ch` f32s and
+                        // `start_frame + 2 * f + 1` is within causal receptive field and buffer bounds.
+                        unsafe {
+                            conv.process_dual_frame::<Avx2Math>(
+                                &input,
+                                &mut out_f0[..ch],
+                                &mut out_f1[..ch],
+                                start_frame + 2 * f,
+                                start_frame + 2 * f + 1,
+                                Some(&mixin[2 * f * ch..(2 * f + 1) * ch]),
+                                Some(&mixin[(2 * f + 1) * ch..(2 * f + 2) * ch]),
+                            );
+                        }
                     }
-                }
-                black_box((out_f0, out_f1))
-            })
-        });
+                    black_box((out_f0, out_f1))
+                })
+            });
+        }
     }
     group.finish();
 }

@@ -166,8 +166,9 @@ impl SwapBudget {
 /// Wraps exactly the state [`gc_cascade`] already consumes (SPSC producer,
 /// 16-slot parking lot, overflow buffer, status flags) and adds the optional
 /// parking-lot dirty latch: stored with `Release` before each cascade so
-/// off-RT housekeeping can skip an empty parking-lot sweep. Adds zero
-/// synchronization of its own.
+/// off-RT housekeeping can skip a clean-latch sweep. The latch is conservative
+/// and does not transfer ownership or make concurrent access to the non-atomic
+/// parking lot safe; the RT side remains its sole owner until producers stop.
 pub struct GcSink<'a> {
     /// GC producer: retired items are dropped by the off-RT drain.
     pub producer: &'a mut rtrb::Producer<GcItem>,

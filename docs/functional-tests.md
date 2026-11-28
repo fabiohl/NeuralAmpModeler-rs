@@ -90,8 +90,9 @@ Before executing manual stress scenarios, micro-benchmarks, or pre-release runne
 - [ ] **2A.1 Block-Size Invariance:** Processing identical audio split into `[32 + 32]` samples vs. a single `[64]` sample block yields equivalent output ($< 10^{-7}$ maximum difference). *Verifies:* Accurate receptive-field buffer tracking across block boundaries.
 - [ ] **2A.2 Prewarm Determinism:** After `prewarm(n)`, the initial output block is deterministic and free of initialization transients exceeding noise gate thresholds.
 - [ ] **2A.3 Reset Idempotency:** Executing `reset()` → `process()` → Output A, followed by `reset()` → `process()` → Output B on the same input produces $A = B$.
-- [ ] **2A.4 Container Crossfade:** In a `SlimmableContainer`, trigger a `Full → Lite` profile swap during active audio processing. *Expected:* Smooth 32 ms equal-power crossfade without audible clicks.
+- [ ] **2A.4 Container Crossfade:** In a `SlimmableContainer`, trigger a `Full → Lite` profile swap during active audio processing. *Expected:* The target's split prewarm converges with a per-block budget (output stays on the previous member), then a smooth 32 ms linear crossfade without audible clicks; return to the previous member on a following swap.
 - [ ] **2A.5 Lock-Free SPSC Model Hot-Swap:** Push a new model via the lock-free SPSC channel while the audio thread runs. *Expected:* Model swap occurs without priority inversion or audio dropouts; the old model is dropped off-RT by the GC thread.
+- [ ] **2A.6 A2 Runtime Weight Update and FiLM Override:** On a loaded dense A2 model, apply `update_weights` at a block boundary, then install a precomputed FiLM override on a model with activation-pre FiLM. *Expected:* rejected streams leave coefficients and history untouched; an accepted update keeps history/cursors and is audible immediately (no smoothing); the FiLM override is block-constant, resumes the projection on request, and `update_weights` rejects FiLM topologies with `UnsupportedTopology`.
 
 #### Domain 2B: DSP Pipeline Stages (Gate, Resampler, CabSim)
 
@@ -100,6 +101,7 @@ Before executing manual stress scenarios, micro-benchmarks, or pre-release runne
 - [ ] **2B.3 Native Rate Passthrough:** When host sample rate matches model native rate (e.g., 48 kHz $\to$ 48 kHz), `NamResampler` enters zero-overhead passthrough.
 - [ ] **2B.4 Multi-Rate Resampling:** Verify operation across 44.1, 48, 88.2, 96, and 192 kHz. *Expected:* High SNR preservation and clean phase response.
 - [ ] **2B.5 CabSim Impulse Response Engine:** Load a standard `.wav` IR into `ConvEngine`. Process audio and verify convolution. Clear the IR and verify clean bypass.
+- [ ] **2B.6 Mono Output Mirroring:** Process an identical L/R signal on the normal and streaming entries, with and without cab-sim, non-unity output gain, dither, a closed gate and a stereo→mono transition. *Expected:* the final returned frames satisfy `resamp_out_r == resamp_out_l`, and the monitoring bridge L/R match the same delivered samples; `R` never contains pre-gain, pre-gate or cab-only audio.
 
 #### Domain 2C: RT-Safety & Allocation Watchdog
 
@@ -107,6 +109,8 @@ Before executing manual stress scenarios, micro-benchmarks, or pre-release runne
 - [ ] **2C.2 Denormal Protection (FTZ/DAZ):** Process low-level decaying signals (below $-120\text{ dBFS}$). *Expected:* FTZ/DAZ flags prevent denormal performance penalties.
 - [ ] **2C.3 Robustness Against Extreme Floats:** Feed out-of-range ($\pm 100.0$), NaN, or $\pm\infty$ float buffers to `process()`. *Expected:* Soft-clipping/sanitization occurs; zero panics or undefined behavior.
 - [ ] **2C.4 Memory Leak Audit:** Repeatedly load and unload 100 models in a loop off-RT. *Expected:* Process RSS stabilizes; zero leaked file descriptors or memory handles.
+- [ ] **2C.5 RT Stack Footprint During Crossfade:** Trigger a `Full ↔ Reduced` WaveNet crossfade at 4× oversampling while sampling the callback stack high-water on the target host. *Expected:* the two `buffer_start` snapshots stay in `AdaptiveCompute`, the callback frame stays below the host RT stack contract, and no allocation occurs. If no stack sampler is available, record a GAP; do not infer a value from a different host.
+- [ ] **2C.6 Cycle-Clock Calibration and Fallback:** Start the host with TSC calibration enabled and, if possible, with a forced uncalibrated build. *Expected:* the calibrated path performs no syscall in the callback; the uncalibrated path uses a monotonic `Instant` fallback and stays continuous across a late calibration flip.
 
 ---
 

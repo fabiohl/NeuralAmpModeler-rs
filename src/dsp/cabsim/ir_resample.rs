@@ -26,8 +26,17 @@ pub(crate) fn resample(input: &[f32], input_rate: u32, output_rate: u32) -> io::
     // Bounded by both buffers: when downsampling, the output bound exceeds `in_buf`.
     let max_input_chunk =
         NamResampler::max_input_samples_checked(MAX_RESAMP_BUF, input_rate, output_rate)
-            .unwrap_or(0)
+            .ok_or_else(|| {
+                io::Error::other(format!(
+                    "IR resample invalid chunk bound ({input_rate} Hz → {output_rate} Hz)"
+                ))
+            })?
             .min(MAX_RESAMP_BUF);
+    if max_input_chunk == 0 {
+        return Err(io::Error::other(format!(
+            "IR resample computed zero chunk size ({input_rate} Hz → {output_rate} Hz)"
+        )));
+    }
 
     let est_len =
         ((input.len() as f64 * output_rate as f64 / input_rate as f64).ceil() as usize) + 256;

@@ -4405,20 +4405,47 @@ fn catalog_preflight() {
 
     let mut missing_required = Vec::new();
     let mut missing_optional = Vec::new();
+    let mut seen_required = std::collections::HashSet::new();
+    let mut seen_optional = std::collections::HashSet::new();
+
+    // `FIXTURE_CATALOG` reports bare filenames while `validate_v2_catalog`
+    // reports repo-relative paths for the same underlying fixture files.
+    fn push_unique<'a>(
+        target: &mut Vec<&'a str>,
+        seen: &mut std::collections::HashSet<String>,
+        name: &'a str,
+    ) {
+        let key = std::path::Path::new(name)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or(name)
+            .to_owned();
+        if seen.insert(key) {
+            target.push(name);
+        }
+    }
 
     for entry in FIXTURE_CATALOG.entries() {
         if entry.name.ends_with(".bin") {
             let status = FIXTURE_CATALOG.check_golden(entry.name);
             match status {
-                FixtureStatus::MissingRequired => missing_required.push(entry.name),
-                FixtureStatus::MissingOptional => missing_optional.push(entry.name),
+                FixtureStatus::MissingRequired => {
+                    push_unique(&mut missing_required, &mut seen_required, entry.name);
+                }
+                FixtureStatus::MissingOptional => {
+                    push_unique(&mut missing_optional, &mut seen_optional, entry.name);
+                }
                 _ => {}
             }
         } else {
             let status = FIXTURE_CATALOG.check(entry.name);
             match status {
-                FixtureStatus::MissingRequired => missing_required.push(entry.name),
-                FixtureStatus::MissingOptional => missing_optional.push(entry.name),
+                FixtureStatus::MissingRequired => {
+                    push_unique(&mut missing_required, &mut seen_required, entry.name);
+                }
+                FixtureStatus::MissingOptional => {
+                    push_unique(&mut missing_optional, &mut seen_optional, entry.name);
+                }
                 _ => {}
             }
         }
@@ -4428,15 +4455,23 @@ fn catalog_preflight() {
     let v1_status = neural_amp_modeler_rs::testing::catalog::validate_v1_goldens()
         .unwrap_or_else(|e| panic!("catalog_preflight: V1 golden catalog validation failed: {e}"));
     println!("\n{}", v1_status.receipt_v1());
-    missing_required.extend(v1_status.missing_required.iter().map(String::as_str));
-    missing_optional.extend(v1_status.missing_optional.iter().map(String::as_str));
+    for name in &v1_status.missing_required {
+        push_unique(&mut missing_required, &mut seen_required, name.as_str());
+    }
+    for name in &v1_status.missing_optional {
+        push_unique(&mut missing_optional, &mut seen_optional, name.as_str());
+    }
 
     // V2 golden catalog validation — Rust single source of truth.
     let v2_status = neural_amp_modeler_rs::testing::catalog::validate_v2_catalog()
         .unwrap_or_else(|e| panic!("catalog_preflight: V2 catalog validation failed: {e}"));
     println!("\n{}", v2_status.receipt());
-    missing_required.extend(v2_status.missing_required.iter().map(String::as_str));
-    missing_optional.extend(v2_status.missing_optional.iter().map(String::as_str));
+    for name in &v2_status.missing_required {
+        push_unique(&mut missing_required, &mut seen_required, name.as_str());
+    }
+    for name in &v2_status.missing_optional {
+        push_unique(&mut missing_optional, &mut seen_optional, name.as_str());
+    }
 
     if !missing_optional.is_empty() {
         println!();

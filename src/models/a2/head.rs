@@ -1,12 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 
-// The SIMD kernels and scalar fallback below perform unsafe operations directly
-// inside `#[target_feature]`/raw-pointer functions whose bodies already contain
-// explicit `unsafe {}` blocks; `unsafe_op_in_unsafe_fn` documents that the
-// intrinsic calls are intentional, not accidental double-wrapping.
-#![allow(unsafe_op_in_unsafe_fn)]
-
 //! A2 Head convolution (k=16, bias, head_scale).
 //!
 //! Implements the head rechannel convolution from `a2_fast.cpp:722-743`:
@@ -126,7 +120,9 @@ impl A2HeadConv {
         if self.kernel_size == Self::HEAD_KERNEL_SIZE {
             match self.num_channels {
                 8 => {
-                    // SAFETY: x86-64-v3 guarantees AVX2+FMA.
+                    // SAFETY: the x86-64-v3 build target requires a compatible
+                    // runtime CPU (AVX2+FMA); this wrapper does not CPUID-check.
+                    // The aarch64 build maps this kernel to baseline NEON.
                     unsafe {
                         head_process_ch8_avx2(
                             &self.head_w,
@@ -142,7 +138,9 @@ impl A2HeadConv {
                     return;
                 }
                 3 => {
-                    // SAFETY: x86-64-v3 guarantees FMA.
+                    // SAFETY: x86-64-v3 requires FMA with baseline SSE; the
+                    // wrapper assumes a compatible runtime CPU and does no
+                    // CPUID check. aarch64 maps this kernel to baseline NEON.
                     unsafe {
                         head_process_ch3_sse(
                             &self.head_w,
@@ -210,7 +208,9 @@ impl A2HeadConv {
 /// adds `head_b`, and multiplies by `head_scale`.
 ///
 /// # Safety
-/// - Requires AVX2+FMA (`target_feature`).
+/// - Requires AVX2+FMA support on x86, or baseline NEON on aarch64. The project
+///   targets x86-64-v3; the caller must run on a compatible CPU, as
+///   `#[target_feature]` does not check CPU support at runtime.
 /// - `head_w` must have at least `K * 8` elements.
 /// - `head_history` must have `(ring_mask + 1) * 8` elements.
 /// - `output` must have at least `num_frames` elements.
@@ -245,29 +245,47 @@ pub unsafe fn head_process_ch8_avx2(
         let col_base_f = base.wrapping_add(f);
 
         for t in 0..k {
-            let w_v = _mm256_loadu_ps(head_w.as_ptr().add(t * 8));
+            // SAFETY: `t < k` and the contract requires `head_w.len() >= k * 8`,
+            // so the 8-f32 unaligned load at `t * 8` is in bounds. The four
+            // history loads index `colN * 8` where `colN = ... & ring_mask`, and
+            // the contract guarantees `head_history.len() >= (ring_mask + 1) * 8`.
+            // All slices are initialized f32; `loadu` does not require alignment.
+            // ISA: caller must provide x86-64-v3 (AVX2+FMA) or aarch64 NEON;
+            // `target_feature` is not a runtime CPU check.
+            unsafe {
+                let w_v = _mm256_loadu_ps(head_w.as_ptr().add(t * 8));
 
-            let col0 = col_base_f.wrapping_sub(k - 1 - t) & ring_mask;
-            let h0 = _mm256_loadu_ps(head_history.as_ptr().add(col0 * 8));
-            a0 = _mm256_fmadd_ps(w_v, h0, a0);
+                let col0 = col_base_f.wrapping_sub(k - 1 - t) & ring_mask;
+                let h0 = _mm256_loadu_ps(head_history.as_ptr().add(col0 * 8));
+                a0 = _mm256_fmadd_ps(w_v, h0, a0);
 
-            let col1 = col_base_f.wrapping_add(1).wrapping_sub(k - 1 - t) & ring_mask;
-            let h1 = _mm256_loadu_ps(head_history.as_ptr().add(col1 * 8));
-            a1 = _mm256_fmadd_ps(w_v, h1, a1);
+                let col1 = col_base_f.wrapping_add(1).wrapping_sub(k - 1 - t) & ring_mask;
+                let h1 = _mm256_loadu_ps(head_history.as_ptr().add(col1 * 8));
+                a1 = _mm256_fmadd_ps(w_v, h1, a1);
 
-            let col2 = col_base_f.wrapping_add(2).wrapping_sub(k - 1 - t) & ring_mask;
-            let h2 = _mm256_loadu_ps(head_history.as_ptr().add(col2 * 8));
-            a2 = _mm256_fmadd_ps(w_v, h2, a2);
+                let col2 = col_base_f.wrapping_add(2).wrapping_sub(k - 1 - t) & ring_mask;
+                let h2 = _mm256_loadu_ps(head_history.as_ptr().add(col2 * 8));
+                a2 = _mm256_fmadd_ps(w_v, h2, a2);
 
-            let col3 = col_base_f.wrapping_add(3).wrapping_sub(k - 1 - t) & ring_mask;
-            let h3 = _mm256_loadu_ps(head_history.as_ptr().add(col3 * 8));
-            a3 = _mm256_fmadd_ps(w_v, h3, a3);
+                let col3 = col_base_f.wrapping_add(3).wrapping_sub(k - 1 - t) & ring_mask;
+                let h3 = _mm256_loadu_ps(head_history.as_ptr().add(col3 * 8));
+                a3 = _mm256_fmadd_ps(w_v, h3, a3);
+            }
         }
 
-        output[f] = (hsum_avx2(a0) + head_b) * head_scale;
-        output[f + 1] = (hsum_avx2(a1) + head_b) * head_scale;
-        output[f + 2] = (hsum_avx2(a2) + head_b) * head_scale;
-        output[f + 3] = (hsum_avx2(a3) + head_b) * head_scale;
+        // SAFETY: `hsum_avx2` reduces only a register and has no memory access.
+        // ISA: caller must provide x86-64-v3 (AVX2) or aarch64 NEON;
+        // `#[target_feature]` does not itself check CPU support at runtime.
+        output[f] = (unsafe { hsum_avx2(a0) } + head_b) * head_scale;
+        // SAFETY: `hsum_avx2` reduces only a register and has no memory access;
+        // ISA: caller must provide x86-64-v3 (AVX2) or aarch64 NEON.
+        output[f + 1] = (unsafe { hsum_avx2(a1) } + head_b) * head_scale;
+        // SAFETY: `hsum_avx2` reduces only a register and has no memory access;
+        // ISA: caller must provide x86-64-v3 (AVX2) or aarch64 NEON.
+        output[f + 2] = (unsafe { hsum_avx2(a2) } + head_b) * head_scale;
+        // SAFETY: `hsum_avx2` reduces only a register and has no memory access;
+        // ISA: caller must provide x86-64-v3 (AVX2) or aarch64 NEON.
+        output[f + 3] = (unsafe { hsum_avx2(a3) } + head_b) * head_scale;
     }
 
     // Scalar tail for remaining frames (< T)
@@ -300,7 +318,9 @@ pub unsafe fn head_process_ch8_avx2(
 /// followed by `(y + head_b) * head_scale`.
 ///
 /// # Safety
-/// - Requires SSE+FMA (`target_feature`).
+/// - On x86, requires SSE (x86-64 baseline) and FMA (x86-64-v3 CPU); on
+///   aarch64 this kernel maps to baseline NEON. The caller must provide the
+///   compatible CPU; `#[target_feature]` does not check CPU support.
 /// - `head_w` must have at least `K * 3` elements.
 /// - `head_history` must have `(ring_mask + 1) * 3` elements.
 /// - `output` must have at least `num_frames` elements.
@@ -335,18 +355,25 @@ pub unsafe fn head_process_ch3_sse(
             let src_off = col * 3;
             let w_off = t * 3;
 
-            let w_v = _mm_setr_ps(
-                *w_ptr.add(w_off),
-                *w_ptr.add(w_off + 1),
-                *w_ptr.add(w_off + 2),
-                0.0,
-            );
-            let h_v = _mm_setr_ps(
-                *h_ptr.add(src_off),
-                *h_ptr.add(src_off + 1),
-                *h_ptr.add(src_off + 2),
-                0.0,
-            );
+            // SAFETY: `t < k` (so `w_off + 2 < k * 3`) and the contract requires
+            // `head_w.len() >= k * 3`; `col <= ring_mask` and the contract
+            // requires `head_history.len() >= (ring_mask + 1) * 3`, so
+            // `src_off + 2` is in bounds. All reads are initialized f32. ISA:
+            // x86 callers must support FMA (x86-64-v3 baseline); aarch64 uses
+            // baseline NEON.
+            let (w0, w1, w2, h0, h1, h2) = unsafe {
+                (
+                    *w_ptr.add(w_off),
+                    *w_ptr.add(w_off + 1),
+                    *w_ptr.add(w_off + 2),
+                    *h_ptr.add(src_off),
+                    *h_ptr.add(src_off + 1),
+                    *h_ptr.add(src_off + 2),
+                )
+            };
+
+            let w_v = _mm_setr_ps(w0, w1, w2, 0.0);
+            let h_v = _mm_setr_ps(h0, h1, h2, 0.0);
 
             acc = _mm_fmadd_ps(w_v, h_v, acc);
         }

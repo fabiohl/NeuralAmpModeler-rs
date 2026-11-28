@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Fábio Henrique de Lima Silva (fhl.bsb@gmail.com) All rights reserved.
 // Specialized GEMM micro-kernels utilize unsafe SIMD intrinsics and parameter lists.
-#![allow(unsafe_op_in_unsafe_fn, clippy::missing_safety_doc)]
+#![allow(clippy::missing_safety_doc)]
 
 //! Dot Product 4x f32 — AVX2/FMA kernel (f32 native weights).
 //!
@@ -209,7 +209,11 @@ pub unsafe fn dot_product_4x_f32_accumulate_avx2(
 ) -> [f32; 4] {
     let len = state.len().min(weights.len());
     debug_assert!(weights.len() >= len);
-    let mut acc0 = _mm_loadu_ps(init.as_ptr());
+    // SAFETY: `init` is a `&[f32; 4]`, so the 4-f32 unaligned load is in
+    // bounds and reads initialized values.
+    // ISA: x86 callers must provide a CPU compatible with x86-64-v3 (AVX2+FMA);
+    // aarch64 uses baseline NEON. `#[target_feature]` itself checks no CPU.
+    let mut acc0 = unsafe { _mm_loadu_ps(init.as_ptr()) };
     let mut acc1 = _mm_setzero_ps();
     let mut acc2 = _mm_setzero_ps();
     let mut acc3 = _mm_setzero_ps();
@@ -284,8 +288,16 @@ pub unsafe fn dot_product_4x_f32_dual_accumulate_avx2(
         weights.len(),
         core::cmp::min(state_f0.len(), state_f1.len()),
     );
-    let init_f0 = _mm_loadu_ps(init_f0.as_ptr());
-    let init_f1 = _mm_loadu_ps(init_f1.as_ptr());
+    // SAFETY: each `init_*` is a `&[f32; 4]`, so the 4-f32 unaligned loads are
+    // in bounds and read initialized values.
+    // ISA: x86 callers must provide a CPU compatible with x86-64-v3 (AVX2+FMA);
+    // aarch64 uses baseline NEON. `#[target_feature]` itself checks no CPU.
+    let (init_f0, init_f1) = unsafe {
+        (
+            _mm_loadu_ps(init_f0.as_ptr()),
+            _mm_loadu_ps(init_f1.as_ptr()),
+        )
+    };
     let mut acc0 = _mm256_set_m128(init_f1, init_f0);
     let mut acc1 = _mm256_setzero_ps();
     let mut acc2 = _mm256_setzero_ps();

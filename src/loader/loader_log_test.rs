@@ -14,6 +14,7 @@
 
 use crate::common::diagnostics::{LoggerConfig, NamLogger, SystemSnapshot};
 use crate::loader::nam_json::{JsonError, NamConfig, NamModelData, WeightsLayout};
+use crate::loader::namb::{FLAG_HAS_CRC32, NambHeader, test_fix_v2_crc};
 use crate::loader::namb_encoder::encode_namb;
 use crate::loader::{LoadError, LoadOptions, load_and_build_model};
 use std::path::PathBuf;
@@ -103,9 +104,9 @@ fn synthetic_lstm(weights: Vec<f32>) -> NamModelData {
 }
 
 /// JSON weight `1e39` saturates to `+Inf` in f32 — the weights visitor must
-/// reject it with a structured WARN (field/value/offset) and the loader must
-/// return `LoadError::NonFiniteWeights` with the specific `NamJsonWeightNotFinite`
-/// code (previously swallowed into the generic `NamJsonParseError`).
+/// reject it with a structured WARN (field/value/offset). The loader preserves
+/// the v4.0.0 public contract: the historical `LoadError::NonFiniteWeights`
+/// unit variant (and its `Display` message) is returned.
 #[test]
 fn test_json_nan_inf_weight_rejected_with_structured_log() {
     let _guard = LOG_TESTS_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
@@ -122,7 +123,12 @@ fn test_json_nan_inf_weight_rejected_with_structured_log() {
     let err = res.expect_err("NaN/Inf weight must be rejected");
     assert!(
         matches!(err, LoadError::NonFiniteWeights),
-        "expected LoadError::NonFiniteWeights, got: {err:?}"
+        "expected the legacy LoadError::NonFiniteWeights variant, got: {err:?}"
+    );
+    assert_eq!(
+        err.to_string(),
+        "Non-finite weights detected in model (NaN or Inf)",
+        "the legacy Display message is part of the compatibility contract"
     );
 
     let snap = log_snapshot();
@@ -470,4 +476,180 @@ fn test_loader_rejects_invalid_envelope_logs_to_buffer() {
         rendered.contains("NamJsonInvalidEnvelope"),
         "DiagnosticBundle::render() must include NamJsonInvalidEnvelope in recent log trace"
     );
+}
+
+// ── Single source for logged vs returned codes (S1/T1.3) ─────────────────
+
+/// Asserts that some `[Loader] Model build failed` record carries exactly the
+/// code exposed by the returned `LoadError`.
+fn assert_logged_code_matches(snapshot: &[crate::common::diagnostics::LogRecord], err: &LoadError) {
+    let needle = format!("code={:?}", err.code());
+    assert!(
+        buffer_has(snapshot, "ERROR", &needle),
+        "logged code must match returned LoadError::code() ({needle}), got:\n{}",
+        snapshot
+            .iter()
+            .filter(|r| r.level == "ERROR")
+            .map(|r| r.message.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+}
+
+/// Invalid UTF-8 used to be logged as `FileReadError` while the returned
+/// `LoadError::InvalidUtf8` exposed `NamJsonParseError`.
+#[test]
+fn test_invalid_utf8_logged_code_matches_returned_error() {
+    let _guard = LOG_TESTS_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    ensure_logger();
+
+    let path = temp_path("invalid_utf8_code", "nam");
+    write_temp(&path, &[b'{', 0xff, 0xfe, b'}']);
+
+    let sys = SystemSnapshot::capture();
+    let err = load_and_build_model(&path, &sys, false, LoadOptions::default())
+        .expect_err("invalid UTF-8 must fail");
+    std::fs::remove_file(&path).ok();
+
+    assert!(matches!(err, LoadError::InvalidUtf8(_)), "{err:?}");
+    assert_logged_code_matches(&log_snapshot(), &err);
+}
+
+/// NAMB offsets below the header used to be logged as `NambTruncated` while
+/// the returned typed error was classified as `NambInvalidHeaderField`.
+#[test]
+fn test_namb_invalid_offset_logged_code_matches_returned_error() {
+    let _guard = LOG_TESTS_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    ensure_logger();
+
+    let header_size = std::mem::size_of::<NambHeader>();
+    let mut data = vec![0u8; header_size];
+    // SAFETY: `data` is exactly `size_of::<NambHeader>()` bytes, aligned and
+    // valid for one write; `data` outlives the borrow.
+    let header = unsafe { &mut *data.as_mut_ptr().cast::<NambHeader>() };
+    header.magic = 0x4E414D42;
+    header.version = 2;
+    header.flags = FLAG_HAS_CRC32;
+    header.weights_offset = (header_size - 1) as u32;
+
+    let path = temp_path("namb_invalid_offset_code", "namb");
+    write_temp(&path, &data);
+
+    let sys = SystemSnapshot::capture();
+    let err = load_and_build_model(&path, &sys, false, LoadOptions::default())
+        .expect_err("weights_offset < header must fail");
+    std::fs::remove_file(&path).ok();
+
+    assert!(
+        matches!(
+            err,
+            LoadError::Namb(crate::loader::NambError::InvalidWeightsOffset { .. })
+        ),
+        "{err:?}"
+    );
+    assert_logged_code_matches(&log_snapshot(), &err);
+}
+
+/// NAMB metadata parse failures used to be logged as `ModelBuildFailed`
+/// while the returned typed error exposes `NamJsonParseError`.
+#[test]
+fn test_namb_metadata_json_logged_code_matches_returned_error() {
+    let _guard = LOG_TESTS_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    ensure_logger();
+
+    let model = synthetic_lstm(vec![0.1, 0.2, 0.3]);
+    let mut namb = encode_namb(&model, 2, WeightsLayout::Original).expect("encode must succeed");
+    let header_size = std::mem::size_of::<NambHeader>();
+    assert_eq!(namb[header_size], b'{');
+    namb[header_size] = b'}'; // invalid JSON
+    test_fix_v2_crc(&mut namb);
+
+    let path = temp_path("namb_bad_metadata_code", "namb");
+    write_temp(&path, &namb);
+
+    let sys = SystemSnapshot::capture();
+    let err = load_and_build_model(&path, &sys, false, LoadOptions::default())
+        .expect_err("invalid metadata JSON must fail");
+    std::fs::remove_file(&path).ok();
+
+    assert!(
+        matches!(
+            err,
+            LoadError::Namb(crate::loader::NambError::MetadataJson(_))
+        ),
+        "{err:?}"
+    );
+    assert_logged_code_matches(&log_snapshot(), &err);
+}
+
+/// Unsupported JSON topology is returned as the legacy
+/// `LoadError::UnsupportedArchitecture(String)` variant, preserving the v4.0.0
+/// match and `Display` contract.
+#[test]
+fn test_json_topology_logged_code_matches_returned_error() {
+    let _guard = LOG_TESTS_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    ensure_logger();
+
+    // Valid SemVer so the parser reaches topology validation instead of
+    // failing earlier on `InvalidVersionFormat`; hidden_size exceeds the
+    // documented 512 cap, which is a topology-limit rejection.
+    let json = r#"{
+        "version": "0.5.0",
+        "architecture": "LSTM",
+        "config": { "num_layers": 1, "input_size": 1, "hidden_size": 513 },
+        "weights": [],
+        "sample_rate": 48000
+    }"#;
+    let path = temp_path("json_topology_code", "nam");
+    write_temp(&path, json.as_bytes());
+
+    let sys = SystemSnapshot::capture();
+    let err = load_and_build_model(&path, &sys, false, LoadOptions::default())
+        .expect_err("unsupported topology must fail");
+    std::fs::remove_file(&path).ok();
+
+    assert!(
+        matches!(err, LoadError::UnsupportedArchitecture(_)),
+        "{err:?}"
+    );
+    assert!(
+        err.to_string().contains("unsupported topology"),
+        "the topology cause must be preserved in Display: {err}"
+    );
+    assert_logged_code_matches(&log_snapshot(), &err);
+}
+
+/// Malformed `version` keeps the v4.0.0 dedicated payload and message:
+/// `UnsupportedArchitecture("Invalid version format: <raw>")`.
+#[test]
+fn test_json_invalid_version_display_matches_v4_contract() {
+    let _guard = LOG_TESTS_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    ensure_logger();
+
+    let json = r#"{
+        "version": "not-semver",
+        "architecture": "LSTM",
+        "config": { "layers": [] },
+        "weights": [],
+        "sample_rate": 48000
+    }"#;
+    let path = temp_path("json_invalid_version", "nam");
+    write_temp(&path, json.as_bytes());
+
+    let sys = SystemSnapshot::capture();
+    let err = load_and_build_model(&path, &sys, false, LoadOptions::default())
+        .expect_err("malformed version must fail");
+    std::fs::remove_file(&path).ok();
+
+    match &err {
+        LoadError::UnsupportedArchitecture(payload) => {
+            assert_eq!(payload, "Invalid version format: not-semver");
+        }
+        other => panic!("expected UnsupportedArchitecture, got {other:?}"),
+    }
+    assert_eq!(
+        err.to_string(),
+        "Unsupported model architecture or topology: Invalid version format: not-semver"
+    );
+    assert_logged_code_matches(&log_snapshot(), &err);
 }

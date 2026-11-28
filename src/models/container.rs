@@ -18,6 +18,34 @@
 //! clicks. During the transition, input is processed through both submodels
 //! and outputs are blended linearly. The scratch buffer is pre-allocated
 //! (set_max_buffer_size) for zero alloc on the hot path.
+//!
+//! ## Real-time transition protocol
+//!
+//! The adaptive FSM calls `SlimmableModel::set_slimmable_size` from the
+//! audio callback (`rt_status = Some`), so that path may not run a full
+//! child `reset()`: for a nested `Sequential` that allocates (saved-flag
+//! `Vec`, recreated pointer tables) and may log. Instead the RT path walks an
+//! explicit state machine using the family-provided split-stabilization
+//! primitives, which are documented as zero-allocation and lock-free:
+//!
+//! 1. **Idle → Preparing**: `prewarm_reset()` clears the target's temporal
+//!    state and arms its zero-feed budget (no allocation, no logging).
+//! 2. **Preparing**: every `process` call advances the armed budget by at
+//!    most one host block, so the callback's added work is bounded by the
+//!    work it already does for the active submodel. Output stays on the
+//!    active submodel; the crossfade is never used to hide prewarm.
+//! 3. **Preparing → Crossfading**: once the target converges, the usual
+//!    32 ms linear crossfade starts. The target's scratch was sized by the
+//!    off-RT `reset`/construction (`set_max_buffer_size` on every member), so
+//!    the transition never allocates.
+//!
+//! A request that arrives while preparing supersedes the in-flight target
+//! (latest wins). A request that arrives during the crossfade is queued and
+//! honored only after the crossfade completes: the active index never jumps
+//! mid-blend, preserving output continuity. Cancelling back to the current
+//! active submodel aborts an in-flight preparation. No submodel is ever
+//! replaced or dropped here — switch state only borrows the container's
+//! permanent members — so the GC cascade is untouched by tier changes.
 
 use std::cmp::Ordering;
 
@@ -25,9 +53,8 @@ use super::slimmable::SlimmableModel;
 use super::{NamModel, StaticModel};
 use crate::common::CROSSFADE_DURATION_MS;
 use crate::common::diagnostics::NamErrorCode;
-use crate::common::spsc::RT_STATUS_SLIMMABLE_RESET_FAILED;
 use crate::dsp::pipeline::MAX_RESAMP_BUF;
-use crate::math::dsp::gain::crossfade_blend_mono_simd;
+use crate::math::dsp::gain::crossfade_blend_ramp_mono_simd;
 
 /// A bundle of pre-trained submodels selected by a quality threshold.
 ///
@@ -43,6 +70,12 @@ pub struct ContainerModel {
     submodels: Vec<(f32, Box<StaticModel>)>,
     active_index: usize,
     pending_index: Option<usize>,
+    /// Target whose zero-phase prewarm is in flight (`prewarm_step` budget
+    /// advanced per audio block). Mutually exclusive with `pending_index`.
+    preparing_index: Option<usize>,
+    /// Latest requested target received while a crossfade was in flight.
+    /// Honored only after the crossfade completes (replacement policy).
+    requested_index: Option<usize>,
     crossfade_elapsed: usize,
     crossfade_duration: usize,
     scratch_buffer: Vec<f32>,
@@ -237,6 +270,8 @@ impl ContainerModel {
             submodels,
             active_index,
             pending_index: None,
+            preparing_index: None,
+            requested_index: None,
             crossfade_elapsed: 0,
             crossfade_duration: crossfade_duration.max(1),
             scratch_buffer: vec![0.0f32; default_buf],
@@ -283,12 +318,29 @@ impl ContainerModel {
         assert!(idx < self.submodels.len());
         self.active_index = idx;
         self.pending_index = None;
+        self.preparing_index = None;
+        self.requested_index = None;
         self.crossfade_elapsed = 0;
     }
 
     /// Returns the index of the pending submodel during crossfade, if any.
     pub fn pending_index(&self) -> Option<usize> {
         self.pending_index
+    }
+
+    /// Returns the index whose split prewarm is in flight, if any.
+    pub fn preparing_index(&self) -> Option<usize> {
+        self.preparing_index
+    }
+
+    /// Returns the target queued behind an in-flight crossfade, if any.
+    pub fn requested_index(&self) -> Option<usize> {
+        self.requested_index
+    }
+
+    /// Returns `true` if a split prewarm is converging.
+    pub fn is_preparing(&self) -> bool {
+        self.preparing_index.is_some()
     }
 
     /// Returns `true` if a crossfade is in progress.
@@ -315,6 +367,25 @@ impl NamModel for ContainerModel {
     fn process(&mut self, input: &[f32], output: &mut [f32]) {
         let n = input.len().min(output.len());
 
+        // Phase 1: converge the target's split prewarm with a per-block budget
+        // bounded by the block the callback is already paying for. Output
+        // stays on the active submodel; the crossfade income is not used to
+        // hide this work.
+        if let Some(preparing_idx) = self.preparing_index {
+            if n > 0 {
+                let remaining = self.submodels[preparing_idx].1.prewarm_step(n);
+                if remaining == 0 {
+                    self.preparing_index = None;
+                    self.pending_index = Some(preparing_idx);
+                    self.crossfade_elapsed = 0;
+                }
+            }
+            self.submodels[self.active_index]
+                .1
+                .process(&input[..n], &mut output[..n]);
+            return;
+        }
+
         if let Some(pending_idx) = self.pending_index {
             // Scratch capacity guard: never slice the scratch beyond its length.
             // If the block is larger than the scratch, abort the crossfade for
@@ -329,21 +400,54 @@ impl NamModel for ContainerModel {
 
             let active_idx = self.active_index;
 
+            // The pending model must render the whole block: it becomes the
+            // active model at the end (possibly mid-block). The outgoing
+            // model only needs to render the frames that still belong to the
+            // ramp, so its state never advances past the frames it produced.
             self.submodels[pending_idx]
                 .1
                 .process(&input[..n], &mut self.scratch_buffer[..n]);
-            self.submodels[active_idx]
-                .1
-                .process(&input[..n], &mut output[..n]);
 
-            let t = (self.crossfade_elapsed as f32 / self.crossfade_duration as f32).min(1.0);
-            crossfade_blend_mono_simd(&mut output[..n], &self.scratch_buffer[..n], t);
+            let remaining = self
+                .crossfade_duration
+                .saturating_sub(self.crossfade_elapsed);
+            let ramp_len = n.min(remaining);
+            if ramp_len > 0 {
+                self.submodels[active_idx]
+                    .1
+                    .process(&input[..ramp_len], &mut output[..ramp_len]);
+
+                // Per-sample ramp: fixes the block-constant envelope that left
+                // an audible step when a block was as long as the crossfade.
+                let t_start = self.crossfade_elapsed as f32 / self.crossfade_duration as f32;
+                let t_step = 1.0 / self.crossfade_duration as f32;
+                crossfade_blend_ramp_mono_simd(
+                    &mut output[..ramp_len],
+                    &self.scratch_buffer[..ramp_len],
+                    t_start,
+                    t_step,
+                );
+            }
+            if ramp_len < n {
+                // The ramp ended inside this block: the remaining frames are
+                // fully owned by the incoming model.
+                output[ramp_len..n].copy_from_slice(&self.scratch_buffer[ramp_len..n]);
+            }
 
             self.crossfade_elapsed += n;
             if self.crossfade_elapsed >= self.crossfade_duration {
                 self.active_index = pending_idx;
                 self.pending_index = None;
                 self.crossfade_elapsed = 0;
+
+                // Replacement policy: the active index never jumps mid-blend.
+                // A request queued during the crossfade is honored now, from
+                // the newly active submodel, as a fresh preparation.
+                if let Some(next) = self.requested_index.take()
+                    && next != self.active_index
+                {
+                    self.begin_rt_transition(next);
+                }
             }
         } else {
             self.submodels[self.active_index].1.process(input, output);
@@ -378,12 +482,37 @@ impl NamModel for ContainerModel {
         }
     }
 
-    /// Advances every armed submodel feed and returns the maximum pending
-    /// count (0 = all converged). Real-time safe.
+    /// Advances every armed submodel feed within a single aggregate
+    /// `samples`-frame budget and returns the maximum pending count
+    /// (0 = all converged). Real-time safe.
+    ///
+    /// The budget is split across the still-incomplete submodels (ceiling
+    /// split, so the shares sum to `samples`), guaranteeing that a nested
+    /// container cannot multiply the per-callback work by the number of
+    /// members. A child may consume less than its share when it converges
+    /// early; unused budget is not reused, keeping the ceiling conservative.
     fn prewarm_step(&mut self, samples: usize) -> usize {
+        let active = self
+            .submodels
+            .iter()
+            .filter(|(_, m)| !m.prewarm_complete())
+            .count();
+        if active == 0 {
+            return 0;
+        }
+        let mut budget = samples;
+        let mut remaining_active = active;
         let mut rem = 0usize;
         for (_, model) in &mut self.submodels {
-            rem = rem.max(model.prewarm_step(samples));
+            if model.prewarm_complete() {
+                continue;
+            }
+            let share =
+                budget / remaining_active + usize::from(!budget.is_multiple_of(remaining_active));
+            let pending = model.prewarm_step(share);
+            budget = budget.saturating_sub(share);
+            remaining_active -= 1;
+            rem = rem.max(pending);
         }
         rem
     }
@@ -407,7 +536,18 @@ impl NamModel for ContainerModel {
         self.max_buffer_size = max_buffer_size;
         self.scratch_buffer.resize(max_buffer_size, 0.0);
         self.crossfade_duration =
-            (CROSSFADE_DURATION_MS / 1000.0 * sample_rate as f32).round() as usize;
+            ((CROSSFADE_DURATION_MS / 1000.0 * sample_rate as f32).round() as usize).max(1);
+        // A host reset is the off-RT preparation point: it sizes every
+        // member's scratch, so later RT transitions never allocate. It also
+        // cancels every in-flight transition component (preparation, armed
+        // crossfade, queued request and the fade clock) *before* touching the
+        // inactive members, so no post-reset block can resume a blend against
+        // state that was just cleared. The active member is the tier that
+        // survives a reset.
+        self.preparing_index = None;
+        self.pending_index = None;
+        self.requested_index = None;
+        self.crossfade_elapsed = 0;
         for (_, model) in &mut self.submodels {
             model.set_max_buffer_size(max_buffer_size)?;
         }
@@ -465,46 +605,111 @@ impl SlimmableModel for ContainerModel {
         val: f32,
         rt_status: Option<&crate::common::spsc::RtStatusFlags>,
     ) {
-        let mut next = self.submodels.len() - 1;
+        let next = self.index_for_size(val);
 
+        // Off-RT path (tests, direct builders, host housekeeping): keep the
+        // historical full-reset semantics, including the immediate jump to a
+        // pending target when a second request arrives mid-crossfade.
+        if rt_status.is_none() {
+            if next == self.active_index && self.pending_index.is_none() {
+                self.preparing_index = None;
+                self.requested_index = None;
+                return;
+            }
+            if self.pending_index == Some(next) {
+                self.requested_index = None;
+                return;
+            }
+
+            debug_assert!(
+                self.scratch_buffer.len() >= self.max_buffer_size,
+                "scratch_buffer capacity invariant violated: {} < {}",
+                self.scratch_buffer.len(),
+                self.max_buffer_size
+            );
+
+            if let Some(idx) = self.pending_index {
+                self.active_index = idx;
+            }
+            self.preparing_index = None;
+            self.requested_index = None;
+
+            if let Err(_e) = self.submodels[next]
+                .1
+                .reset(self.sample_rate, self.max_buffer_size)
+            {
+                return;
+            }
+
+            self.pending_index = Some(next);
+            self.crossfade_elapsed = 0;
+            return;
+        }
+
+        // Real-time path: never run a child `reset()`. The off-RT
+        // `reset`/construction already sized every member's scratch, so the
+        // transition reduces to the zero-allocation split-prewarm primitives.
+        if next == self.active_index && self.pending_index.is_none() {
+            // Desired equals the current output: cancel any in-flight
+            // preparation and any queued replacement.
+            self.preparing_index = None;
+            self.requested_index = None;
+            return;
+        }
+        if self.pending_index == Some(next) {
+            self.requested_index = None;
+            return;
+        }
+        if self.preparing_index == Some(next) {
+            self.requested_index = None;
+            return;
+        }
+        if self.pending_index.is_some() {
+            // Continuity: finish the blend already in flight, then honor the
+            // latest request from the newly active submodel.
+            self.requested_index = Some(next);
+            return;
+        }
+
+        // Idle or preparing: supersede with the latest target (latest wins).
+        self.requested_index = None;
+        self.begin_rt_transition(next);
+    }
+}
+
+impl ContainerModel {
+    /// Submodel index selected by a normalized quality value (C++
+    /// `_get_index_for_slimmable_size`): the first member whose `max_value`
+    /// is strictly greater than `val`, else the last member.
+    fn index_for_size(&self, val: f32) -> usize {
+        let mut next = self.submodels.len() - 1;
         for (i, (max_value, _)) in self.submodels.iter().enumerate() {
             if val < *max_value {
                 next = i;
                 break;
             }
         }
+        next
+    }
 
-        if next == self.active_index && self.pending_index.is_none() {
-            return;
+    /// Arms the RT-safe preparation of `next` (zero heap, zero I/O).
+    ///
+    /// The family split-stabilization primitive clears temporal state and
+    /// arms a bounded zero-feed budget; `process` drains it one host block at
+    /// a time before the crossfade starts. Members created without a
+    /// split-stabilization implementation (infallible defaults) arm nothing
+    /// and transition immediately, matching a `clear_state`-only reset.
+    fn begin_rt_transition(&mut self, next: usize) {
+        let target = &mut self.submodels[next].1;
+        if target.prewarm_on_reset() {
+            target.prewarm_reset();
+            self.preparing_index = Some(next);
+        } else {
+            target.clear_state();
+            self.preparing_index = None;
+            self.pending_index = Some(next);
+            self.crossfade_elapsed = 0;
         }
-
-        if self.pending_index == Some(next) {
-            return;
-        }
-
-        debug_assert!(
-            self.scratch_buffer.len() >= self.max_buffer_size,
-            "scratch_buffer capacity invariant violated: {} < {}",
-            self.scratch_buffer.len(),
-            self.max_buffer_size
-        );
-
-        if let Some(idx) = self.pending_index {
-            self.active_index = idx;
-        }
-
-        if let Err(_e) = self.submodels[next]
-            .1
-            .reset(self.sample_rate, self.max_buffer_size)
-        {
-            if let Some(s) = rt_status {
-                s.set_flag(RT_STATUS_SLIMMABLE_RESET_FAILED);
-            }
-            return;
-        }
-
-        self.pending_index = Some(next);
-        self.crossfade_elapsed = 0;
     }
 }
 

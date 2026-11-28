@@ -34,6 +34,15 @@ The `NeuralAmpModeler-rs` crate defines several features in [Cargo.toml](../Carg
 | **`rt-hardening`**       | No      | Real-time OS host tuning (Linux, macOS) | [src/rt_hardening/](../src/rt_hardening/) (Linux: THP, mlockall, SCHED_FIFO, DAZ/FTZ, IRQ affinity; macOS: QoS, time constraint, mlock_region, workgroups)     |
 | **`on-demand`**          | No      | Internal developer diagnostics          | Internal-only fixture generation and profiling harnesses (never enabled by CI or published test instructions)                                                  |
 
+**Feature isolation.** `testing` exposes APIs; it does not arm them. Enabling
+`testing` in a consumer or integration-test build keeps the production crash
+directory (only a `cfg(test)` engine build uses `target/test_crashes`), leaves
+`DISABLE_GATE` off until a caller stores `true`, and leaves A2 diagnostics
+inert until `enable_diagnostics` is called. Tests that need an isolated crash
+directory set `NAM_CRASH_DIR` explicitly. `tests/feature_surface.rs` pins these
+properties, and `tests/public_api_compat.rs` pins the public enum wire names
+and diagnostic codes that downstream hosts may persist.
+
 Internal workspace support members (`publish = false` in [Cargo.toml](../Cargo.toml)): `tools/qa` (`nam-qa`, housing off-RT QA binaries) and `tools/preflight` (`nam-preflight`, compiling on the safe baseline without `x86-64-v3` requirements).
 
 ---
@@ -73,7 +82,7 @@ The crate page published by docs.rs is rendered by **nightly** rustdoc with `--c
 ./utils/docsrs-check.sh
 ```
 
-The script exports `DOCS_RS=1` and `RUSTDOCFLAGS="--cfg docsrs -D warnings"`, derives the feature scope and all target triples from `package.metadata.docs.rs` in [Cargo.toml](../Cargo.toml) (`x86_64-unknown-linux-gnu`, `x86_64-pc-windows-msvc`, `aarch64-apple-darwin`, `aarch64-unknown-linux-gnu`, `aarch64-pc-windows-msvc`), and runs `cargo +nightly doc --locked --lib --no-deps --target <target>` (`--lib` mirrors the docs.rs build) for every installed nightly target. Missing nightly targets record a typed `GAP` (`docsrs-<target>:target-not-installed`) and yield `RESULT: PASS_WITH_GAPS` (exit `0`) rather than failing silently or overclaiming coverage. Note that `cargo clippy` (`lints.sh`) does **not** invoke `rustdoc`, and the native `macos-latest` and `windows` CI jobs do not currently run `cargo doc` (Linux `lints.sh` runs host `cargo doc` only), so targets absent from the local nightly toolchain remain unverified until tested on native rustdoc or checked post-publish on `docs.rs`. The `nam_avx512` cfg is emitted by `build.rs` only for x86_64 targets, so the AVX-512 modules are absent from the aarch64 pass. Exit `0` means zero rustdoc warnings on all executed targets (`PASS` when all 5 targets are installed, `PASS_WITH_GAPS` when any target is missing); exit `2` is returned when `rustup` or the nightly toolchain is unavailable; any rustdoc warning fails with exit `1`.
+The script exports `DOCS_RS=1` and `RUSTDOCFLAGS="--cfg docsrs -D warnings"`, derives the feature scope and all target triples from `package.metadata.docs.rs` in [Cargo.toml](../Cargo.toml) (`x86_64-unknown-linux-gnu`, `x86_64-pc-windows-msvc`, `aarch64-apple-darwin`, `aarch64-unknown-linux-gnu`, `aarch64-pc-windows-msvc`), and runs `cargo +nightly doc --locked --lib --no-deps --target <target>` (`--lib` mirrors the docs.rs build) for every installed nightly target. Missing nightly targets record a typed `GAP` (`docsrs-<target>:target-not-installed`) and yield `RESULT: PASS_WITH_GAPS` (exit `0`) rather than failing silently or overclaiming coverage. Note that `cargo clippy` (`lints.sh`) does **not** invoke `rustdoc`, and the native `macos-latest` and `windows` CI jobs do not currently run `cargo doc` (Linux `lints.sh` runs host `cargo doc` only), so targets absent from the local nightly toolchain remain unverified until tested on native rustdoc or checked post-publish on `docs.rs`. The `nam_avx512` cfg is emitted by `build.rs` only for x86_64 targets, so the AVX-512 modules are absent from the aarch64 pass. Exit `0` means zero rustdoc warnings on all executed targets (`PASS` when all 5 targets are installed, `PASS_WITH_GAPS` when any target is missing); exit `2` is returned when `rustup` or the nightly toolchain is unavailable; any rustdoc warning fails with exit `1`. The build script declares `cargo:rerun-if-env-changed=DOCS_RS` before its docs.rs early return, so toggling the variable invalidates a cached build-script run instead of reusing the non-docs configuration. A plain local `cargo doc` is still an executable-target build and therefore keeps the `x86-64-v3` compile-time gate; to render docs on a host without that baseline, export `DOCS_RS=1` (the same switch docs.rs uses) rather than weakening the production check. Cargo does not expose a reliable doc-only signal to build scripts.
 
 ### 2.4 SemVer Baseline Check (Opt-in, Pre-release)
 
@@ -246,9 +255,32 @@ cargo test --locked --test models diagnostic_bundle --features testing
 cargo run --locked --release -p nam-qa --bin nam_parity_vector -- generate --model tests/fixtures/models/BossWN-standard.nam --out target/parity.bin
 ```
 
-All `DiagnosticBundle` exports and crash logs automatically redact `USERPROFILE`, `LOCALAPPDATA`, `C:\...` drive paths, and UNC paths before persisting or reporting diagnostics.
+All `DiagnosticBundle` exports and crash logs automatically redact `USERPROFILE`, `LOCALAPPDATA`, `C:\...` drive paths, and UNC paths before persisting or reporting diagnostics. The crash directory is `NAM_CRASH_DIR` when set (non-empty), otherwise the production cache path; the `target/test_crashes` fallback exists only for the engine's own `cfg(test)` unit tests, never for builds that merely enable the `testing` feature.
 
 ---
+
+### 3.11 RT Stack, A2 Transition and Clock Boundaries (S4)
+
+The quick suite covers the non-ignored regressions for the real-time boundaries:
+
+- `dsp::adaptive::adaptive_test::crossfade_scratch_is_owned_by_the_controller`
+  and `crossfade_stack_footprint_is_bounded_by_controller_state` pin the 16 KiB
+  crossfade snapshots in `AdaptiveCompute` and the remaining 2 KiB local chunk.
+- A2 runtime-update tests cover supported static CH=3/8, dense dynamic and
+  cascade topologies, atomic rejection of length/non-finite/FiLM/grouped/head1x1
+  errors, history and cursor preservation, and the block-constant FiLM override
+  non-equivalence.
+- `common::tsc` covers calibrated and uncalibrated clocks, overflow/wrap,
+  monotonicity and the calibration flip.
+- LSTM and FFT/RFFT entry points have release-stable length checks with
+  `#[should_panic]` tests for short inputs and exact-boundary success tests.
+
+The release-cost probe `runtime_update_cost_probe` is `#[ignore]` (long-only) and
+prints the measured validation/repack cost; it has no deadline assertion and is
+not a substitute for the operator's RT deadline/jitter phases. Hardware stack
+high-water sampling is likewise operator-only; the enforced contract is the
+static scratch inventory plus the host stack budget (see
+[`architecture.md`](architecture.md) §4.7).
 
 ## 4. Test Placement Rules
 
@@ -442,7 +474,7 @@ The long QA audit can be dispatched manually by maintainers at the end of an epi
 
 - **Operator Runbook (Branch & Provenance Check):** When dispatching `Long QA Suite` from the GitHub Actions web UI ("Use workflow from"), **explicitly select the target branch** (e.g. `dev`) rather than leaving the dropdown on `main` when certifying an unmerged integration branch. The workflow has no `ref` input; the selected branch is the checkout. For a candidate release, dispatch from the exact commit/tag branch. Always verify the summary header (`Long QA Suite (refs/heads/<branch> @ <sha>)`), `target/logs/ci-provenance.log`, and the dashboard commit line in `$GITHUB_STEP_SUMMARY` to confirm that the workflow executed against the expected commit SHA and package version.
 
-- **Configuration (fixed, recommended):** The workflow exports `CARGO_TARGET_DIR: target/long/release` at the workflow level (shared by `Swatinem/rust-cache`, the release build gate, `tests-long.sh`, and `quality-dashboard.sh`), records `target/logs/ci-provenance.log` and `target/logs/evidence-manifest.json`, provisions C++ mirrors under `lib_quiet=1`, and always runs `--strict` (fail-closed zero-gap execution) with `preflight-render,preflight-catalog,preflight-package,preflight-freshness,preflight-simd-probe,phase1,phase2,phase3,phase4,phase7` (2,748 executed tests: `preflight-catalog`=1, `catch-all`=2,700, `soak`=22, `isa-codegen`=2, `heap-audit`=16, `loom`=7; lazy-skipping the `nam_perf_gate` build when `phase5`, `phase6`, and `phase8` are unselected), followed by `lib_quiet=1 ./utils/remote-simd-gate.sh --skip-bench` (10 mandatory AVX2 → AVX-512 cross-ISA parity cases). There are no `phases`, `strict`, or `ref` questions on dispatch; changing either requires editing the workflow and going through PR review.
+- **Configuration (fixed, recommended):** The workflow exports `CARGO_TARGET_DIR: target/long/release` at the workflow level (shared by `Swatinem/rust-cache`, the release build gate, `tests-long.sh`, and `quality-dashboard.sh`), records `target/logs/ci-provenance.log` and `target/logs/evidence-manifest.json`, provisions C++ mirrors under `lib_quiet=1`, and always runs `--strict` (fail-closed zero-gap execution) with `preflight-render,preflight-catalog,preflight-package,preflight-freshness,preflight-simd-probe,phase1,phase2,phase3,phase4,phase7` (2,826 executed tests: `preflight-catalog`=1, `catch-all`=2,774, `soak`=22, `isa-codegen`=2, `heap-audit`=20, `loom`=7; lazy-skipping the `nam_perf_gate` build when `phase5`, `phase6`, and `phase8` are unselected), followed by `lib_quiet=1 ./utils/remote-simd-gate.sh --skip-bench` (10 mandatory AVX2 → AVX-512 cross-ISA parity cases). There are no `phases`, `strict`, or `ref` questions on dispatch; changing either requires editing the workflow and going through PR review.
 
 - **Release compilation gate:** Before the long phases, the workflow runs `cargo build --locked --release --workspace --features testing` and `cargo test --locked --release --features testing --no-run` inside `target/long/release`. This proves the publishable release profile and every workspace member compile while pre-warming all release test binaries outside the timed execution phases (`preflight-catalog`, `catch-all`, and the subsequent `quality-dashboard.sh` run). PGO/BOLT are not applicable to this crate; `cargo package --locked` plus `consumer-smoke` remain the packaging gate in `preflight-package`.
 
@@ -450,7 +482,7 @@ The long QA audit can be dispatched manually by maintainers at the end of an epi
 
 - **Default Exclusion Policy:** The default phase list excludes `phase5` (RT deadline), `phase6` (RT jitter), and `phase8` (perf gate). Shared cloud virtual machines exhibit significant scheduling jitter and noisy-neighbor virtualization overhead, making them unsuitable as calibrated real-time performance arbiters.
 
-- **Artifacts:** On completion, the workflow publishes the execution log (`target/logs/**`) and receipts (`target/long/**/*.jsonl`) as workflow artifacts with 14-day retention, alongside step summary metrics in `$GITHUB_STEP_SUMMARY`. The upload uses `if-no-files-found: error`, so an empty evidence set fails the job instead of passing silently.
+- **Artifacts:** On completion, the workflow publishes the execution logs and receipts (`target/logs/**`) as workflow artifacts with 14-day retention, alongside step summary metrics in `$GITHUB_STEP_SUMMARY`. The upload uses `if-no-files-found: error`, so an empty evidence set fails the job instead of passing silently.
 
 ---
 
